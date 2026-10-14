@@ -1,0 +1,36 @@
+# Git Ignore Rules for dy-video
+# 严格保证纯代码、配置、技能与文档入库，排除一切重型音视频、大文件与临时渲染缓存
+
+# Python 虚拟环境与缓存
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+
+# 视频素材与中间产物 (本地工程请存放在 D:/dy-video-projects/)
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.flv
+*.ts
+*.wav
+*.mp3
+*.flac
+*.aac
+
+# 大体积临时与缓存目录
+temp/
+output/
+video/
+projects/
+*.log
+
+# 编辑器与操作系统缓存
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
