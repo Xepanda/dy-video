@@ -17,18 +17,22 @@
 3. **姿态感知 CV 智能寻优选帧 (`frame_picker.py`)**：
    - 基于 MediaPipe Pose 33 关键点拓扑空间感知；
    - 结合拉普拉斯边缘清晰度、手部抬升遮胸严厉扣分（-60分）、双脚踝落地立姿加分（+25分）、水平中心偏离约束，精准锁定全身居中无遮挡模特正身帧。
-4. **MIXCITY 高定品牌封面参数化排版 (`cover_renderer.py`)**：
-   - 1080×1920 竖屏高定封面；
-   - 顶部金色 3D 立体渐变品牌主标，底部 Shear 动感右倾斜体，右侧商品圆角卡片居中排版。
-5. **四段电商漏斗编排引擎 (`plan_compiler.py`)**：
+4. **统一人物比例与醒目正身高定封面 (`extract_cover_candidates.py` + `cover_renderer.py`)**：
+   - 严格正面朝向断言：通过 MediaPipe 3D 双肩深度差（$|ls.z - rs.z| \le 0.05$）与面部水平正视判定，彻底剔除侧身、低头与杂物遮挡；
+   - 统一固定比例构图：算法基于人体 Bounding Box 自动缩放，将模特全身身高归一化锁定为画面的 **74%**（头顶留白 16% 给品牌标，脚踝落地，水平绝对居中），无论原片景别远近，主页九宫格封面头身比例与眼神高度绝对整齐划一；
+   - 醒目度增强：主体微反差与局部锐化，暗部微压暗，使主播瞬间从直播间背景脱颖而出。
+5. **Agent-in-the-Loop 决策中枢与原子工具解耦 (`agent_director.py`)**：
+   - 彻底告别黑盒单一死板脚本，将确定性底层封装为一组可独立调用的原子工具（候选封面提取、叙事候选池打标、封面渲染、视频组装、质检审计）；
+   - Agent 作为总导演拥有审美与剪辑决策权，审视候选封面清单并动态规划成片分镜脚本。
+6. **四段电商漏斗编排引擎 (`plan_compiler.py`)**：
    - 黄金 3 秒极致 Hook 挖掘 + 进口半岛棉浪漫工艺 + 修身版型展示 + 穿搭松弛老钱风；
    - 纯产品介绍严格过滤：正则阻断网剔除价格（309、调价、原价）与库存逼单（剩20件、最后三条）及配件转场杂质；
    - 连续大块镜头保护（Contiguous Block Preservation）：避免细碎硬切，物理杜绝音画不同步。
-6. **FFmpeg 音画物理强锁与动态图层混流 (`video_assembler.py`)**：
+7. **FFmpeg 音画物理强锁与动态图层混流 (`video_assembler.py` / `assemble_video_tool.py`)**：
    - 双轨 PTS 绝对归零 (`setpts=PTS-STARTPTS`, `asetpts=PTS-STARTPTS`)；
    - 自动原子清空切片缓存，根除缓存碰撞串画；
    - 复合滤镜：0~2.5s 悬浮 Hook 卡片 + 片尾 2.5s 小黄车行动召唤贴片 + 45~90Hz Sub-Bass Boom 重音冲击波 + 变色发光 ASS 字幕。
-7. **全自动化量化质检门禁 (`qc_auditor.py`)**：
+8. **全自动化量化质检门禁 (`qc_auditor.py`)**：
    - 严格断言：成片与封面存在性、时长（45~65s）、分辨率（1080×1920）、字幕安全视域（MarginV>=220 避让小黄车盲区）、ASR 语境纯净度（同音错词零外泄）。
 
 ---
@@ -41,10 +45,12 @@ dy-live-ecommerce-editor/
 ├── data/
 │   ├── raw_samples/             # 真实素材测试样例
 │   └── work_dirs/               # 运行时切片与过程缓存（自动忽略）
-├── output/                      # 交付成品（最终成片、高定封面、QC质检报告）
+├── output/                      # 交付成品（成片、高定封面、QC报告、Agent决策清单）
 ├── scripts/                     # 辅助脚本与测试工具
 ├── src/
-│   ├── core/                    # ASR、智能选帧、漏斗编排、视频组装核心
+│   ├── agent/                   # Agent 决策中枢与协同调度层
+│   │   └── agent_director.py    # 剪辑总导演中枢 (审视候选池并仲裁决策)
+│   ├── core/                    # ASR、智能选帧、漏斗编排、视频组装核心算法
 │   │   ├── asr_engine.py        # Faster-Whisper 转录打点
 │   │   ├── asr_agent_verifier.py# 语境感知 ASR 字幕智能校验体
 │   │   ├── frame_picker.py      # MediaPipe 姿态拓扑智能选帧
@@ -54,11 +60,15 @@ dy-live-ecommerce-editor/
 │   │   ├── cover_renderer.py    # 品牌封面渲染器
 │   │   ├── ass_subtitles.py     # 荧光变色发光字幕生成
 │   │   └── sfx_generator.py     # 45~90Hz Sub-Bass Boom 合成
-│   ├── tools/
-│   │   └── spec_creator.py      # 免安装 GUI 填表小工具
+│   ├── tools/                   # 面向 Agent 与 CLI 的原子化确定性工具集
+│   │   ├── spec_creator.py      # 免安装 GUI 填表小工具
+│   │   ├── extract_cover_candidates.py # 严格正面候选帧提取与比例标准化工具
+│   │   ├── analyze_story_segments.py   # 叙事分镜语义分类打标工具
+│   │   ├── render_cover_tool.py        # MIXCITY 高定封面参数化渲染工具
+│   │   └── assemble_video_tool.py      # 视频物理强锁混流总装工具
 │   ├── qc/
 │   │   └── qc_auditor.py        # 全量自动化量化质检门禁
-│   └── main_pipeline.py         # 端到端总控入口脚本
+│   └── main_pipeline.py         # 端到端总控入口 (Agent 总导演驱动)
 ├── tests/                       # 测试套件
 ├── job_spec.json                # 当前任务契约配置
 ├── requirements.txt             # 依赖清单

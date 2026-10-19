@@ -174,10 +174,13 @@ class AsrContextVerifier:
                     "reasons": reasons
                 })
 
+            st = s.get("start", 0.0)
+            et = s.get("end", st)
+            dur = s.get("duration", round(et - st, 3))
             verified.append({
-                "start": s["start"],
-                "end": s["end"],
-                "duration": s["duration"],
+                "start": st,
+                "end": et,
+                "duration": dur,
                 "text": text
             })
 
