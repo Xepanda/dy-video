@@ -1,6 +1,10 @@
+# dy-live-ecommerce-editor 工业级依赖清单
 faster-whisper>=1.0.0
-Pillow>=10.0.0
+mediapipe>=0.10.0
+opencv-python>=4.8.0
+pillow>=9.5.0
 numpy>=1.24.0
-pydub>=0.25.1
-torch
-tqdm
+scipy>=1.10.0
+jieba>=0.42.1
+pypinyin>=0.49.0
+pyyaml>=6.0.0
