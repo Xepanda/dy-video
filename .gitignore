@@ -1,36 +1,55 @@
-# Git Ignore Rules for dy-video
-# 严格保证纯代码、配置、技能与文档入库，排除一切重型音视频、大文件与临时渲染缓存
-
-# Python 虚拟环境与缓存
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
 .venv/
 venv/
-env/
-*.egg-info/
+ENV/
 
-# 视频素材与中间产物 (本地工程请存放在 D:/dy-video-projects/)
-*.mp4
-*.mkv
-*.mov
-*.avi
-*.flv
-*.ts
-*.wav
-*.mp3
-*.flac
-*.aac
-
-# 大体积临时与缓存目录
-temp/
-output/
-video/
-projects/
-*.log
-
-# 编辑器与操作系统缓存
+# IDE
 .vscode/
 .idea/
-.DS_Store
-Thumbs.db
+*.swp
+*.swo
+
+# Models & Large Tasks (frame_picker 会自动按需拉取，不入库)
+*.task
+data/*.task
+
+# Media & Large Outputs (不入库，仅本地高效计算)
+output/
+data/work_dirs/
+data/candidates/
+data/*.jpg
+data/test_overlays/
+data/raw_samples/*.mp4
+data/raw_samples/*.rar
+data/raw_samples/*.zip
+data/*.mp4
+data/*.wav
+*.mp4
+*.wav
+
+# Scratch & Temporary Logs
+scripts/scratch/
+*.log

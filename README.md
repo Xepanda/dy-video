@@ -1,99 +1,131 @@
-# 抖音带货短视频工业化剪辑流水线 (Live E-Commerce Video Pipeline)
+# dy-live-ecommerce-editor (抖音带货直播切片自动化剪辑系统)
 
-[![FFmpeg](https://img.shields.io/badge/FFmpeg-9.0.2-blue.svg)](https://ffmpeg.org)
-[![Python](https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg)](https://python.org)
-[![Whisper](https://img.shields.io/badge/Whisper-Faster--Whisper-orange.svg)](https://github.com/SYSTRAN/faster-whisper)
-[![Skill](https://img.shields.io/badge/Skill-live--ecommerce--video--editor-red.svg)](skills/live-ecommerce-video-editor/SKILL.md)
-
-一套开箱即用、标准化、高转化率的**直播带货素材短视频全自动化剪辑工程仓库**。
-专为抖音/TikTok/视频号/快手带货短视频打造，提炼数小时直播原素材为 **45~65 秒** 黄金短视频。
+一套高确定性、工业级、零口型漂移、零外部 API 费用的**抖音带货短视频 AI Agent 剪辑工具链与高定封面系统**。
+专为女装带货短视频打造，提炼数小时直播素材为 **45~65 秒** 黄金高转化带货成片，并提供自动化质量门禁与高精度排版封面。
 
 ---
 
-## 🌟 核心特色与剪辑规范
+## 🤖 核心架构设计：Agent 参与决策与操作，脚本作为确定性原子工具 (Agent-in-the-Loop Architecture)
 
-1. **黄金 3 秒法则（The Golden 3-Second Rule）**：
-   - 非线性重组：将整场最极端、最煽动的重音金句切片前置到 0.0s~2.5s；
-   - 视觉冲击大卡：980px 超大金红吸睛卡片，精确定位在人物帽子上方安全区，**绝不遮挡模特面部**；
-   - 听觉冲击：0.0s 混入 45Hz~90Hz 带阻尼衰减的影视级 Sub-Bass 重低音 Boom 冲击音效。
-2. **镜头语言与特效**：
-   - **推镜特写（Detail Punch Zoom）**：核心材质与做工讲解处应用 1.3× 局部放大特写；
-   - **镜像防反文字贴纸（Mirror Masking）**：`hflip` 翻转画面时，自动用营销徽章贴纸覆盖背景反字；
-   - **对称双色真实对比（Symmetrical Split-Screen）**：左右 50:50 等比分屏，模特真实穿搭对比（藏青 vs 米白），中缝呼吸发光中线。
-3. **动态发光字幕（Keyword Highlight ASS）**：
-   - 30+ 条毫秒级对齐台词；核心卖点词（3M新雪丽、棉服、300多块）亮黄色发光高亮；底边距 `MarginV=240` 避开小黄车。
-4. **高点击率封面设计矩阵（High-CTR Covers）**：
-   - 默认采用 Option 1 爆款大促促销型封面（底图为纯净无字正帧 + 底部 300+ 价格腰封 + 原生实心星号排版）。
+传统全自动剪辑方案往往试图用一段死板、黑盒的单体脚本（如 bat/单一 Python 脚本）走到底，极易引发分镜突兀截断、价格与换装杂质外泄、封面模特神态尴尬或姿态歪斜等致命缺陷。
+
+本仓库坚决摒弃死板单一脚本执行模式，采用 **Agent-in-the-Loop（智能体总导演中枢 + 确定性原子工具链）** 体系：
+- **底层工具层（Tools as Deterministic Primitives）**：提供纯粹、高确定性、可独立调用的原子 CLI 工具，执行繁重且确定性的音视频计算（CV 骨骼提取、ASR 毫秒级打点、FFmpeg 物理音画锁合、ASS 动态渲染、量化指标质检），并输出结构化 JSON 候选清单；
+- **Agent 决策层（Agent as Creative Director）**：由 Agent（或人工运营操作）担任剪辑总导演，对中间候选池行使**主观审美与内容裁决权**：
+  1. **封面优选决策**：Agent 审视提取出的候选正身帧，评估模特神态是否自然挺拔，裁决最优封面底图；
+  2. **分镜编排决策**：Agent 审阅已消除同音错词的台词候选池，决策讲款节奏与逻辑线，剔除价格/库存/换衣杂质，编排生成 `plan.json`；
+  3. **质量验收签署**：Agent 审核 ASR 纠错记录与 QC 审计报告，签字交付或针对未达标项动态重试。
 
 ---
 
-## 📁 仓库目录结构
+## 🛠️ 确定性原子工具链 (Deterministic Toolset)
+
+| 工具模块 | 命令行入口 | 核心职责 | Agent 决策与操作点 |
+| :--- | :--- | :--- | :--- |
+| **封面候选提取** | `python src/tools/extract_cover_candidates.py` | 严格正面 3D 姿态筛选（双肩深度差 $\le 0.05$），并将模特全身比例固定归一化至画布 **74%**（头顶留白 16%），输出 `cover_candidates.json` 与候选图片 | **Agent 审美裁决**：评估多张候选帧中模特的正面表情与精神风貌，挑选最佳底图（如 `cand_01`） |
+| **叙事分镜分析** | `python src/tools/analyze_story_segments.py` | Faster-Whisper 转录 + ASR 语境智能体质检（自动纠正行业错词），按电商漏斗打标分类（Hook、面料、版型、穿搭、黑名单），输出 `story_candidates.json` | **Agent 内容编排**：决定黄金 3 秒开场钩子、产品核心做工与穿搭推荐的组合，剔除价格库存信息，生成 `plan.json` |
+| **品牌封面渲染** | `python src/tools/render_cover_tool.py` | MIXCITY 高定 3D 金色浮雕主标 + 动感斜体 + 居中圆角卡片参数化排版渲染 | **Agent 视觉确认**：验证商品文案、品牌标识与排版效果 |
+| **音画强锁组装** | `python src/tools/assemble_video_tool.py` | 依据 `plan.json` 原子化执行物理切片、双轨 PTS 归零、小黄车安全区避让、发光字幕烧录与 Sub-Bass Boom 合成 | **Agent 执行调度**：下发组装指令，获取导出视频物理时长与元数据 |
+| **自动化质检门禁** | `python src/qc/qc_auditor.py` | 全项量化断言（成片存在、时长 45~65s、1080×1920、字幕安全边距、ASR 纯净度、无黑帧），输出 `qc_report.json` | **Agent 验收审计**：检查质检门禁各项指标，全绿则签署交付 |
+| **任务契约创建** | `python src/tools/spec_creator.py` | 免安装 GUI 填表小工具，点选原始视频与商品图，配置品类与关键词，输出 `job_spec.json` | **Agent/人工初始化**：装配剪辑任务的基准上下文数据 |
+
+---
+
+## 📁 目录结构
 
 ```text
-d:\dy-video/                    # 纯净代码与技能仓库（可推送到 GitHub/GitLab）
-├── docs/                        # 项目说明文档与工具配置指南
-│   ├── tools_setup.md           # 各种工具下载、安装、环境变量配置指南
-│   └── knowledge_base/          # 核心知识库与经验沉淀
-│       └── ai_video_engines_playbook.md # ASR、TTS、Google Flow、三大渲染引擎实测对比与排坑宝典
-├── workflows/                   # 标准化作业流程 (SOP)
-│   └── standard_pipeline.md     # 从原素材到成片的 6 步标准流水线
-├── skills/                      # 自媒体/AI Agent 专属技能包
-│   └── live-ecommerce-video-editor/
-│       └── SKILL.md             # 完整的短视频剪辑技能定义与实战规则
-├── src/                         # 工业化自动化处理脚本模块
-│   └── pipeline.py              # ASR 转录、低音合成、大标题绘制、封面生成核心类
-├── tools/                       # 辅助小工具与便捷脚本
-├── .gitignore                   # 严格排除音视频、素材及过程临时文件
-├── README.md                    # 仓库说明与上手指南
-└── requirements.txt             # Python 依赖清单
-
-d:\dy-video-projects/           # 本地独立视频工程工作区（不入库，仅本地高效管理）
-├── _template_project/           # 新视频项目空白标准模板
-├── README.md                    # 视频工程管理规范说明
-└── project1_jacket/             # 本次实战项目（新雪丽小棉服带货短视频）
-    ├── 01_raw_materials/        # 原始视频/音频/图片素材
-    ├── 02_scripts_and_docs/     # Whisper 转录台词、时间戳、分镜策划文稿
-    ├── 03_intermediate/         # 过程切片(clips)、贴纸(stickers)、ASS发光字幕
-    └── 04_final_output/         # 63.8s 最终成片及封面设计矩阵
+dy-live-ecommerce-editor/
+├── config/                      # 品牌样式预设与抖音安全视域配置
+├── data/
+│   ├── raw_samples/             # 真实素材测试样例
+│   └── work_dirs/               # 运行时切片与过程缓存（自动忽略）
+├── output/                      # 交付成品（成片、高定封面、QC报告、Agent决策清单）
+├── scripts/                     # 辅助测试工具与探索脚本
+├── src/
+│   ├── agent/                   # Agent 决策中枢与协同调度层
+│   │   └── agent_director.py    # 剪辑总导演中枢 (审视候选池并仲裁决策)
+│   ├── core/                    # ASR、智能选帧、漏斗编排、视频组装核心算法
+│   │   ├── asr_engine.py        # Faster-Whisper 转录打点
+│   │   ├── asr_agent_verifier.py# 语境感知 ASR 字幕智能校验体
+│   │   ├── frame_picker.py      # MediaPipe 姿态拓扑智能选帧
+│   │   ├── plan_compiler.py     # 纯产品介绍漏斗编排器
+│   │   └── video_assembler.py   # FFmpeg 物理音画强锁混流引擎
+│   ├── graphics/                # MIXCITY 封面排版与重音合成
+│   │   ├── cover_renderer.py    # 品牌封面渲染器
+│   │   ├── ass_subtitles.py     # 荧光变色发光字幕生成
+│   │   └── sfx_generator.py     # 45~90Hz Sub-Bass Boom 合成
+│   ├── tools/                   # 面向 Agent 与 CLI 的原子化确定性工具集
+│   │   ├── spec_creator.py      # 免安装 GUI 任务契约填表工具
+│   │   ├── extract_cover_candidates.py # 严格正面候选帧提取与比例标准化工具
+│   │   ├── analyze_story_segments.py   # 叙事分镜语义分类打标工具
+│   │   ├── render_cover_tool.py        # MIXCITY 高定封面参数化渲染工具
+│   │   └── assemble_video_tool.py      # 视频物理强锁混流总装工具
+│   ├── qc/
+│   │   └── qc_auditor.py        # 全量自动化量化质检门禁
+│   ├── main_pipeline.py         # Agent 总导演端到端调度入口
+│   └── pipeline.py              # 兼容性导入重定向入口
+├── tests/                       # 自动化单元测试套件
+│   └── test_pipeline_units.py   # 覆盖 ASR 校验、语义分类、Agent 决策、构图算法
+├── job_spec.json                # 当前任务契约配置
+├── 一键启动填表小工具.bat       # 人工输入素材与商品信息的快捷交互入口
+├── requirements.txt             # 依赖清单
+└── .gitignore                   # 严格排除大体积素材与运行期缓存
 ```
 
 ---
 
-## 🚀 跨电脑快速上手指南 (Quick Start)
+## 🚀 Agent 协同剪辑操作流程 (Workflow)
 
-### 1. 准备环境 (耗时约 3~5 分钟)
-1. 确保电脑已安装 `FFmpeg` 并加入系统环境变量（详细步骤见 [docs/tools_setup.md](docs/tools_setup.md)）。
-2. 安装 Python 依赖：
+### 0. 准备素材与商品信息 (生成任务契约)
+剪辑前，用户需提供原始直播录像与商品信息以建立契约上下文。
+双击运行根目录的：
+```bash
+一键启动填表小工具.bat
+```
+*(或在终端执行 `python src/tools/spec_creator.py`)*
+系统将在浏览器自动打开可视化表单页面，点选视频素材、商品平铺图、填写品牌名与核心面料/版型卖点，点击“导出任务文件”即可生成标准 `job_spec.json`。
+**Agent 将以此文件为依据，读取素材路径与商品领域指纹，启动后续的检测、判断与决策执行。**
+
+### 1. 环境准备
+确保 Python 3.10+ 及 FFmpeg（已加入系统环境变量 PATH）：
+```bash
+pip install -r requirements.txt
+```
+
+### 2. 运行模式
+
+#### 模式一：Agent 自主协同调度 (Autonomous Agent Mode)
+Agent 直接调用调度层，依据内置电商决策模型自主完成候选审阅、分镜规划与组装：
+```bash
+python src/main_pipeline.py --spec job_spec.json
+```
+
+#### 模式二：Agent 细粒度干预执行 (Interactive / Override Mode)
+Agent 亦可显式介入每一处决策：
+1. **生成并审视封面候选**：
    ```bash
-   pip install -r requirements.txt
+   python src/tools/extract_cover_candidates.py --video data/raw_samples/sample.mp4 --out-dir data/candidates/cover_candidates
+   ```
+   *Agent 查看 `cover_candidates.json` 并选定如 `cand_01`。*
+
+2. **生成并审视台词叙事池**：
+   ```bash
+   python src/tools/analyze_story_segments.py --video data/raw_samples/sample.mp4 --spec job_spec.json --out-json data/candidates/story_candidates.json
+   ```
+   *Agent 审阅分镜池，剔除价格信息，调整分镜编排生成 `my_plan.json`。*
+
+3. **指定 Agent 决策执行总装**：
+   ```bash
+   python src/main_pipeline.py --spec job_spec.json --cover-id cand_01 --plan my_plan.json
    ```
 
-### 2. 运行示例或开始新项目
-若要为新素材剪辑，仅需将录像存入 `project_name/video/`，并遵循 [workflows/standard_pipeline.md](workflows/standard_pipeline.md) 操作流程：
-
-```python
-from src.pipeline import LiveVideoPipeline
-
-# 初始化项目
-pipeline = LiveVideoPipeline("project1")
-
-# 1. 毫秒级语音转录与台词定位
-pipeline.transcribe_audio(model_size="small")
-
-# 2. 生成低音冲击音效与黄金标题卡
-pipeline.generate_sub_bass_boom()
-pipeline.render_hook_card(title="别的棉服都被它比下去！", sub="★ 生日专场只推这一款 · 闭眼入 ★")
-
-# 3. 产出默认高转化率封面
-pipeline.render_default_cover("project1/temp/raw_white_worn.jpg")
-```
-
 ---
 
-## 🎯 交付成果验收 (Project 1)
-- **成片文件**：[douyin_jacket_final.mp4](file:///D:/dy-video/project1/output/douyin_jacket_final.mp4)（时长 63.82s，1080x1920，60fps）
-- **默认封面**：[cover_default.jpg](file:///D:/dy-video/project1/output/cover_default.jpg)
-- **全流程文档**：
-  - [标准作业流程 SOP](file:///D:/dy-video/workflows/standard_pipeline.md)
-  - [工具安装配置指南](file:///D:/dy-video/docs/tools_setup.md)
-  - [自媒体 Agent Skill](file:///D:/dy-video/skills/live-ecommerce-video-editor/SKILL.md)
+## 🎯 交付成果说明
+
+流程执行完成后，系统会在 `output/<project_id>/` 目录下生成：
+- `*_final.mp4`：1080×1920 高清竖屏成片（45~65s，纯产品介绍，100% 物理咬合原声）；
+- `*_cover.jpg`：MIXCITY 风格高点击率品牌封面（74% 统一模特比例）；
+- `qc_report.json`：全项量化质检通过报告；
+- `asr_verification_report.json`：ASR 语境同音字校正详细审计报告；
+- `agent_decision_manifest.json`：Agent 总导演全程决策记录清单。
