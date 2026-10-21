@@ -28,7 +28,11 @@ from src.tools.chatcut_bridge import (
 from src.agent.decision_gateway import DecisionGateway, DecisionViolation
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEMO_PLAN = os.path.join(PROJECT_ROOT, "data", "work_dirs", "silk_knitwear_7270", "plan.json")
+# 优先使用入库的固定fixture（CI 可用，不依赖运行期产物）；
+# 其次回退到本地运行生成的 plan.json（更贴近真实素材）。
+FIXTURE_PLAN = os.path.join(PROJECT_ROOT, "fixtures", "demo_plan.json")
+RUNTIME_PLAN = os.path.join(PROJECT_ROOT, "data", "work_dirs", "silk_knitwear_7270", "plan.json")
+DEMO_PLAN = FIXTURE_PLAN if os.path.exists(FIXTURE_PLAN) else RUNTIME_PLAN
 SPEC = {"project_id": "silk_knitwear_7270",
         "raw_video_path": "data/raw_samples/demo.mp4"}
 

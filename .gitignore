@@ -60,3 +60,4 @@ logs/*.png
 
 # WorkBuddy 本地工作区数据（不入库）
 .workbuddy/
+logs/pr_body.md

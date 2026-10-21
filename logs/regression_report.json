@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-10-21 21:15:34",
+  "timestamp": "2026-10-21 21:57:40",
   "layers": {
     "unit_tests": {
       "tests/test_improvements.py": {
@@ -10,7 +10,7 @@
       "tests/test_pipeline_units.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": " API Key))\n            [1.00s ~ 3.50s] 姐妹们看一下食物，这个是半导棉的面料。 -> 姐妹们看一下实物，这个是半岛棉的面料。 (半导棉|半导|半刀棉 -> 半岛棉 (商品标题核心面料【半岛棉】匹配))\n            [3.60s ~ 5.80s] 上身之后人都瘦眉了，而且超选瘦。 -> 上身之后人都瘦没了，而且超显瘦。 (瘦眉了|瘦美了|瘦梅了 -> 瘦没了 (修身显瘦夸张修辞【人都瘦没了】))\n            [6.00s ~ 8.00s] 平时如果拿不准的就不要卡马，正常按马术拍。 -> 平时如果拿不准的就不要卡码，正常按码数拍。 (卡马 -> 卡码 (服装尺码选购用语【卡码】))\n[ASR-AGENT] 质检审计报告已落盘: C:\\Users\\ePanda\\AppData\\Local\\Temp\\tmp01nmyj8q.json\n"
+        "tail": "料【半岛棉】匹配))\n            [3.60s ~ 5.80s] 上身之后人都瘦眉了，而且超选瘦。 -> 上身之后人都瘦没了，而且超显瘦。 (瘦眉了|瘦美了|瘦梅了 -> 瘦没了 (修身显瘦夸张修辞【人都瘦没了】))\n            [6.00s ~ 8.00s] 平时如果拿不准的就不要卡马，正常按马术拍。 -> 平时如果拿不准的就不要卡码，正常按码数拍。 (卡马 -> 卡码 (服装尺码选购用语【卡码】))\n[ASR-AGENT] 质检审计报告已落盘: C:\\Users\\ePanda\\AppData\\Local\\Temp\\tmp5jl33srl.json\n[ASR-REVIEW] 审核通过：3/3 句有效，1 条 WARN（占比 0.00）→ 允许进入后续流程\n            [WARN A5_NO_DURATION] #-1 未提供媒体时长，跳过识别密度校验\n"
       },
       "tests/test_ocr_purity.py": {
         "status": "PASS",
@@ -20,7 +20,7 @@
       "tests/test_llm_verifier.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": "超显受|超选受 -> 超显瘦 (主推核心版型卖点【超显瘦】))\n[PASS] 用例7 非法 JSON 自动降级\n[ASR-AGENT] 启动语境感知 ASR 智能体质检验校 (共 3 个台词句块)...\n            锚定商品: 半岛棉镂空钩花 气质显瘦针织衫 | 品牌: MIXCITY\n[ASR-AGENT] 语境校对完成: 纠正 1 处 ASR 错词/语境歧义 (引擎: LLM (gpt-4o-mini @ http://127.0.0.1:51613/v1))\n[ASR-AGENT] 引擎分歧审计: 1 句两引擎结果不一致（已记录供人工复核）\n            [0.00s ~ 2.50s] 今天我们来看这个半导棉的开衫 -> 今天我们来看这个半岛棉的开衫 (面料名纠错)\n[PASS] 用例8 markdown 围栏 JSON 解析\n\n[TEST-B15] 全部通过\n"
+        "tail": " ASR 错词/语境歧义 (引擎: LLM (gpt-4o-mini @ http://127.0.0.1:64439/v1))\n[ASR-AGENT] 引擎分歧审计: 1 句两引擎结果不一致（已记录供人工复核）\n            [0.00s ~ 2.50s] 今天我们来看这个半导棉的开衫 -> 今天我们来看这个半岛棉的开衫 (面料名纠错)\n[ASR-REVIEW] 审核通过：3/3 句有效，2 条 WARN（占比 0.00）→ 允许进入后续流程\n            [WARN A5_NO_DURATION] #-1 未提供媒体时长，跳过识别密度校验\n            [WARN A8_LOW_SEMANTIC] #-1 全篇商品语义词命中仅 1 个，疑似非商品内容或识别失败\n[PASS] 用例8 markdown 围栏 JSON 解析\n\n[TEST-B15] 全部通过\n"
       },
       "tests/test_chatcut_bridge.py": {
         "status": "PASS",
@@ -35,15 +35,20 @@
       "tests/test_multi_source.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": "[PASS] 用例1 不跨文件合并（2 块，A=1 B=1）\n[PASS] 用例2 修剪后仍保留来源（1 个 clip）\n[PASS] 用例3 计划合规（44.5s / 2 clip / 2 源）\n[PASS] 用例4 闲聊/幻觉被过滤\n[PASS] 用例5 字幕后处理守恒且保来源（2→3 条）\n[PASS] 用例6 口语填充词清理\n\n[TEST-B17] 全部通过\n"
+        "tail": "[ASR-REVIEW] 审核门禁已挂载到 AsrContextVerifier.verify_and_correct\n[PASS] 用例1 不跨文件合并（2 块，A=1 B=1）\n[PASS] 用例2 修剪后仍保留来源（1 个 clip）\n[PASS] 用例3 计划合规（44.5s / 2 clip / 2 源）\n[PASS] 用例4 闲聊/幻觉被过滤\n[PASS] 用例5 字幕后处理守恒且保来源（2→3 条）\n[PASS] 用例6 口语填充词清理\n\n[TEST-B17] 全部通过\n"
+      },
+      "tests/test_asr_review_gate.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "a\\AppData\\Local\\Temp\\tmpf9si4vfj\\review_fail.json\n[ASR-REVIEW] 审核失败：ASR 审核失败 [A5]: 识别结果为空（0 句），禁止进入后续流程\n[ASR-REVIEW] 处理建议：1) 检查音轨是否正常 2) 更换更大ASR 模型 3) 放宽 constraints.asr_review 阈值后重试 4) 换用其他识别方案\n[PASS] 审核报告落盘（通过/失败双路径）\n[ASR-REVIEW] 审核通过：1/1 句有效，1 条 WARN（占比 0.00）→ 允许进入后续流程\n            [WARN A8_LOW_SEMANTIC] #-1 全篇商品语义词命中仅 2 个，疑似非商品内容或识别失败\n[PASS] constraints.asr_review 阈值可覆盖\n\n[TEST-ASR-REVIEW] 全部通过\n"
       }
     },
     "batch": {
-      "returncode": 143,
-      "done": 0,
+      "returncode": 0,
+      "done": 5,
       "qc_failed": 0,
       "error": 0,
-      "skipped_cached": 5
+      "skipped_cached": 0
     }
   },
   "interval_failures": [],

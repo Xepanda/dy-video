@@ -18,7 +18,36 @@ from PIL import Image, ImageDraw, ImageFont
 from src.tools.detect_ocr import check_background_text, background_text_metrics
 
 W, H = 1080, 1920
-FONT_PATH = "C:/Windows/Fonts/msyh.ttc"
+# 中文字体路径：Windows 用微软雅黑，Linux CI 用系统 CJK 字体。
+# 找不到任何中文字体时用例应跳过（而非在CI 上误报失败）。
+_FONT_CANDIDATES = [
+    "C:/Windows/Fonts/msyh.ttc",
+    "C:/Windows/Fonts/msyh.ttf",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/arphic/uming.ttc",
+]
+
+
+def _pick_font() -> str:
+    for p in _FONT_CANDIDATES:
+        if os.path.exists(p):
+            return p
+    return ""
+
+
+FONT_PATH = _pick_font()
+
+
+def _font(size):
+    """取指定字号字体；无中文字体时返回 None（触发跳过）。"""
+    if not FONT_PATH:
+        return None
+    try:
+        return ImageFont.truetype(FONT_PATH, size)
+    except Exception:
+        return None
 
 
 def _canvas(color=(60, 60, 66)):
@@ -26,7 +55,9 @@ def _canvas(color=(60, 60, 66)):
 
 
 def _draw_text(img, xy, text, size, fill=(255, 255, 255), anchor="la"):
-    font = ImageFont.truetype(FONT_PATH, size)
+    font = _font(size)
+    if font is None:
+        return img
     d = ImageDraw.Draw(img)
     d.text(xy, text, font=font, fill=fill, anchor=anchor)
     return img
@@ -79,6 +110,10 @@ def case_small_but_counted():
 
 
 def main():
+    if not FONT_PATH:
+        print("[TEST-B11] SKIP: 未找到中文字体（Windows: msyh.ttc / Linux: wqy或noto CJK），"
+              "跳过背景文字纯净度用例（该用例需真实渲染中文店招）")
+        return 0
     from src.tools.detect_ocr import _load_constraints
     constraints = _load_constraints()
     ocr_c = constraints.get("ocr", {})

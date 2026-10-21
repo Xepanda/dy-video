@@ -1,46 +1,51 @@
 {
-  "batch_timestamp": "2026-10-21 21:09:51",
+  "batch_timestamp": "2026-10-21 22:20:43",
   "total": 5,
-  "done": 0,
+  "done": 5,
   "qc_failed": 0,
-  "skipped_cached": 5,
+  "skipped_cached": 0,
   "error": 0,
-  "elapsed_sec": 0.5,
+  "elapsed_sec": 1343.2,
   "results": [
     {
       "project_id": "silk_knitwear_7270",
-      "status": "skipped_cached",
+      "status": "done",
       "qc_passed": true,
       "warnings": 1,
-      "duration": 62.682
+      "duration": 62.682,
+      "video": "D:\\Projects\\dy-live-ecommerce-editor\\output\\silk_knitwear_7270\\silk_knitwear_7270_final.mp4"
     },
     {
       "project_id": "hoodie_11214",
-      "status": "skipped_cached",
+      "status": "done",
       "qc_passed": true,
       "warnings": 1,
-      "duration": 64.292
+      "duration": 64.292,
+      "video": "D:\\Projects\\dy-live-ecommerce-editor\\output\\hoodie_11214\\hoodie_11214_final.mp4"
     },
     {
       "project_id": "down_jacket_11241",
-      "status": "skipped_cached",
+      "status": "done",
       "qc_passed": true,
       "warnings": 1,
-      "duration": 63.619
+      "duration": 63.619,
+      "video": "D:\\Projects\\dy-live-ecommerce-editor\\output\\down_jacket_11241\\down_jacket_11241_final.mp4"
     },
     {
       "project_id": "workwear_11186",
-      "status": "skipped_cached",
+      "status": "done",
       "qc_passed": true,
       "warnings": 1,
-      "duration": 64.591
+      "duration": 64.591,
+      "video": "D:\\Projects\\dy-live-ecommerce-editor\\output\\workwear_11186\\workwear_11186_final.mp4"
     },
     {
       "project_id": "grid_coat_11231",
-      "status": "skipped_cached",
+      "status": "done",
       "qc_passed": true,
       "warnings": 1,
-      "duration": 62.059
+      "duration": 62.059,
+      "video": "D:\\Projects\\dy-live-ecommerce-editor\\output\\grid_coat_11231\\grid_coat_11231_final.mp4"
     }
   ]
 }
