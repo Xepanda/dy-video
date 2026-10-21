@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "plan.schema.json",
+  "title": "剪辑计划 plan.json（Agent 决策产物）",
+  "type": "object",
+  "required": ["project_id", "raw_video_path", "clips"],
+  "additionalProperties": true,
+  "properties": {
+    "project_id": { "type": "string" },
+    "raw_video_path": { "type": "string" },
+    "total_expected_duration": { "type": "number", "minimum": 45, "maximum": 65 },
+    "clips": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "st", "end", "dur"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^c\\d{2}_.+$" },
+          "st": { "type": "number", "minimum": 0 },
+          "end": { "type": "number", "minimum": 0 },
+          "dur": { "type": "number", "exclusiveMinimum": 0 },
+          "is_hook": { "type": "boolean", "default": false },
+          "zoom": { "type": "number", "minimum": 1.0, "maximum": 1.5, "default": 1.0 },
+          "y_anchor": { "type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.35 },
+          "effect": { "enum": ["none", "hflip", "split"], "default": "none" },
+          "split_pair_st": { "type": "number", "description": "effect=split 时右半屏片段起始秒" },
+          "category": { "enum": ["hook", "fabric", "fit", "styling"] },
+          "desc": { "type": "string" }
+        }
+      }
+    },
+    "hook_card": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" },
+        "dur": { "type": "number", "default": 2.5 },
+        "y": { "type": "integer", "default": 280, "description": "Hook 卡中心 y（须避让人脸顶）" }
+      }
+    },
+    "cta": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" },
+        "dur": { "type": "number", "default": 2.5 }
+      }
+    },
+    "boom": {
+      "type": "object",
+      "properties": {
+        "volume": { "type": "number", "default": 0.45 },
+        "file": { "type": "string", "default": "boom.wav" }
+      }
+    },
+    "subtitles": {
+      "type": "object",
+      "properties": {
+        "keywords": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "selection_meta": {
+      "type": "object",
+      "description": "build_plan 选段审计信息（配额/淘汰原因/候选块数）"
+    }
+  }
+}

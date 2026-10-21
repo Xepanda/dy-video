@@ -7,9 +7,12 @@ test_pipeline_units.py - 自动化单元测试套件
 
 import unittest
 import os
+import sys
 import json
 import tempfile
 import shutil
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.core.asr_agent_verifier import AsrContextVerifier
 from src.tools.analyze_story_segments import classify_segments
@@ -93,7 +96,8 @@ class TestAgentDirector(unittest.TestCase):
             "raw_video_path": "non_existent.mp4",
             "brand": {"title_en": "MIXCITY"},
             "product": {"title_line1": "半岛棉", "title_line2": "针织衫"},
-            "options": {"target_duration": [48.0, 58.0]}
+            "options": {"target_duration": [48.0, 58.0],
+                        "disable_placeholder_cards": True}
         }
         with open(self.spec_path, "w", encoding="utf-8") as f:
             json.dump(self.spec_data, f, ensure_ascii=False)
@@ -109,32 +113,79 @@ class TestAgentDirector(unittest.TestCase):
 
 
 class MockLandmark:
-    def __init__(self, x: float, y: float, z: float = 0.0):
+    def __init__(self, x: float, y: float, z: float = 0.0, visibility: float = 1.0):
         self.x = x
         self.y = y
+        self.z = z
+        self.visibility = visibility
         self.z = z
 
 
 class TestFramingNormalization(unittest.TestCase):
     def test_normalize_subject_framing(self):
         import numpy as np
-        from src.tools.extract_cover_candidates import normalize_subject_framing
-        
-        # 模拟 1080x1920 原始画面与 33 关键点
-        frame = np.full((1920, 1080, 3), 128, dtype=np.uint8)
-        landmarks = [MockLandmark(0.5, 0.5) for _ in range(33)]
-        # 鼻尖 (0), 左肩 (11), 右肩 (12), 左踝 (27), 右踝 (28)
-        landmarks[0] = MockLandmark(0.5, 0.25)
-        landmarks[11] = MockLandmark(0.45, 0.35)
-        landmarks[12] = MockLandmark(0.55, 0.35)
-        landmarks[27] = MockLandmark(0.48, 0.85)
-        landmarks[28] = MockLandmark(0.52, 0.85)
+        from src.tools.extract_cover_candidates import normalize_subject_framing, OUT_W, OUT_H
 
-        norm_canvas, meta = normalize_subject_framing(frame, landmarks)
-        self.assertEqual(norm_canvas.shape, (1920, 1080, 3))
-        self.assertAlmostEqual(meta["normalized_height_ratio"], 0.74, places=2)
-        self.assertEqual(meta["head_top_y_px"], 307)
+        # 模拟 1088x1920 原始画面与 33 关键点（全身站姿）
+        frame = np.full((1920, 1088, 3), 128, dtype=np.uint8)
+        landmarks = [MockLandmark(0.5, 0.5) for _ in range(33)]
+        # 鼻尖 (0)、左肩 (11)、右肩 (12)、膝 (25/26)、踝 (27/28)
+        landmarks[0] = MockLandmark(0.5, 0.30)
+        landmarks[11] = MockLandmark(0.42, 0.36)
+        landmarks[12] = MockLandmark(0.58, 0.36)
+        landmarks[25] = MockLandmark(0.45, 0.72)
+        landmarks[26] = MockLandmark(0.55, 0.72)
+        landmarks[27] = MockLandmark(0.46, 0.94)
+        landmarks[28] = MockLandmark(0.54, 0.94)
+
+        # 模拟分割掩码：人体轮廓最大宽 400px（居中的竖直椭圆）
+        seg = np.zeros((1920, 1088), dtype=np.float32)
+        for y in range(700, 1820):
+            half = int(200 * (1 - abs(y - 1260) / 560.0))
+            cx = 544
+            seg[y, cx - half:cx + half] = 1.0
+
+        norm_canvas, meta = normalize_subject_framing(frame, landmarks, seg)
+        self.assertEqual(norm_canvas.shape, (OUT_H, OUT_W, 3))
+        # 全身帧：身高约束主导（脚底贴 78%，为名称区预留），验证几何指标完备
+        self.assertIn("achieved_width_ratio", meta)
+        self.assertIn("achieved_height_ratio", meta)
+        self.assertIn("post_scale_sharpness", meta)
+        self.assertTrue(meta["knees_visible"])
+        self.assertTrue(meta["ankles_visible"])
+        self.assertLessEqual(meta["achieved_height_ratio"], 0.65)
+        self.assertFalse(meta["width_constraint_active"])
+        self.assertGreater(meta["achieved_width_ratio"], 0.25)
         self.assertEqual(meta["center_x_px"], 540)
+
+    def test_width_constraint_active_when_wide_subject(self):
+        """宽幅主体（人宽 650px / 人高 891px）：宽度约束主导，宽占比达到 0.75。"""
+        import numpy as np
+        from src.tools.extract_cover_candidates import normalize_subject_framing
+
+        frame = np.full((1920, 1088, 3), 128, dtype=np.uint8)
+        landmarks = [MockLandmark(0.5, 0.5) for _ in range(33)]
+        # 半身构图：鼻 0.30、肩 0.38、膝 0.55、踝 0.62（人体高 ~891px）
+        landmarks[0] = MockLandmark(0.5, 0.30)
+        landmarks[11] = MockLandmark(0.30, 0.38)
+        landmarks[12] = MockLandmark(0.70, 0.38)
+        landmarks[25] = MockLandmark(0.36, 0.55)
+        landmarks[26] = MockLandmark(0.64, 0.55)
+        landmarks[27] = MockLandmark(0.38, 0.62)
+        landmarks[28] = MockLandmark(0.62, 0.62)
+
+        # 人体轮廓宽 650px（手臂张开）
+        seg = np.zeros((1920, 1088), dtype=np.float32)
+        for y in range(400, 1300):
+            half = int(325 * (1 - abs(y - 850) / 450.0))
+            cx = 544
+            seg[y, cx - half:cx + half] = 1.0
+
+        _, meta = normalize_subject_framing(frame, landmarks, seg)
+        self.assertTrue(meta["width_constraint_active"],
+                        "宽幅主体应由宽度约束主导")
+        self.assertAlmostEqual(meta["achieved_width_ratio"], 0.75, delta=0.03)
+        self.assertLessEqual(meta["achieved_height_ratio"], 0.80)
 
 
 if __name__ == "__main__":

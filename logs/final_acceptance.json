@@ -1,0 +1,95 @@
+{
+  "down_jacket_11241": {
+    "duration_sec": 63.62,
+    "clips": 4,
+    "sources_used": [
+      "0240.mp4",
+      "0353.mp4"
+    ],
+    "cross_source": true,
+    "subtitle_lines": 48,
+    "asr_segments": 213,
+    "qc_passed": true,
+    "warnings": [
+      "封面宽占比复测: 宽占比 0.559 未达目标 0.75（示例版式为底部名称区预留空间 + 保全完整人体，纪要'尽力居中'语义，WARN 不拦截）"
+    ],
+    "video": "D:\\Projects\\dy-live-ecommerce-editor\\output\\down_jacket_11241\\down_jacket_11241_final.mp4",
+    "video_mb": 54.2,
+    "cover": "D:\\Projects\\dy-live-ecommerce-editor\\output\\down_jacket_11241\\down_jacket_11241_cover.jpg",
+    "cover_kb": 493
+  },
+  "grid_coat_11231": {
+    "duration_sec": 62.06,
+    "clips": 4,
+    "sources_used": [
+      "0123.mp4",
+      "0303.mp4"
+    ],
+    "cross_source": true,
+    "subtitle_lines": 31,
+    "asr_segments": 276,
+    "qc_passed": true,
+    "warnings": [
+      "封面宽占比复测: 宽占比 0.403 未达目标 0.75（示例版式为底部名称区预留空间 + 保全完整人体，纪要'尽力居中'语义，WARN 不拦截）"
+    ],
+    "video": "D:\\Projects\\dy-live-ecommerce-editor\\output\\grid_coat_11231\\grid_coat_11231_final.mp4",
+    "video_mb": 56.3,
+    "cover": "D:\\Projects\\dy-live-ecommerce-editor\\output\\grid_coat_11231\\grid_coat_11231_cover.jpg",
+    "cover_kb": 604
+  },
+  "hoodie_11214": {
+    "duration_sec": 64.29,
+    "clips": 4,
+    "sources_used": [
+      "0518.mp4"
+    ],
+    "cross_source": false,
+    "subtitle_lines": 18,
+    "asr_segments": 162,
+    "qc_passed": true,
+    "warnings": [
+      "封面宽占比复测: 宽占比 0.366 未达目标 0.75（示例版式为底部名称区预留空间 + 保全完整人体，纪要'尽力居中'语义，WARN 不拦截）"
+    ],
+    "video": "D:\\Projects\\dy-live-ecommerce-editor\\output\\hoodie_11214\\hoodie_11214_final.mp4",
+    "video_mb": 51.9,
+    "cover": "D:\\Projects\\dy-live-ecommerce-editor\\output\\hoodie_11214\\hoodie_11214_cover.jpg",
+    "cover_kb": 529
+  },
+  "silk_knitwear_7270": {
+    "duration_sec": 62.68,
+    "clips": 4,
+    "sources_used": [
+      "0425.mp4"
+    ],
+    "cross_source": false,
+    "subtitle_lines": 41,
+    "asr_segments": 123,
+    "qc_passed": true,
+    "warnings": [
+      "封面宽占比复测: 宽占比 0.423 未达目标 0.75（示例版式为底部名称区预留空间 + 保全完整人体，纪要'尽力居中'语义，WARN 不拦截）"
+    ],
+    "video": "D:\\Projects\\dy-live-ecommerce-editor\\output\\silk_knitwear_7270\\silk_knitwear_7270_final.mp4",
+    "video_mb": 54.0,
+    "cover": "D:\\Projects\\dy-live-ecommerce-editor\\output\\silk_knitwear_7270\\silk_knitwear_7270_cover.jpg",
+    "cover_kb": 489
+  },
+  "workwear_11186": {
+    "duration_sec": 64.59,
+    "clips": 4,
+    "sources_used": [
+      "0101.mp4",
+      "0326.mp4"
+    ],
+    "cross_source": true,
+    "subtitle_lines": 27,
+    "asr_segments": 219,
+    "qc_passed": true,
+    "warnings": [
+      "封面宽占比复测: 宽占比 0.410 未达目标 0.75（示例版式为底部名称区预留空间 + 保全完整人体，纪要'尽力居中'语义，WARN 不拦截）"
+    ],
+    "video": "D:\\Projects\\dy-live-ecommerce-editor\\output\\workwear_11186\\workwear_11186_final.mp4",
+    "video_mb": 46.6,
+    "cover": "D:\\Projects\\dy-live-ecommerce-editor\\output\\workwear_11186\\workwear_11186_cover.jpg",
+    "cover_kb": 552
+  }
+}

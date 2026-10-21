@@ -1,0 +1,175 @@
+{
+  "updated": "2026-10-21 21:03:14",
+  "materials": {
+    "silk_knitwear_7270": {
+      "duration": {
+        "min": 56.682,
+        "max": 65
+      },
+      "cover_width_ratio": {
+        "min": 0.363,
+        "max": 0.483
+      },
+      "cover_post_scale_sharpness": {
+        "min": 200
+      },
+      "cover_yaw_deg": {
+        "min": 0,
+        "max": 4.8
+      },
+      "clip_count": {
+        "min": 2,
+        "max": 7
+      },
+      "loudness_lufs": {
+        "min": -15.1,
+        "max": -13.1
+      },
+      "true_peak_dbtp": {
+        "max": -0.5
+      },
+      "background_text_ratio": {
+        "max": 0.02
+      },
+      "qc_block_total": {
+        "min": 18
+      }
+    },
+    "hoodie_11214": {
+      "duration": {
+        "min": 58.292,
+        "max": 65
+      },
+      "cover_width_ratio": {
+        "min": 0.306,
+        "max": 0.426
+      },
+      "cover_post_scale_sharpness": {
+        "min": 200
+      },
+      "cover_yaw_deg": {
+        "min": 0,
+        "max": 7.6
+      },
+      "clip_count": {
+        "min": 2,
+        "max": 7
+      },
+      "loudness_lufs": {
+        "min": -14.9,
+        "max": -12.9
+      },
+      "true_peak_dbtp": {
+        "max": -0.5
+      },
+      "background_text_ratio": {
+        "max": 0.02
+      },
+      "qc_block_total": {
+        "min": 18
+      }
+    },
+    "down_jacket_11241": {
+      "duration": {
+        "min": 57.619,
+        "max": 65
+      },
+      "cover_width_ratio": {
+        "min": 0.499,
+        "max": 0.619
+      },
+      "cover_post_scale_sharpness": {
+        "min": 200
+      },
+      "cover_yaw_deg": {
+        "min": 0,
+        "max": 3.0
+      },
+      "clip_count": {
+        "min": 2,
+        "max": 7
+      },
+      "loudness_lufs": {
+        "min": -15.0,
+        "max": -13.0
+      },
+      "true_peak_dbtp": {
+        "max": -0.5
+      },
+      "background_text_ratio": {
+        "max": 0.02
+      },
+      "qc_block_total": {
+        "min": 18
+      }
+    },
+    "workwear_11186": {
+      "duration": {
+        "min": 58.590999999999994,
+        "max": 65
+      },
+      "cover_width_ratio": {
+        "min": 0.35,
+        "max": 0.47
+      },
+      "cover_post_scale_sharpness": {
+        "min": 200
+      },
+      "cover_yaw_deg": {
+        "min": 0,
+        "max": 3.7
+      },
+      "clip_count": {
+        "min": 2,
+        "max": 7
+      },
+      "loudness_lufs": {
+        "min": -14.9,
+        "max": -12.9
+      },
+      "true_peak_dbtp": {
+        "max": -0.5
+      },
+      "background_text_ratio": {
+        "max": 0.02
+      },
+      "qc_block_total": {
+        "min": 18
+      }
+    },
+    "grid_coat_11231": {
+      "duration": {
+        "min": 56.059,
+        "max": 65
+      },
+      "cover_width_ratio": {
+        "min": 0.343,
+        "max": 0.463
+      },
+      "cover_post_scale_sharpness": {
+        "min": 200
+      },
+      "cover_yaw_deg": {
+        "min": 0,
+        "max": 7.6
+      },
+      "clip_count": {
+        "min": 2,
+        "max": 7
+      },
+      "loudness_lufs": {
+        "min": -15.0,
+        "max": -13.0
+      },
+      "true_peak_dbtp": {
+        "max": -0.5
+      },
+      "background_text_ratio": {
+        "max": 0.02
+      },
+      "qc_block_total": {
+        "min": 18
+      }
+    }
+  }
+}

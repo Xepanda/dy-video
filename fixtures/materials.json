@@ -1,0 +1,45 @@
+{
+  "registry_version": 1,
+  "updated": "2026-10-21",
+  "note": "B16 素材回归库登记表。每条素材 = 一个项目目录 + 一个 job_spec；spec 的 raw_video_path 指向 data/raw_samples 下该素材的主讲解段（多文件素材取语音最丰富文件，由 tests/probe_material_audio.py 探测确定）。baselines.json 锁定指标区间，只允许 scripts/run_regression.py --update-baselines 显式更新。",
+  "materials": [
+    {
+      "project_id": "silk_knitwear_7270",
+      "spec": "job_spec.json",
+      "role": "demo（既有基准素材）",
+      "source_dir": "data/raw_samples/10 绵羊 半岛棉镂空钩花气质显瘦针织衫7270"
+    },
+    {
+      "project_id": "hoodie_11214",
+      "spec": "specs/job_spec_hoodie_11214.json",
+      "role": "新素材 6 号（松弛帽衫·绵羊毛假两件连帽拉链卫衣）",
+      "source_dir": "data/raw_samples/6 松弛帽衫·绵羊毛假两件连帽拉链卫衣11214"
+    },
+    {
+      "project_id": "down_jacket_11241",
+      "spec": "specs/job_spec_down_jacket_11241.json",
+      "role": "新素材 7 号（麦穗羽绒·翻领百搭松弛感羽绒服）",
+      "source_dir": "data/raw_samples/7 麦穗羽绒·翻领百搭松弛感羽绒服11241"
+    },
+    {
+      "project_id": "workwear_11186",
+      "spec": "specs/job_spec_workwear_11186.json",
+      "role": "新素材 8 号（蕉个朋友·环保毛绒轻暖翻领工装外套）",
+      "source_dir": "data/raw_samples/8 蕉个朋友·环保毛绒轻暖翻领工装外套11186"
+    },
+    {
+      "project_id": "grid_coat_11231",
+      "spec": "specs/job_spec_grid_coat_11231.json",
+      "role": "新素材 9 号（竹节外套·3M保暖易打理连帽格纹肌理外套）",
+      "source_dir": "data/raw_samples/9 竹节外套·3M保暖易打理连帽格纹肌理外套11231"
+    }
+  ],
+  "synthetic_cases": {
+    "note": "合成反例用例（防回归），随单元测试层执行",
+    "price": "tests/test_improvements.py（detect_price 27 例，含中文数字/白名单）",
+    "ocr_purity": "tests/test_ocr_purity.py（店招封杀/模板豁免/纯净通过）",
+    "decision_gateway": "src/agent/decision_gateway.py --demo（不合格候选/计划 100% 拦截）",
+    "chatcut_bridge": "tests/test_chatcut_bridge.py（往返一致/精修回注/结构校验）",
+    "llm_verifier": "tests/test_llm_verifier.py（纠错/护栏/降级 8 例）"
+  }
+}

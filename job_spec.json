@@ -13,7 +13,7 @@
     ]
   },
   "options": {
-    "duration_range": "48-55",
+    "duration_range": "45-65",
     "split_strategy": "auto",
     "highlight_keywords": [
       "半岛棉",
@@ -28,5 +28,8 @@
       "超显瘦",
       "更漂亮"
     ]
-  }
+  },
+  "raw_video_paths": [
+    "D:/Projects/dy-live-ecommerce-editor/data/raw_samples/10 绵羊 半岛棉镂空钩花气质显瘦针织衫7270/0826  绵羊 半岛棉镂空钩花气质显瘦针织衫7270  0425.mp4"
+  ]
 }

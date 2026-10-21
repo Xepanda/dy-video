@@ -28,6 +28,10 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from src.core.asr_engine import AsrEngine
 from src.core.asr_agent_verifier import AsrContextVerifier
+# 需求2/4：ASR 识别结果必须经执行者审核后才可进入后续流程。
+# 导入即把审核门禁挂进 AsrContextVerifier.verify_and_correct（常规路径），
+# 此处再显式调用一次作为兜底，防止未来新增调用点绕过审核。
+from src.core.asr_review_gate import enforce_review_gate, AsrReviewError
 
 # 黑名单与杂质识别正则
 EXCLUDE_PATTERNS = [
@@ -56,18 +60,9 @@ PRICE_INVENTORY_PATTERNS = [
 
 
 def is_blacklisted(text: str, start_time: float) -> Tuple[bool, str]:
-    """判定是否为价格/库存或离场杂质"""
-    for pat in PRICE_INVENTORY_PATTERNS:
-        if re.search(pat, text):
-            return True, f"命中价格/库存敏感词 ({pat})"
-    for pat in EXCLUDE_PATTERNS:
-        if re.search(pat, text):
-            return True, f"命中切品/换装离场杂质 ({pat})"
-    if 55.0 <= start_time <= 108.0:
-        return True, "处于主播插播推销配件裤子窗口 (55s~108s)"
-    if start_time >= 121.0 and not (127.0 <= start_time <= 132.5):
-        return True, "处于主播下播换衣窗口 (>121s)"
-    return False, ""
+    """判定是否为价格/库存或离场杂质（纯内容信号，无硬编码时间窗）"""
+    from src.tools.build_plan import is_blacklisted as _bl
+    return _bl(text)
 
 
 def classify_segments(segments: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
@@ -118,66 +113,162 @@ def classify_segments(segments: List[Dict[str, Any]]) -> Dict[str, List[Dict[str
     }
 
 
+def _probe_duration(video_path: str) -> float:
+    """探测媒体时长（秒）。失败返回 0.0（由审核门禁跳过密度校验）。"""
+    try:
+        import cv2
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 0
+        frames = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+        cap.release()
+        if fps > 0 and frames > 0:
+            return float(frames / fps)
+    except Exception:
+        pass
+    try:
+        import subprocess
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", video_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
+        return float((r.stdout or "0").strip() or 0.0)
+    except Exception:
+        return 0.0
+
+
 def analyze_story_segments(
-    video_path: str,
+    video_path,
     spec_data: Dict[str, Any],
     cache_dir: str,
-    output_json_path: str
+    output_json_path: str,
+    cache_key: str = None,
 ) -> Dict[str, Any]:
-    """提取并分类直播切片，生成 Agent 候选池"""
+    """提取并分类直播切片，生成 Agent 候选池。
+
+    video_path 可以是单个路径，也可以是同一商品的多段直播素材路径列表
+    （2026-10-21 需求：同目录多视频为同一商品的直播素材，跨素材挑选最优片段）。
+    多源模式下每个文件独立 ASR + 独立语境校对，segments 携带 source_file，
+    供 build_plan 跨源选段、video_assembler 按源切片。
+
+    cache_key 提供时启用阶段缓存（B13）：story 清单命中即跳过（ASR 缓存同步校验 key）。
+    """
     os.makedirs(cache_dir, exist_ok=True)
     os.makedirs(os.path.dirname(os.path.abspath(output_json_path)), exist_ok=True)
 
-    # 1. Faster-Whisper ASR 转录 (带缓存)
-    raw_asr_cache = os.path.join(cache_dir, "whisper_segments.json")
+    # 阶段缓存命中（B13 断点续跑）
+    if cache_key:
+        from src.tools.stage_cache import load_stage, save_stage
+        cached = load_stage(cache_dir, "story", cache_key)
+        if cached is not None:
+            print(f"[STORY-ANALYZER] 命中阶段缓存（{cached.get('total_verified_segments')} 句）")
+            with open(output_json_path, "w", encoding="utf-8") as f:
+                json.dump(cached, f, ensure_ascii=False, indent=2)
+            return cached
+
+    sources = [video_path] if isinstance(video_path, str) else list(video_path)
+    sources = [os.path.abspath(p) for p in sources]
+
+    # 1. Faster-Whisper ASR 转录 + 2. 语境智能体质检（逐源独立，模型只加载一次）
     asr = AsrEngine()
     verifier = AsrContextVerifier(spec_data)
     prompt = verifier.build_initial_prompt()
-    raw_segs = asr.transcribe_video(video_path, cache_json_path=raw_asr_cache, initial_prompt=prompt)
 
-    # 2. ASR 语境智能体质检
+    all_verified: List[Dict[str, Any]] = []
+    per_source: List[Dict[str, Any]] = []
+    for src_path in sources:
+        tag = os.path.basename(src_path)
+        print(f"\n[STORY-ANALYZER] === 源素材 ASR: {tag} ===")
+        src_key = f"{src_path}"  # 逐源缓存隔离，避免同名串味
+        raw_cache = os.path.join(cache_dir, "asr",
+                                 os.path.splitext(tag)[0] + ".whisper.json")
+        verified_cache = os.path.join(cache_dir, "asr",
+                                      os.path.splitext(tag)[0] + ".verified.json")
+        raw_segs = asr.transcribe_video(src_path, cache_json_path=raw_cache,
+                                        initial_prompt=prompt, cache_key=src_key)
+        segs, asr_report = verifier.verify_and_correct(raw_segs)
+        # —— 兜底审核（需求2/4 第二重保险）——
+        # 用媒体真实时长做识别密度校验（verify_and_correct 内部因未知时长会跳过 A5）。
+        try:
+            segs = enforce_review_gate(
+                segs, media_duration=_probe_duration(src_path),
+                report_path=os.path.join(
+                    cache_dir, "asr",
+                    os.path.splitext(tag)[0] + ".review.json"))
+        except AsrReviewError as e:
+            # 审核不通过：阻断该源的选段（不静默降级），失败信息随 story 清单落盘
+            print(f"[STORY-ANALYZER] 源素材 {tag} 未通过 ASR 执行者审核，已阻断该源选段")
+            per_source.append({
+                "source_file": src_path, "source_tag": tag,
+                "raw_segments": len(raw_segs), "verified_segments": 0,
+                "corrected": 0, "review_passed": False, "review_error": str(e),
+            })
+            continue
+        for s in segs:
+            s["source_file"] = src_path
+            s["source_tag"] = tag
+        with open(verified_cache, "w", encoding="utf-8") as f:
+            json.dump(segs, f, ensure_ascii=False, indent=2)
+        all_verified.extend(segs)
+        per_source.append({
+            "source_file": src_path,
+            "source_tag": tag,
+            "raw_segments": len(raw_segs),
+            "verified_segments": len(segs),
+            "corrected": asr_report.get("corrected_segments_count", 0),
+            "review_passed": True,
+            "review_warnings": (asr_report.get("asr_review", {}) or {}).get("warn_count", 0),
+        })
+        print(f"[STORY-ANALYZER] {tag}: 校对后 {len(segs)} 句"
+              f"（纠正 {asr_report.get('corrected_segments_count', 0)} 处）")
+
+    verified_segs = all_verified
+
+    # 多源模式下保留一份合并的 verified 缓存（兼容既有下游读取路径）
     verified_cache = os.path.join(cache_dir, "whisper_segments_verified.json")
-    verified_segs, asr_report = verifier.verify_and_correct(raw_segs)
     with open(verified_cache, "w", encoding="utf-8") as f:
         json.dump(verified_segs, f, ensure_ascii=False, indent=2)
 
     # 3. 语义分类打标
     pools = classify_segments(verified_segs)
 
+    # 3.1 连续叙事候选块（由 build_plan 泛化合并逻辑派生，替代旧版硬编码大块）
+    from src.tools.build_plan import build_blocks as _build_blocks
+    from src.tools.build_plan import _load_constraints as _load_c
+    blocks, _rejected = _build_blocks(verified_segs, _load_c())
+    blocks.sort(key=lambda b: b["scores"].get("styling", 0) + b["scores"].get("fabric", 0)
+                + b["scores"].get("fit", 0) + b["scores"].get("hook", 0), reverse=True)
+    continuous_blocks_summary = [
+        {
+            "block_id": f"b{i+1:02d}",
+            "recommended_st": b["start"],
+            "recommended_end": b["end"],
+            "duration": b["dur"],
+            "categories": b["categories"],
+            "narrative": b["text"][:40] + ("…" if len(b["text"]) > 40 else ""),
+        }
+        for i, b in enumerate(blocks[:8])
+    ]
+
     story_manifest = {
         "project_id": spec_data.get("project_id", "demo"),
-        "raw_video_path": os.path.abspath(video_path),
+        "raw_video_path": sources[0] if len(sources) == 1 else "",
+        "source_videos": sources,
+        "multi_source": len(sources) > 1,
+        "per_source": per_source,
         "total_verified_segments": len(verified_segs),
         "pools": pools,
-        "continuous_blocks_summary": [
-            {
-                "block_id": "b01_hook_fabric",
-                "recommended_st": 109.91,
-                "recommended_end": 120.19,
-                "duration": 10.28,
-                "narrative": "开篇 Hook (实物更漂亮) + 进口半岛棉浪漫做工"
-            },
-            {
-                "block_id": "b02_slimming_fit",
-                "recommended_st": 127.24,
-                "recommended_end": 132.08,
-                "duration": 4.84,
-                "narrative": "版型显瘦 (搭黑色裙子人都瘦没了，对超显瘦)"
-            },
-            {
-                "block_id": "b03_outfit_styling",
-                "recommended_st": 18.32,
-                "recommended_end": 55.51,
-                "duration": 37.19,
-                "narrative": "搭配松弛老钱风 (配大表姐大裤腿、格子裤、编织裤更休闲更松弛)"
-            }
-        ]
+        "continuous_blocks_summary": continuous_blocks_summary,
     }
 
     with open(output_json_path, "w", encoding="utf-8") as f:
         json.dump(story_manifest, f, ensure_ascii=False, indent=2)
 
+    if cache_key:
+        from src.tools.stage_cache import save_stage
+        save_stage(cache_dir, "story", cache_key, story_manifest)
+
     print(f"[STORY-ANALYZER] 叙事候选池生成完毕: {output_json_path}")
+    print(f"                 源素材 {len(sources)} 个 | 合计校对后 {len(verified_segs)} 句")
     print(f"                 Hook 候选: {len(pools['hook_candidates'])} 条 | 面料候选: {len(pools['fabric_candidates'])} 条")
     print(f"                 显瘦候选: {len(pools['fit_candidates'])} 条 | 搭配候选: {len(pools['styling_candidates'])} 条")
     print(f"                 淘汰杂质: {len(pools['rejected_candidates'])} 条 (价格/库存/切品)")

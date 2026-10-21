@@ -1,0 +1,46 @@
+{
+  "batch_timestamp": "2026-10-21 21:09:51",
+  "total": 5,
+  "done": 0,
+  "qc_failed": 0,
+  "skipped_cached": 5,
+  "error": 0,
+  "elapsed_sec": 0.5,
+  "results": [
+    {
+      "project_id": "silk_knitwear_7270",
+      "status": "skipped_cached",
+      "qc_passed": true,
+      "warnings": 1,
+      "duration": 62.682
+    },
+    {
+      "project_id": "hoodie_11214",
+      "status": "skipped_cached",
+      "qc_passed": true,
+      "warnings": 1,
+      "duration": 64.292
+    },
+    {
+      "project_id": "down_jacket_11241",
+      "status": "skipped_cached",
+      "qc_passed": true,
+      "warnings": 1,
+      "duration": 63.619
+    },
+    {
+      "project_id": "workwear_11186",
+      "status": "skipped_cached",
+      "qc_passed": true,
+      "warnings": 1,
+      "duration": 64.591
+    },
+    {
+      "project_id": "grid_coat_11231",
+      "status": "skipped_cached",
+      "qc_passed": true,
+      "warnings": 1,
+      "duration": 62.059
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "qc_report.schema.json",
+  "title": "质检报告 qc_report.json",
+  "type": "object",
+  "required": ["all_passed", "checks"],
+  "additionalProperties": true,
+  "properties": {
+    "all_passed": { "type": "boolean", "description": "所有 BLOCK 级检查通过才为 true" },
+    "constraints_version": { "type": "integer" },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status", "level"],
+        "properties": {
+          "name": { "type": "string" },
+          "status": { "enum": ["PASS", "FAIL", "WARN"] },
+          "level": { "enum": ["BLOCK", "WARN"] },
+          "detail": { "type": "string" },
+          "metric_key": { "type": "string", "description": "对应 constraints.yaml 的指标 key" },
+          "measured": {}, 
+          "threshold": {}
+        }
+      }
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "audited_at": { "type": "string" }
+  }
+}

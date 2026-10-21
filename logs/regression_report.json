@@ -1,0 +1,52 @@
+{
+  "timestamp": "2026-10-21 21:15:34",
+  "layers": {
+    "unit_tests": {
+      "tests/test_improvements.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[COVER] 商品图为空：跳过贴图渲染，封面仅保留直播画面 + 品牌区 + 商品名\n[COVER v2] MIXCITY 风格封面已生成（金色渐变商品名）: D:\\Projects\\dy-live-ecommerce-editor\\data\\_test_cover_v2.jpg\n[COVER] 商品图为空：跳过贴图渲染，封面仅保留直播画面 + 品牌区 + 商品名\n[COVER v2] MIXCITY 风格封面已生成（金色渐变商品名）: D:\\Projects\\dy-live-ecommerce-editor\\data\\_test_cover_wrap.jpg\n"
+      },
+      "tests/test_pipeline_units.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": " API Key))\n            [1.00s ~ 3.50s] 姐妹们看一下食物，这个是半导棉的面料。 -> 姐妹们看一下实物，这个是半岛棉的面料。 (半导棉|半导|半刀棉 -> 半岛棉 (商品标题核心面料【半岛棉】匹配))\n            [3.60s ~ 5.80s] 上身之后人都瘦眉了，而且超选瘦。 -> 上身之后人都瘦没了，而且超显瘦。 (瘦眉了|瘦美了|瘦梅了 -> 瘦没了 (修身显瘦夸张修辞【人都瘦没了】))\n            [6.00s ~ 8.00s] 平时如果拿不准的就不要卡马，正常按马术拍。 -> 平时如果拿不准的就不要卡码，正常按码数拍。 (卡马 -> 卡码 (服装尺码选购用语【卡码】))\n[ASR-AGENT] 质检审计报告已落盘: C:\\Users\\ePanda\\AppData\\Local\\Temp\\tmp01nmyj8q.json\n"
+      },
+      "tests/test_ocr_purity.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[TEST-B11] 引擎=rapidocr 阈值=0.02 min_box_area=400\n  [PASS] 纯净封面: ratio=0.00% (boxes=0, exempt=0) 期望通过 实测通过\n  [PASS] 店招大字封杀: ratio=12.46% (boxes=2, exempt=0) 期望拦截 实测拦截\n  [PASS] 模板文字豁免: ratio=0.00% (boxes=0, exempt=2) 期望通过 实测通过\n  [PASS] 极小噪点豁免: ratio=0.00% (boxes=0, exempt=0) 期望通过 实测通过\n  [PASS] 中等背景文字封杀: ratio=2.61% (boxes=1, exempt=0) 期望拦截 实测拦截\n  [PASS] 单调性: 纯净(0.00%) < 店招(12.60%)\n\n[TEST-B11] 全部通过\n"
+      },
+      "tests/test_llm_verifier.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "超显受|超选受 -> 超显瘦 (主推核心版型卖点【超显瘦】))\n[PASS] 用例7 非法 JSON 自动降级\n[ASR-AGENT] 启动语境感知 ASR 智能体质检验校 (共 3 个台词句块)...\n            锚定商品: 半岛棉镂空钩花 气质显瘦针织衫 | 品牌: MIXCITY\n[ASR-AGENT] 语境校对完成: 纠正 1 处 ASR 错词/语境歧义 (引擎: LLM (gpt-4o-mini @ http://127.0.0.1:51613/v1))\n[ASR-AGENT] 引擎分歧审计: 1 句两引擎结果不一致（已记录供人工复核）\n            [0.00s ~ 2.50s] 今天我们来看这个半导棉的开衫 -> 今天我们来看这个半岛棉的开衫 (面料名纠错)\n[PASS] 用例8 markdown 围栏 JSON 解析\n\n[TEST-B15] 全部通过\n"
+      },
+      "tests/test_chatcut_bridge.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[PASS] 用例6 多源时间线往返（来源不丢失）\n[PASS] 用例7 单源向后兼容\n[PASS] 用例1 往返一致（4 分镜边界/缩放/类目保持）\n[PASS] 用例2 人工精修回注（trim+删除生效，剩 3 分镜）\n[PASS] 用例3 精修计划过 B12 网关（ok=False, 剩余违规=['计划总时长 33.2s ∉ [45, 65]']）\n[PASS] 用例3b 非法编辑（时长不足）被 B12 网关拦截: 计划总时长 3.0s ∉ [45, 65]\n[PASS] 用例4 时间线结构校验拦截（重叠/源区间非法/缺视频轨）\n[PASS] 用例5 CLI 导出/导入往返\n\n[TEST-B14] 全部通过\n"
+      },
+      "tests/test_blacklist_precision.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "ASS] 放行: 大家都来看这个面料\n\n[TEST-黑名单精度] C. 库存/促销/换款必须拦截\n  [PASS] 拦截: 只剩最后三条了我要赶紧 (命中库存/促销 (.*只剩.*))\n  [PASS] 拦截: 库存不多了宝宝们 (命中库存/促销 (.*库存.*))\n  [PASS] 拦截: 上链接了宝宝们 (命中库存/促销 (.*上链接.*))\n  [PASS] 拦截: 299秒杀 (命中价格表达)\n  [PASS] 拦截: 你们今天福利来啦 (命中库存/促销 (.*福利.*))\n  [PASS] 拦截: 我们来穿下一款 (命中换款/离场 (.*下一款.*))\n  [PASS] 拦截: 主播换衣服了 (命中换款/离场 (.*主播.*(换|走|下播|下班).*)\n  [PASS] 拦截: 这个款已经断码了只剩大码 (命中库存/促销 (.*只剩.*))\n\n[TEST-黑名单精度] 全部通过\n"
+      },
+      "tests/test_multi_source.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[PASS] 用例1 不跨文件合并（2 块，A=1 B=1）\n[PASS] 用例2 修剪后仍保留来源（1 个 clip）\n[PASS] 用例3 计划合规（44.5s / 2 clip / 2 源）\n[PASS] 用例4 闲聊/幻觉被过滤\n[PASS] 用例5 字幕后处理守恒且保来源（2→3 条）\n[PASS] 用例6 口语填充词清理\n\n[TEST-B17] 全部通过\n"
+      }
+    },
+    "batch": {
+      "returncode": 143,
+      "done": 0,
+      "qc_failed": 0,
+      "error": 0,
+      "skipped_cached": 5
+    }
+  },
+  "interval_failures": [],
+  "unit_failures": [],
+  "all_passed": true
+}

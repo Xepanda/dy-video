@@ -219,17 +219,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     <div class="form-group">
                         <label>成片目标时长区间 (秒)</label>
                         <select id="duration_range" name="duration_range">
+                            <option value="45-65" selected>45 ~ 65 秒 (标准区间，区间内浮动)</option>
                             <option value="45-55">45 ~ 55 秒 (完播率优先)</option>
-                            <option value="50-60" selected>50 ~ 60 秒 (标准推荐)</option>
+                            <option value="50-60">50 ~ 60 秒 (紧凑)</option>
                             <option value="55-65">55 ~ 65 秒 (丰富卖点)</option>
                         </select>
                     </div>
                     <div class="form-group">
                         <label>双色对比分屏策略</label>
                         <select id="split_strategy" name="split_strategy">
-                            <option value="auto" selected>自动探测 (检测到双色上身则分屏，否则单画面)</option>
-                            <option value="force_off">强制关闭分屏 (仅保留单画面特写)</option>
+                            <option value="force_off" selected>强制关闭分屏（当前版本默认）</option>
+                            <option value="auto" disabled>自动探测（规划中：v2 分屏算子开发后开放）</option>
                         </select>
+                        <div class="hint">分屏算子（540:540 双色对比）开发中，暂不生效；选 auto 也不会改变输出</div>
                     </div>
                 </div>
                 <div class="form-group">
@@ -268,6 +270,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const img2 = document.getElementById('product_img_2').value.trim();
             if (img1) payload.product.item_images.push(img1);
             if (img2) payload.product.item_images.push(img2);
+
+            // 跨素材选段（2026-10-21）：同目录多视频视为同一商品的直播素材，
+            // 流水线会自动扫描 raw_video_path 所在目录的全部视频并跨源挑选最优片段。
+            // 此处显式置空数组，由流水线侧按目录扫描补全（避免 GUI 猜测）。
+            payload.raw_video_paths = [];
 
             fetch('/save', {
                 method: 'POST',

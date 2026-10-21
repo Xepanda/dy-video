@@ -41,16 +41,35 @@ class AsrEngine:
         video_path: str,
         cache_json_path: str = None,
         force_recompute: bool = False,
-        initial_prompt: str = None
+        initial_prompt: str = None,
+        cache_key: str = None
     ) -> List[Dict[str, Any]]:
-        """转录视频，若缓存存在直接秒读"""
+        """转录视频，若缓存存在直接秒读。
+
+        cache_key（B13）：与缓存同目录的 <cache>.meta.json 中记录的 key 比对，
+        不一致（视频/spec/constraints 已变更）则重算，防止串味。
+        """
         if not os.path.exists(video_path):
             raise FileNotFoundError(f"视频不存在: {video_path}")
 
         if cache_json_path and os.path.exists(cache_json_path) and not force_recompute:
-            print(f"[ASR] 命中时间戳缓存: {cache_json_path} (秒级加载)")
-            with open(cache_json_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+            key_ok = True
+            if cache_key:
+                meta_path = os.path.join(os.path.dirname(os.path.abspath(cache_json_path)),
+                                         os.path.basename(cache_json_path) + ".meta.json")
+                if os.path.exists(meta_path):
+                    try:
+                        with open(meta_path, "r", encoding="utf-8") as mf:
+                            key_ok = json.load(mf).get("cache_key") == cache_key
+                    except (json.JSONDecodeError, OSError):
+                        key_ok = False
+                else:
+                    key_ok = False  # 旧缓存无 key 记录，保守重算
+            if key_ok:
+                print(f"[ASR] 命中时间戳缓存: {cache_json_path} (秒级加载)")
+                with open(cache_json_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            print("[ASR] 缓存 key 不匹配（输入已变更），重新转录")
 
         model = self._get_model()
         print(f"[ASR] 正在对素材进行全量语音打点: {os.path.basename(video_path)} ...")
@@ -62,6 +81,10 @@ class AsrEngine:
             language="zh",
             vad_filter=True,
             vad_parameters=dict(min_silence_duration_ms=250),
+            # condition_on_previous_text=False：直播嘈杂音频 + initial_prompt 场景下，
+            # 默认的上下文条件传播会把提示词滚成复读循环（2026-10-21 实测：
+            # 6 号素材 318s 仅转出 15 句且内容全是提示词；关闭后 151 句/147 去重正常）。
+            condition_on_previous_text=False,
             initial_prompt=initial_prompt
         )
 
@@ -83,6 +106,11 @@ class AsrEngine:
             with open(cache_json_path, "w", encoding="utf-8") as f:
                 json.dump(results, f, ensure_ascii=False, indent=2)
             print(f"[ASR] 时间戳已落盘缓存: {cache_json_path}")
+            if cache_key:
+                meta_path = cache_json_path + ".meta.json"
+                with open(meta_path, "w", encoding="utf-8") as mf:
+                    json.dump({"cache_key": cache_key, "video": os.path.basename(video_path)},
+                              mf, ensure_ascii=False, indent=2)
 
         return results
 

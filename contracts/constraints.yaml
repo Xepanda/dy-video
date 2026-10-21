@@ -1,0 +1,189 @@
+# dy-live-editor 量化约束契约 v1.0
+# 依据《会议纪要》+ 2026-10-20 客户决策编制；每个 metric key 在 constraints_map.md 登记纪要原文。
+# 规则：阈值只改本文件，不改代码；本文件版本进入缓存键与 QC 报告。
+
+version: 1.2
+updated: "2026-10-21"
+
+# ============ 变更记录 ============
+# v1.1 (2026-10-21) 泛化验收修正：
+#   - 双肩深度差由硬门禁(0.055)改为软罚分 + 极端侧身硬上限(0.45)。
+#     依据：6 号素材实测主播重心切换/侧身展示时 dz 中位数 0.26，原硬门禁误杀全部候选；
+#     纪要"主播表情正常"的量化门禁是 face_yaw/EAR/MAR，双肩 dz 并非纪要约束。
+#   - 遮挡判定由"腕过肩+0.08"改为"腕高过鼻梁"（抬手展示姿态不再误判）。
+#   - 踝部可见性阈值 0.40 → 几何判据（ankle_y_max 0.99，鞋底贴下边缘的全身构图不再被误杀），
+#     新增膝盖扫描门禁（与 QC C5 BLOCK 一致）。
+#     依据：6 号素材实测踝部 vis 中位数 0.40 但鞋完整可见（模型置信度≠遮挡度量）。
+#   - 新增 ocr 段（B11 背景文字纯净度）。
+# v1.2 (2026-10-21) 泛化验收修正二：
+#   - 全帧清晰度扫描门禁由绝对 200 改为"绝对地板 80 + 素材分位相对校准
+#     （中位数×0.8）"。依据：各素材相机素质差异大（实测中位数 demo 244 /
+#     9号 182 / 8号 144 / 7号 96），绝对阈值误杀 7 号素材 97% 帧；
+#     防糊硬门禁仍是归一化放大后的 post_scale_sharpness ≥200（BLOCK）。
+#   - 漏斗配额默认降为 WARN（funnel_enforce_level），类目稀薄素材不再一票否决。
+
+# ============ 封面底图约束（C1~C7, V7）============
+cover:
+  sharpness_min: 200              # C1 归一化放大后清晰度门禁（post_scale_sharpness，BLOCK）
+  sharp_admission_min: 80         # C1 扫描期全帧清晰度绝对地板（排除运动模糊垃圾帧）
+  sharp_relative_ratio: 0.8       # C1 扫描期相对校准：准入线 = max(地板, 素材全帧清晰度中位数×0.8)
+  face_sharpness_min: 150         # C1 人脸区域清晰度（防放大糊脸）
+  ghosting_energy_max: 0.15       # C2 帧间差分能量比（重影/运动模糊）
+  contour_completeness_min: 0.95  # C3 人像掩码完整度
+  # C4 人脸朝向与表情（纪要"主播表情正常"的量化门禁，主判据）
+  face_yaw_max_deg: 12            # C4 偏航角（solvePnP）
+  ear_min: 0.18                   # C4 睁眼（EAR）
+  mar_max: 0.35                   # C4 闭嘴（MAR）
+  face_area_ratio_min: 0.003      # C4 人脸面积占比下限（防过远；直播全身帧实测 ~0.004）
+  face_area_ratio_max: 0.25       # C4 人脸面积占比上限（防过近畸变）
+  # 身体正面度（双肩深度差，非纪要约束；软罚分 + 极端侧身硬上限，v1.1）
+  shoulder_dz_soft: 0.055         # 超过则候选评分罚分（身体正面度 s_frontal）
+  shoulder_dz_max: 0.45           # 极端侧身硬排除（3/4 侧身以内仍可参选，由 face_yaw 主把关）
+  # C5 完整人体
+  knees_visible: true
+  ankles_visible: true
+  knee_y_max: 0.92                # C5 膝盖归一化纵坐标上限
+  ankle_y_max: 0.99               # C5 脚踝纵坐标上限（v1.1 几何判据：踝在画面内；直播全身构图鞋底常贴下边缘）
+  knee_visibility_min: 0.30       # C5 膝盖可见性下限（模型置信度卫生检查）
+  # ankle_visibility_min 已废弃（v1.1）：踝部"可见性"是模型置信度而非遮挡度量，
+  # 画面底部边缘 landmark 置信度天然偏低（实测 vis 中位 0.40 但鞋完整可见），
+  # C5 踝部改几何判据 ankle_y_max。
+  landmark_visibility_min: 0.40
+  # —— 决策 1：水平 1:6:1（左:人:右），人宽占画布 75% 居中 ——
+  horizontal_margin_ratio: [1, 6, 1]
+  person_width_ratio: 0.75        # C6 810/1080（目标值）
+  person_width_tolerance: 0.03    # C6 width_ratio 允许 [0.72, 0.78] → PASS
+  person_width_warn_range: [0.36, 0.85]  # 示例版式下的 WARN 区间（名称区预留后人宽实测 ~0.38-0.55）
+  # 构图策略（决策冲突的可切换开关，几何取舍说明见 docs/improvement_plan 第 11 节）：
+  #   example        —— 示例版式优先：脚底 78% + 名称区独立（默认，实测宽占比 0.38~0.56）
+  #   width_priority —— 决策 1 优先：人宽锁定 75%，身高上限 88%（腿部进入名称区，名称覆盖在人像上）
+  framing_policy: example
+  person_height_max_ratio: 0.80       # 人体高上限（为底部商品名区预留空间）
+  feet_target_ratio: 0.78             # 脚底目标位置（名称区顶部上方）
+  head_floor_ratio: 0.155             # 头顶预留（避让品牌区）
+  head_top_min_ratio: 0.13        # C6 头顶预留（避让品牌区）
+  # C7 衣着一致性（CLIP 阈值；直方图降级阈值见 garment_match.histogram_min）
+  garment_match_min: 0.75
+  # V7 封面纯净度
+  ocr_area_ratio_max: 0.02
+  # 候选扫描参数
+  scan_step_sec: 1.5
+  scan_limit_sec: 180
+  top_k: 5
+
+# ============ 衣着一致性检测参数 ============
+garment_match:
+  engine: auto                    # auto | clip | histogram
+  histogram_min: 0.15             # 直方图降级阈值（有限样本标定：同款~0.25/异色~0.0；WARN 级）
+  garment_match_min: 0.75         # CLIP 精确阈值（BLOCK 级；待 5 商品×20 帧标定）
+  clip_model: ViT-B-32            # open_clip 模型名（可选路径）
+
+# ============ 封面背景文字纯净度（V7, B11）============
+ocr:
+  engine: rapidocr                  # rapidocr（PP-OCR ONNX 版）| paddleocr（预留，需 paddlepaddle）
+  background_text_area_max: 0.02    # V7 背景文字面积占比上限（BLOCK）
+  min_confidence: 0.5               # OCR 框最低置信度
+  min_box_area_px: 400              # 忽略小于该面积的噪点框（px²）
+  enforce_level: BLOCK              # BLOCK（默认）| WARN（店招密集直播间可降级）
+
+# ============ 文本排版约束（C8~C10, C15~C16；版式复刻会议纪要示例图）============
+text:
+  wrap_width_ratio: 0.92          # C9/C16 单行超过 92% 画布宽触发换行
+  line_spacing_ratio: 1.22
+  font_size_base: 96              # C10 商品名基础字号（示例图实测 ~100pt 等效）
+  font_size_min: 64               # C10 商品名字号下限
+  product_name_top_ratio: 0.80    # 名称区顶部（画幅比例，示例图 y≈80%）
+  product_name_stroke_width: 5    # 商品名深褐描边宽度
+  brand_font_size_en: 74          # C15 品牌英文主标字号
+  brand_font_size_cn: 52          # C15 品牌中文副标字号
+  brand_en_gradient: ["#C9A66B", "#8A652F"]   # 品牌青铜渐变（示例图采样校准）
+  # —— 决策 2：商品名标准色 = 金色 ——
+  product_name_gradient: ["#FFE9A8", "#E8A91E"]
+  product_name_stroke: "#3D1F0E"
+  product_name_shear: -0.12       # C10 动感斜体
+  product_name_hue_range: [35, 55]   # QC 色相断言（度）
+  product_name_sat_min: 0.5          # QC 饱和度断言
+  product_name_hue_pixel_ratio: 0.60 # QC 金色像素占比下限
+  brand_en_fill: "#FFEBAA"
+  brand_en_stroke: "#381E11"
+  brand_cn_fill: "#FFFFFF"
+  brand_cn_stroke: "#381E11"
+
+# ============ 封面贴图约束（C11~C14）============
+sticker:
+  size: 280                       # C11 正方形边长
+  margin_a: 32                    # C12 靠左/靠右距离 a
+  gap_a: 32                       # C13 两图间距 a
+  side: right                     # C12 left | right
+  layout: horizontal              # horizontal（示例图：两张并排）| vertical（纪要文字：上下堆叠）
+  radius: 20                      # C14 圆角半径
+  border_color: "#E2E8F0"         # C14 淡灰描边
+  border_width: 2
+  vertical_center: 960            # C13 组合块中心 y
+
+# ============ 视频成片约束（V1~V6, V8）============
+video:
+  duration_range: [45, 65]        # V1
+  resolution: [1080, 1920]        # V2
+  fps: 30                         # 决策 4：30fps 定稿
+  subtitle_margin_v_min: 220      # V5 小黄车避让
+  subtitle_safe_zone_px: 220      # V5 成品像素级安全区高度
+  av_sync_error_max_ms: 40        # V3 唇形同步抽检容差
+  black_frame_max_ratio: 0.0      # V6 黑帧占比
+  blackdetect_min_duration: 0.1   # V6 blackdetect 最短黑帧时长(s)
+  # 分镜漏斗配额（build_plan 选段约束；节奏指导，默认 WARN 不拦截——
+  # 纪要仅硬性要求总时长 45-65s；类目稀薄素材不应被一票否决。
+  # funnel_enforce_level 可升为 BLOCK（需附回归结果，阈值变更纪律）
+  funnel_enforce_level: WARN
+  funnel:
+    hook:      { min: 3,  max: 8  }
+    fabric:    { min: 8,  max: 20 }
+    fit:       { min: 8,  max: 15 }
+    styling:   { min: 15, max: 30 }
+
+# ============ 音频约束（V4）============
+audio:
+  loudness_lufs: -14              # V4 EBU R128 综合响度
+  loudness_tolerance: 1.5
+  true_peak_max_dbtp: -0.5        # V4 真峰值
+  sample_rate: 48000
+
+# ============ 价格约束（决策 3，V8）============
+price:
+  clip_exclude: true              # 选段级排除含价格片段
+  subtitle_assert_zero: true      # 成片字幕零价格断言
+  detector: chinese_numeral_v1
+  whitelist_units: ["码", "号", "厘米", "cm", "斤", "kg", "岁", "年", "月", "日", "点", "层", "度", "%"]
+
+# ============ ASR 执行者审核门禁（需求 2/4）============
+# ASR 识别结果必须经执行者审核后才可进入选段/字幕/总装流程。
+# 落点：src/core/asr_review_gate.py，挂载于 AsrContextVerifier.verify_and_correct。
+# 任何识别方案（Faster-Whisper / 其他 ASR）产出的segments 都要过这一关。
+asr_review:
+  max_seg_sec: 30.0          # 单段最长时长，超出记 WARN（切分异常）
+  min_density: 0.06          # 识别密度下限（句/秒），低于此判 BLOCK
+                              # 防"只转出 15 句"类转录退化（提示词复读循环）
+  overlap_tolerance_sec: 0.5  # 相邻段重叠容差，超出记 WARN
+  duration_tolerance_sec: 2.0  # end 超出媒体时长的容差
+  warn_ratio_limit: 0.35     # WARN 占比超此比例自动升级为 BLOCK（防带病放行）
+  cjk_min_ratio: 0.55        # 中文字符占比下限，低于记 WARN（疑似乱码）
+  repeat_run_len: 5          # 连续重复字符阈值（"啊啊啊啊"判为噪声串）
+
+# ============ 字幕禁用错词（ASR 同音错字黑名单，QC 断言）============
+subtitle_banned_tokens:
+  - "食物还要"
+  - "半导棉"
+  - "瘦眉了"
+  - "超选瘦"
+  - "卡马去拍"
+  - "歪歪DS"
+  - "罗恩梯"
+
+# ============ 选段黑名单（库存/促销/换款离场）============
+# 默认正则在 src/tools/build_plan.py（INVENTORY_PATTERNS / CHANGEOVER_PATTERNS），
+# 可在此处整体覆盖（列表形式，每条一个正则）以便不改代码即调参。
+# 2026-10-21 精度修正：删除会误杀穿搭/面料/版型内容的模式
+#   （牛仔/拍了/自己买/价格/偏薄/款型/来看这个/我特意），收紧 主播/撤。
+blacklist:
+  inventory: []      # 空 = 使用代码内置默认
+  changover: []      # 空 = 使用代码内置默认
