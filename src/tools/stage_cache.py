@@ -59,6 +59,26 @@ def _sha256_file(path: str, chunk: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
+def code_fingerprint() -> str:
+    """核心代码 + 约束的内容指纹（sha256 前 16 位）。
+
+    供**阶段级**缓存键使用——例如 ASR 转录缓存。此前 ASR 层的缓存键
+    只有视频路径，改了 asr_engine 的识别行为（如禁用 initial_prompt）
+    缓存依然命中，跑出的是陈旧结果，让修复"看起来没生效"
+    （2026-10-24 实测踩坑）。把代码指纹并入缓存键即可自动失效。
+    """
+    h = hashlib.sha256()
+    h.update(b"dy-live-code-fingerprint-v1")
+    for rel in _CODE_FINGERPRINT_FILES:
+        p = os.path.join(PROJECT_ROOT, rel)
+        if os.path.exists(p):
+            h.update(rel.encode("utf-8"))
+            h.update(_sha256_file(p).encode("ascii"))
+        else:
+            h.update(b"<missing>")
+    return h.hexdigest()[:16]
+
+
 def compute_pipeline_key(
     video_path,
     spec_path: str,

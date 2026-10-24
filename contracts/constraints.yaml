@@ -28,8 +28,11 @@ cover:
   sharp_admission_min: 80         # C1 扫描期全帧清晰度绝对地板（排除运动模糊垃圾帧）
   sharp_relative_ratio: 0.8       # C1 扫描期相对校准：准入线 = max(地板, 素材全帧清晰度中位数×0.8)
   face_sharpness_min: 150         # C1 人脸区域清晰度（防放大糊脸）
-  ghosting_energy_max: 0.15       # C2 帧间差分能量比（重影/运动模糊）
-  contour_completeness_min: 0.95  # C3 人像掩码完整度
+  # ⚠️ 以下 3 个键**当前无任何代码消费**（2026-10-24 审计确认），保留仅为登记需求。
+  #    改它们不会改变任何行为——若要实现，请同步更新 contracts_map.md 的状态列。
+  ghosting_energy_max: 0.15       # ❌ 未实现：C2 帧间差分能量比（重影/运动模糊）
+  contour_completeness_min: 0.95  # ❌ 未实现：C3 人像掩码完整度
+  landmark_visibility_min: 0.40  # ❌ 未实现：关键点置信度下限（MediaPipe 自带置信度，未额外设阈）
   # C4 人脸朝向与表情（纪要"主播表情正常"的量化门禁，主判据）
   face_yaw_max_deg: 12            # C4 偏航角（solvePnP）
   ear_min: 0.18                   # C4 睁眼（EAR）
@@ -48,24 +51,23 @@ cover:
   # ankle_visibility_min 已废弃（v1.1）：踝部"可见性"是模型置信度而非遮挡度量，
   # 画面底部边缘 landmark 置信度天然偏低（实测 vis 中位 0.40 但鞋完整可见），
   # C5 踝部改几何判据 ankle_y_max。
-  landmark_visibility_min: 0.40
   # —— 决策 1：水平 1:6:1（左:人:右），人宽占画布 75% 居中 ——
-  horizontal_margin_ratio: [1, 6, 1]
-  person_width_ratio: 0.75        # C6 810/1080（目标值）
+  horizontal_margin_ratio: [1, 6, 1]   # ⚠️ 未接线：1:6:1 语义已由 person_width_ratio 承载
+  person_width_ratio: 0.75        # C6 810/1080（目标值）✅ 已接线到 normalize_subject_framing
   person_width_tolerance: 0.03    # C6 width_ratio 允许 [0.72, 0.78] → PASS
   person_width_warn_range: [0.36, 0.85]  # 示例版式下的 WARN 区间（名称区预留后人宽实测 ~0.38-0.55）
   # 构图策略（决策冲突的可切换开关，几何取舍说明见 docs/improvement_plan 第 11 节）：
   #   example        —— 示例版式优先：脚底 78% + 名称区独立（默认，实测宽占比 0.38~0.56）
   #   width_priority —— 决策 1 优先：人宽锁定 75%，身高上限 88%（腿部进入名称区，名称覆盖在人像上）
   framing_policy: example
-  person_height_max_ratio: 0.80       # 人体高上限（为底部商品名区预留空间）
-  feet_target_ratio: 0.78             # 脚底目标位置（名称区顶部上方）
-  head_floor_ratio: 0.155             # 头顶预留（避让品牌区）
-  head_top_min_ratio: 0.13        # C6 头顶预留（避让品牌区）
+  person_height_max_ratio: 0.80       # 人体高上限 ✅ 已接线（为底部商品名区预留空间）
+  feet_target_ratio: 0.78             # 脚底目标位置 ✅ 已接线（名称区顶部上方）
+  head_floor_ratio: 0.155             # 头顶预留 ✅ 已接线（避让品牌区）
+  head_top_min_ratio: 0.13        # C6 头顶预留 ✅ 已接线（避让品牌区）
   # C7 衣着一致性（CLIP 阈值；直方图降级阈值见 garment_match.histogram_min）
   garment_match_min: 0.75
   # V7 封面纯净度
-  ocr_area_ratio_max: 0.02
+  ocr_area_ratio_max: 0.02            # ⚠️ 未接线：实际生效的是 ocr.background_text_area_max
   # 候选扫描参数
   scan_step_sec: 1.5
   scan_limit_sec: 180
@@ -74,9 +76,9 @@ cover:
 # ============ 衣着一致性检测参数 ============
 garment_match:
   engine: auto                    # auto | clip | histogram
-  histogram_min: 0.15             # 直方图降级阈值（有限样本标定：同款~0.25/异色~0.0；WARN 级）
-  garment_match_min: 0.75         # CLIP 精确阈值（BLOCK 级；待 5 商品×20 帧标定）
-  clip_model: ViT-B-32            # open_clip 模型名（可选路径）
+  histogram_min: 0.15             # 直方图降级阈值（有限样本标定：同款~0.25/异色~0.0；WARN 级）✅ 已接线
+  garment_match_min: 0.75         # CLIP 精确阈值（BLOCK 级；待 5 商品×20 帧标定）✅ 已接线
+  clip_model: ViT-B-32            # ⚠️ 未接线：open_clip 模型名当前硬编码，暂不支持配置
 
 # ============ 封面背景文字纯净度（V7, B11）============
 ocr:
@@ -127,9 +129,9 @@ video:
   resolution: [1080, 1920]        # V2
   fps: 30                         # 决策 4：30fps 定稿
   subtitle_margin_v_min: 220      # V5 小黄车避让
-  subtitle_safe_zone_px: 220      # V5 成品像素级安全区高度
-  av_sync_error_max_ms: 40        # V3 唇形同步抽检容差
-  black_frame_max_ratio: 0.0      # V6 黑帧占比
+  subtitle_safe_zone_px: 220      # ⚠️ 未接线：字幕安全区实际由 subtitle_margin_v_min 控制
+  av_sync_error_max_ms: 40        # ⚠️ 未接线：PTS 归零已保证物理同步，但无独立量化断言
+  black_frame_max_ratio: 0.0      # V6 黑帧占比 ✅ 已接线
   blackdetect_min_duration: 0.1   # V6 blackdetect 最短黑帧时长(s)
   # 分镜漏斗配额（build_plan 选段约束；节奏指导，默认 WARN 不拦截——
   # 纪要仅硬性要求总时长 45-65s；类目稀薄素材不应被一票否决。
@@ -150,10 +152,10 @@ audio:
 
 # ============ 价格约束（决策 3，V8）============
 price:
-  clip_exclude: true              # 选段级排除含价格片段
-  subtitle_assert_zero: true      # 成片字幕零价格断言
+  clip_exclude: true              # ⚠️ 未接线：选段级价格排除实际在 detect_price 内部实现
+  subtitle_assert_zero: true      # 成片字幕零价格断言 ✅ 已接线
   detector: chinese_numeral_v1
-  whitelist_units: ["码", "号", "厘米", "cm", "斤", "kg", "岁", "年", "月", "日", "点", "层", "度", "%"]
+  whitelist_units: ["码", "号", "厘米", "cm", "斤", "kg", "岁", "年", "月", "日", "点", "层", "度", "%"]  # ⚠️ 未接线
 
 # ============ ASR 执行者审核门禁（需求 2/4）============
 # ASR 识别结果必须经执行者审核后才可进入选段/字幕/总装流程。

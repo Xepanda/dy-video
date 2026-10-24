@@ -35,6 +35,7 @@ from src.tools.detect_scenes import detect_scene_cuts
 from src.tools.render_cover_tool import render_cover_with_meta
 from src.tools.assemble_video_tool import assemble_video_tool
 from src.tools.make_placeholder_cards import ensure_placeholder_cards
+from src.core.path_resolver import resolve_path, relativize
 from src.qc.qc_auditor import QcAuditor
 from src.agent.decision_gateway import DecisionGateway, DecisionViolation
 
@@ -99,8 +100,18 @@ class AgentDirector:
         if self.options.get("disable_placeholder_cards"):
             return
         product = self.spec.get("product", {}) or {}
-        existing = [i for i in product.get("item_images", []) if i and os.path.exists(i)]
+        spec_dir = os.path.dirname(self.spec_path)
+        existing = []
+        for i in product.get("item_images", []):
+            if not i:
+                continue
+            rp = resolve_path(i, spec_dir)
+            if rp and os.path.exists(rp):
+                existing.append(rp)
         if existing:
+            # 已有真实商品图 → 不生成占位，但把路径归一化后写回 spec（可移植性）
+            product["item_images"] = existing
+            self._write_spec_back()
             return
         n_cards = int(self.options.get("placeholder_cards", 2) or 2)
         size = int((self.constraints.get("sticker", {}) or {}).get("size", 280) or 280)
@@ -111,12 +122,32 @@ class AgentDirector:
             print(f"[WARN] 商品位占位补齐失败（不阻断，封面将无贴图）: {e}")
             return
         # 写回 spec，保证渲染与后续审计读到的是同一份商品位定义
+        self._write_spec_back()
+        self.product_info = self.spec.get("product", {})
+
+    def _write_spec_back(self):
+        """把 spec 写回磁盘，路径统一转成**相对仓库根**的相对路径（可移植性）。
+
+        2026-10-24：spec 此前存的是 D:/Projects/... 这类机器专属绝对路径，
+        换机器/换 runner 即失效。写回时用 relativize 归一化。
+        """
         try:
+            # 归一化素材路径为相对路径
+            for key in ("raw_video_path",):
+                v = self.spec.get(key)
+                if v:
+                    self.spec[key] = relativize(v, PROJECT_ROOT)
+            if self.spec.get("raw_video_paths"):
+                self.spec["raw_video_paths"] = [
+                    relativize(p, PROJECT_ROOT) for p in self.spec["raw_video_paths"]]
+            product = self.spec.get("product", {}) or {}
+            if product.get("item_images"):
+                product["item_images"] = [
+                    relativize(p, PROJECT_ROOT) for p in product["item_images"]]
             with open(self.spec_path, "w", encoding="utf-8") as f:
                 json.dump(self.spec, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"[WARN] 占位商品位写回 spec 失败（不阻断）: {e}")
-        self.product_info = self.spec.get("product", {})
+            print(f"[WARN] spec 写回失败（不阻断）: {e}")
 
     def _collect_source_videos(self) -> list:
         """收集本任务的全部候选源素材（同目录同商品的多段直播视频）。
@@ -127,12 +158,20 @@ class AgentDirector:
              （2026-10-21 需求：同一目录下的多个视频均为同一商品的直播素材）；
           3. 目录内无其他视频时退化为单文件。
         返回绝对路径列表，顺序稳定（按文件名排序）保证缓存键可复现。
+
+        路径可移植性（2026-10-24）：spec 里的路径统一经 path_resolver 解析，
+        相对路径与"换机器后失效的旧绝对路径"都能自动定位到本机实际文件。
         """
+        spec_dir = os.path.dirname(self.spec_path)
         spec_paths = self.spec.get("raw_video_paths") or []
-        paths = [os.path.abspath(p) for p in spec_paths if p and os.path.exists(p)]
+        paths = []
+        for p in spec_paths:
+            rp = resolve_path(p, spec_dir)
+            if rp and os.path.exists(rp) and rp not in paths:
+                paths.append(rp)
         primary = self.spec.get("raw_video_path")
         if primary:
-            primary_abs = os.path.abspath(primary)
+            primary_abs = resolve_path(primary, spec_dir) or os.path.abspath(primary)
             exists = os.path.exists(primary_abs)
             if exists and primary_abs not in paths:
                 paths.insert(0, primary_abs)

@@ -1,6 +1,6 @@
 {
   "project_id": "grid_coat_11231",
-  "raw_video_path": "D:/Projects/dy-live-ecommerce-editor/data/raw_samples/9 竹节外套·3M保暖易打理连帽格纹肌理外套11231/1007 竹节外套·3M保暖易打理连帽格纹肌理外套11231  0417.mp4",
+  "raw_video_path": "data/raw_samples/9 竹节外套·3M保暖易打理连帽格纹肌理外套11231/1007 竹节外套·3M保暖易打理连帽格纹肌理外套11231  0417.mp4",
   "brand": {
     "title_en": "MIXCITY",
     "subtitle_cn": "深圳高端女装"
@@ -9,8 +9,8 @@
     "title_line1": "竹节外套·3M保暖",
     "title_line2": "易打理连帽格纹肌理外套",
     "item_images": [
-      "D:/Projects/dy-live-ecommerce-editor/data/placeholders/grid_coat_11231_placeholder_1.png",
-      "D:/Projects/dy-live-ecommerce-editor/data/placeholders/grid_coat_11231_placeholder_2.png"
+      "data/placeholders/grid_coat_11231_placeholder_1.png",
+      "data/placeholders/grid_coat_11231_placeholder_2.png"
     ],
     "placeholder_images": true,
     "placeholder_note": "当前为占位示例图，仅用于保证封面版面完整；拿到真实商品图后替换 product.item_images 同名文件即可"
@@ -32,8 +32,8 @@
     ]
   },
   "raw_video_paths": [
-    "D:/Projects/dy-live-ecommerce-editor/data/raw_samples/9 竹节外套·3M保暖易打理连帽格纹肌理外套11231/1007 竹节外套·3M保暖易打理连帽格纹肌理外套11231  0123.mp4",
-    "D:/Projects/dy-live-ecommerce-editor/data/raw_samples/9 竹节外套·3M保暖易打理连帽格纹肌理外套11231/1007 竹节外套·3M保暖易打理连帽格纹肌理外套11231  0303.mp4",
-    "D:/Projects/dy-live-ecommerce-editor/data/raw_samples/9 竹节外套·3M保暖易打理连帽格纹肌理外套11231/1007 竹节外套·3M保暖易打理连帽格纹肌理外套11231  0417.mp4"
+    "data/raw_samples/9 竹节外套·3M保暖易打理连帽格纹肌理外套11231/1007 竹节外套·3M保暖易打理连帽格纹肌理外套11231  0123.mp4",
+    "data/raw_samples/9 竹节外套·3M保暖易打理连帽格纹肌理外套11231/1007 竹节外套·3M保暖易打理连帽格纹肌理外套11231  0303.mp4",
+    "data/raw_samples/9 竹节外套·3M保暖易打理连帽格纹肌理外套11231/1007 竹节外套·3M保暖易打理连帽格纹肌理外套11231  0417.mp4"
   ]
 }

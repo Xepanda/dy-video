@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-10-21 21:57:40",
+  "timestamp": "2026-10-24 14:13:41",
   "layers": {
     "unit_tests": {
       "tests/test_improvements.py": {
@@ -10,7 +10,7 @@
       "tests/test_pipeline_units.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": "料【半岛棉】匹配))\n            [3.60s ~ 5.80s] 上身之后人都瘦眉了，而且超选瘦。 -> 上身之后人都瘦没了，而且超显瘦。 (瘦眉了|瘦美了|瘦梅了 -> 瘦没了 (修身显瘦夸张修辞【人都瘦没了】))\n            [6.00s ~ 8.00s] 平时如果拿不准的就不要卡马，正常按马术拍。 -> 平时如果拿不准的就不要卡码，正常按码数拍。 (卡马 -> 卡码 (服装尺码选购用语【卡码】))\n[ASR-AGENT] 质检审计报告已落盘: C:\\Users\\ePanda\\AppData\\Local\\Temp\\tmp5jl33srl.json\n[ASR-REVIEW] 审核通过：3/3 句有效，1 条 WARN（占比 0.00）→ 允许进入后续流程\n            [WARN A5_NO_DURATION] #-1 未提供媒体时长，跳过识别密度校验\n"
+        "tail": "料【半岛棉】匹配))\n            [3.60s ~ 5.80s] 上身之后人都瘦眉了，而且超选瘦。 -> 上身之后人都瘦没了，而且超显瘦。 (瘦眉了|瘦美了|瘦梅了 -> 瘦没了 (修身显瘦夸张修辞【人都瘦没了】))\n            [6.00s ~ 8.00s] 平时如果拿不准的就不要卡马，正常按马术拍。 -> 平时如果拿不准的就不要卡码，正常按码数拍。 (卡马 -> 卡码 (服装尺码选购用语【卡码】))\n[ASR-AGENT] 质检审计报告已落盘: C:\\Users\\ePanda\\AppData\\Local\\Temp\\tmpjo1rjss_.json\n[ASR-REVIEW] 审核通过：3/3 句有效，1 条 WARN（占比 0.00）→ 允许进入后续流程\n            [WARN A5_NO_DURATION] #-1 未提供媒体时长，跳过识别密度校验\n"
       },
       "tests/test_ocr_purity.py": {
         "status": "PASS",
@@ -20,7 +20,7 @@
       "tests/test_llm_verifier.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": " ASR 错词/语境歧义 (引擎: LLM (gpt-4o-mini @ http://127.0.0.1:64439/v1))\n[ASR-AGENT] 引擎分歧审计: 1 句两引擎结果不一致（已记录供人工复核）\n            [0.00s ~ 2.50s] 今天我们来看这个半导棉的开衫 -> 今天我们来看这个半岛棉的开衫 (面料名纠错)\n[ASR-REVIEW] 审核通过：3/3 句有效，2 条 WARN（占比 0.00）→ 允许进入后续流程\n            [WARN A5_NO_DURATION] #-1 未提供媒体时长，跳过识别密度校验\n            [WARN A8_LOW_SEMANTIC] #-1 全篇商品语义词命中仅 1 个，疑似非商品内容或识别失败\n[PASS] 用例8 markdown 围栏 JSON 解析\n\n[TEST-B15] 全部通过\n"
+        "tail": " ASR 错词/语境歧义 (引擎: LLM (gpt-4o-mini @ http://127.0.0.1:49785/v1))\n[ASR-AGENT] 引擎分歧审计: 1 句两引擎结果不一致（已记录供人工复核）\n            [0.00s ~ 2.50s] 今天我们来看这个半导棉的开衫 -> 今天我们来看这个半岛棉的开衫 (面料名纠错)\n[ASR-REVIEW] 审核通过：3/3 句有效，2 条 WARN（占比 0.00）→ 允许进入后续流程\n            [WARN A5_NO_DURATION] #-1 未提供媒体时长，跳过识别密度校验\n            [WARN A8_LOW_SEMANTIC] #-1 全篇商品语义词命中仅 1 个，疑似非商品内容或识别失败\n[PASS] 用例8 markdown 围栏 JSON 解析\n\n[TEST-B15] 全部通过\n"
       },
       "tests/test_chatcut_bridge.py": {
         "status": "PASS",
@@ -40,7 +40,17 @@
       "tests/test_asr_review_gate.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": "a\\AppData\\Local\\Temp\\tmpf9si4vfj\\review_fail.json\n[ASR-REVIEW] 审核失败：ASR 审核失败 [A5]: 识别结果为空（0 句），禁止进入后续流程\n[ASR-REVIEW] 处理建议：1) 检查音轨是否正常 2) 更换更大ASR 模型 3) 放宽 constraints.asr_review 阈值后重试 4) 换用其他识别方案\n[PASS] 审核报告落盘（通过/失败双路径）\n[ASR-REVIEW] 审核通过：1/1 句有效，1 条 WARN（占比 0.00）→ 允许进入后续流程\n            [WARN A8_LOW_SEMANTIC] #-1 全篇商品语义词命中仅 2 个，疑似非商品内容或识别失败\n[PASS] constraints.asr_review 阈值可覆盖\n\n[TEST-ASR-REVIEW] 全部通过\n"
+        "tail": "a\\AppData\\Local\\Temp\\tmptwe1oill\\review_fail.json\n[ASR-REVIEW] 审核失败：ASR 审核失败 [A5]: 识别结果为空（0 句），禁止进入后续流程\n[ASR-REVIEW] 处理建议：1) 检查音轨是否正常 2) 更换更大ASR 模型 3) 放宽 constraints.asr_review 阈值后重试 4) 换用其他识别方案\n[PASS] 审核报告落盘（通过/失败双路径）\n[ASR-REVIEW] 审核通过：1/1 句有效，1 条 WARN（占比 0.00）→ 允许进入后续流程\n            [WARN A8_LOW_SEMANTIC] #-1 全篇商品语义词命中仅 2 个，疑似非商品内容或识别失败\n[PASS] constraints.asr_review 阈值可覆盖\n\n[TEST-ASR-REVIEW] 全部通过\n"
+      },
+      "tests/test_path_resolver.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[PASS] 相对路径解析: data/raw_samples/sample_product_card.png -> sample_product_card.png\n[PASS] 绝对路径原样保留\n[PASS] 旧机器绝对路径自动重定位 -> sample_product_card.png\n[PASS] relativize: contracts/constraints.yaml\n[PASS] 往返一致（relativize → resolve 指向同一文件）\n[PASS] 缺失/空路径安全返回（不抛异常）\n[PASS] 5 个 spec 均无机器专属绝对路径\n\n[TEST-PATH] 全部通过\n"
+      },
+      "tests/test_asr_prompt_policy.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "    [WARN A10_PROMPT_ECHO] #0 疑似 initial_prompt 回声（单段 30.0s 仅 9 字，真实语音可能被挤占）\n            [WARN A8_LOW_SEMANTIC] #-1 全篇商品语义词命中仅 2 个，疑似非商品内容或识别失败\n[ASR-REVIEW] 审核通过：7/7 句有效，2 条 WARN（占比 0.14）→ 允许进入后续流程\n            [WARN A10_PROMPT_ECHO] #0 疑似 initial_prompt 回声（单段 8.0s 仅 12 字，真实语音可能被挤占）\n            [WARN A8_LOW_SEMANTIC] #-1 全篇商品语义词命中仅 2 个，疑似非商品内容或识别失败\n[PASS] 审核门禁检出全部 3 个真实回声样本\n\n[TEST-ASR-PROMPT] 全部通过\n"
       }
     },
     "batch": {

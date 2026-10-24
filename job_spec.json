@@ -1,6 +1,6 @@
 {
   "project_id": "silk_knitwear_7270",
-  "raw_video_path": "D:/Projects/dy-live-ecommerce-editor/data/raw_samples/10 绵羊 半岛棉镂空钩花气质显瘦针织衫7270/0826  绵羊 半岛棉镂空钩花气质显瘦针织衫7270  0425.mp4",
+  "raw_video_path": "data/raw_samples/10 绵羊 半岛棉镂空钩花气质显瘦针织衫7270/0826  绵羊 半岛棉镂空钩花气质显瘦针织衫7270  0425.mp4",
   "brand": {
     "title_en": "MIXCITY",
     "subtitle_cn": "深圳高端女装"
@@ -9,7 +9,7 @@
     "title_line1": "半岛棉镂空钩花",
     "title_line2": "气质显瘦针织衫",
     "item_images": [
-      "D:/Projects/dy-live-ecommerce-editor/data/raw_samples/sample_product_card.png"
+      "data/raw_samples/sample_product_card.png"
     ]
   },
   "options": {
@@ -30,6 +30,6 @@
     ]
   },
   "raw_video_paths": [
-    "D:/Projects/dy-live-ecommerce-editor/data/raw_samples/10 绵羊 半岛棉镂空钩花气质显瘦针织衫7270/0826  绵羊 半岛棉镂空钩花气质显瘦针织衫7270  0425.mp4"
+    "data/raw_samples/10 绵羊 半岛棉镂空钩花气质显瘦针织衫7270/0826  绵羊 半岛棉镂空钩花气质显瘦针织衫7270  0425.mp4"
   ]
 }

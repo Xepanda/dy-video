@@ -126,7 +126,12 @@ def ensure_placeholder_cards(spec: dict, project_id: str, out_dir: str = None,
         card = make_placeholder_card(size, title)
         out = os.path.join(out_dir, f"{project_id}_placeholder_{i + 1}.png")
         card.save(out, "PNG")
-        paths.append(out.replace("\\", "/"))
+        # 存相对仓库根的相对路径（可移植）：绝对路径换机器即失效
+        try:
+            rel = os.path.relpath(out, PROJECT_ROOT).replace("\\", "/")
+        except ValueError:
+            rel = out.replace("\\", "/")
+        paths.append(rel)
     spec.setdefault("product", {})["item_images"] = paths
     spec["product"]["placeholder_images"] = True
     spec["product"]["placeholder_note"] = (

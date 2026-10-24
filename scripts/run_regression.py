@@ -44,6 +44,9 @@ UNIT_TESTS = [
     "tests/test_blacklist_precision.py",
     "tests/test_multi_source.py",
     "tests/test_asr_review_gate.py",
+    "tests/test_path_resolver.py",
+    "tests/test_asr_prompt_policy.py",
+    "tests/test_stage_cache_fingerprint.py",
 ]
 
 PYTHON = sys.executable

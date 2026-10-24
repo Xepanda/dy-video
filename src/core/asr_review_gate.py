@@ -78,6 +78,14 @@ class AsrReviewError(RuntimeError):
 META_HALLUCINATION = re.compile(
     r"(说错|口误|跑到了?那|我怎么跑|重复一遍|听不清|没听清|刚才说到)")
 
+# initial_prompt 回声特征（2026-10-24 新增）
+# 这些措辞来自 AsrContextVerifier.build_initial_prompt 生成的引导语，
+# 正常情况下**不可能**出现在主播的真实口语里——出现即说明模型把 prompt
+# 当成了音频内容。
+PROMPT_ECHO = re.compile(
+    r"(主播带货视频|主播口语高频词|主推商品|这是一段抖音|"
+    r"抖音女装直播带货|品牌：MIXCITY|实物更漂亮、超显瘦)")
+
 # 漏斗语义词（覆盖率检查用；与 build_plan 关键词表同源语义）
 SEMANTIC_WORDS = [
     "面料", "做工", "材质", "棉", "羊毛", "蚕丝", "绒", "针织", "进口", "手感",
@@ -189,6 +197,28 @@ class AsrReviewGate:
                 _add("A7_META_HALLUCINATION", "WARN", i,
                      "含元话语/ASR 幻觉特征（后续选段将淘汰）", text[:40])
 
+            # A10 提示词回声污染（2026-10-24 新增）
+            # 现象：给 faster-whisper 注入 initial_prompt 后，模型会把 prompt
+            # 文本当成音频内容识别出来，挤占开头约 30s 的真实语音。
+            # 实测回声样本（8/11 素材首段）：
+            #   "连帽衫·绵羊毛"(7字/30s)、"蕉个朋友·环保毛绒，"(10字/30s)、
+            #   "主播口语高频词，羽绒服，羽绒，"(15字/8s)、"主播口语高频词，绵羊毛假两件，…"
+            # 可见回声有两个特征：①命中 prompt 固定措辞 ②首段被拉得异常长而文字极少。
+            # 判据取两者的并集（任一命中即告警），避免只靠文字密度漏判。
+            is_echo = bool(PROMPT_ECHO.search(text))
+            if not is_echo and i == 0 and (end - start) >= 10.0 and len(stripped) <= 30:
+                # 首段异常长却只有极少字 → 典型的"prompt 占位"（真实语音被挤掉）
+                is_echo = True
+            if is_echo:
+                _add("A10_PROMPT_ECHO", "WARN", i,
+                     f"疑似 initial_prompt 回声（单段 {end - start:.1f}s 仅 {len(stripped)} 字，"
+                     f"真实语音可能被挤占）", text[:40])
+            # 补充信号：超长 + 文字密度偏低（<0.35 字/秒）→ 大概率是被摊平的回声段
+            elif (end - start) >= 5.0 and len(stripped) / max(end - start, 0.1) < 0.35:
+                _add("A10_LOW_DENSITY_LONG", "WARN", i,
+                     f"单段 {end - start:.1f}s 但仅 {len(stripped)} 字"
+                     f"（{len(stripped)/(end-start):.2f} 字/秒，疑似回声/空段）", text[:30])
+
             valid_count += 1
 
         # —— A4 时间戳单调性（整体级）——
@@ -263,6 +293,7 @@ class AsrReviewGate:
                 "A7_meta_hallucination": "幻觉/元话语特征",
                 "A8_semantic_density": "商品语义密度",
                 "A9_garbled_ratio": "中文字符占比（乱码）",
+                "A10_prompt_echo": "提示词回声污染 / 超长低密度段",
             },
             "findings": findings,
             "failed_codes": sorted({f["code"] for f in blocks}),

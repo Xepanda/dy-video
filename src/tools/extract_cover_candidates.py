@@ -49,11 +49,15 @@ POSE_MODEL_PATH = os.path.join(PROJECT_ROOT, "data", "pose_landmarker_lite.task"
 OUT_W, OUT_H = 1080, 1920
 
 # 构图目标（决策 1：水平 1:6:1；版式复刻会议纪要示例图 2026-10-20）
+# ⚠️ 这些常量只是**缺省值**。真实取值来自 contracts/constraints.yaml 的 cover 节
+#    （由 normalize_subject_framing 的 framing_params 参数注入），
+#    改 yaml 才会真正生效——2026-10-24 修复前它们是硬编码的死值。
 PERSON_WIDTH_RATIO = 0.75      # 人体宽占画布 75%（810px）
 PERSON_WIDTH_TOL = 0.03        # 允许 [0.72, 0.78]
 PERSON_HEIGHT_MAX = 0.80       # 人体高上限（示例版式：为底部商品名区预留空间）
 FEET_TARGET_RATIO = 0.78       # 脚底目标位置（名称区顶部 0.80 上方）
 HEAD_FLOOR_RATIO = 0.155       # 头顶预留下限（避让品牌区）
+HEAD_TOP_MIN_RATIO = 0.13      # 头顶占比下限（width_priority 策略用）
 KNEE_Y_MAX = 0.92              # C5 膝盖纵坐标上限（与 constraints cover.knee_y_max 一致）
 ANKLE_Y_MAX = 0.99             # C5 踝部纵坐标上限（几何判据：踝在画面内）
 KNEE_VIS_MIN = 0.30            # C5 膝盖可见性下限（模型置信度卫生检查）
@@ -81,6 +85,7 @@ def normalize_subject_framing(
     landmarks,
     seg_mask: Optional[np.ndarray] = None,
     policy: str = None,
+    framing_params: Optional[Dict[str, Any]] = None,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """水平 1:6:1 主约束 + 身高上限的双约束标准化构图。
 
@@ -88,8 +93,18 @@ def normalize_subject_framing(
               用于精确测量人体轮廓宽度；为空时退化为 pose bbox 宽度。
     policy:   "example"（默认，脚底 78% + 名称区独立）| "width_priority"
               （决策 1 优先：人宽锁定 75%，身高上限 88%）。
+    framing_params: 构图阈值（来自 constraints.cover），缺省用模块常量。
+              **2026-10-24**：此前这些值硬编码在模块常量里，改 constraints.yaml
+              无效（实测注入 person_width_ratio=0.20 代码仍用 0.75），
+              违反"阈值唯一来源"原则。现改为从 constraints 注入。
     """
     policy = policy or FRAMING_POLICY
+    p = dict(framing_params or {})
+    person_width_ratio = float(p.get("person_width_ratio", PERSON_WIDTH_RATIO))
+    feet_target_ratio = float(p.get("feet_target_ratio", FEET_TARGET_RATIO))
+    head_floor_ratio = float(p.get("head_floor_ratio", HEAD_FLOOR_RATIO))
+    head_top_min_ratio = float(p.get("head_top_min_ratio", HEAD_TOP_MIN_RATIO))
+    person_height_max = float(p.get("person_height_max_ratio", PERSON_HEIGHT_MAX))
     h, w = frame_bgr.shape[:2]
     nose, ls, rs = landmarks[0], landmarks[11], landmarks[12]
     la, ra = landmarks[27], landmarks[28]
@@ -129,11 +144,11 @@ def normalize_subject_framing(
     #                   偏差由 QC 记 WARN（纪要"尽力居中"语义）
     #     width_priority（决策 1 优先）：人宽锁定 75%，身高放宽至 88%，允许腿部进入名称区
     #                   （名称区覆盖在人像之上），偏差由 QC 记 WARN
-    target_w = OUT_W * PERSON_WIDTH_RATIO            # 810px
+    target_w = OUT_W * person_width_ratio            # 默认 810px
     scale_w = target_w / max(1.0, person_w)
-    avail_h = (FEET_TARGET_RATIO - HEAD_FLOOR_RATIO) * OUT_H  # 品牌区底部→脚底目标
+    avail_h = (feet_target_ratio - head_floor_ratio) * OUT_H  # 品牌区底部→脚底目标
     scale_h = min(avail_h / max(1.0, person_h),
-                  OUT_H * PERSON_HEIGHT_MAX / max(1.0, person_h))
+                  OUT_H * person_height_max / max(1.0, person_h))
     if policy == "width_priority":
         # 决策 1 优先：宽度为主约束，身高上限放宽到 88%，头顶下压到 13%
         scale_h = OUT_H * 0.88 / max(1.0, person_h)
@@ -151,9 +166,9 @@ def normalize_subject_framing(
 
     # 水平：人体中心锁定 x = 540（1:6:1 → 左右各 135px）
     x_offset = int(OUT_W * 0.5 - res_center_x)
-    # 垂直：脚底贴 FEET_TARGET（名称区上方），头顶不低于品牌区底部
-    y_offset = int(FEET_TARGET_RATIO * OUT_H - res_person_h)
-    y_offset = max(y_offset, int(HEAD_FLOOR_RATIO * OUT_H))
+    # 垂直：脚底贴 feet_target（名称区上方），头顶不低于品牌区底部
+    y_offset = int(feet_target_ratio * OUT_H - res_person_h)
+    y_offset = max(y_offset, int(head_floor_ratio * OUT_H))
 
     canvas = np.zeros((OUT_H, OUT_W, 3), dtype=np.uint8)
 
@@ -276,9 +291,17 @@ def extract_cover_candidates(
     os.makedirs(output_dir, exist_ok=True)
 
     # 商品图（衣着一致性用）
-    item_images = [p for p in (spec_data.get("product", {}) or {}).get("item_images", [])
-                   if p and os.path.exists(p)]
-    product_image = item_images[0] if item_images else None
+    # 注意（2026-10-24）：占位示例图**不可用于衣着匹配**——占位图是灰蓝斜纹底，
+    # 与直播画面的暖色调躯干做直方图/CLIP 比对必然得 0 分，会把"缺商品图"
+    # 误报成"衣着不一致"。因此这里识别 spec.product.placeholder_images 标记，
+    # 命中则跳过衣着匹配（记为 not_evaluable），等真实商品图到位后再自动生效。
+    product = spec_data.get("product", {}) or {}
+    item_images = [p for p in product.get("item_images", []) if p and os.path.exists(p)]
+    is_placeholder = bool(product.get("placeholder_images"))
+    product_image = item_images[0] if (item_images and not is_placeholder) else None
+    if is_placeholder:
+        print("[EXTRACT-COVER v2] 商品图为占位示例图：跳过衣着一致性匹配"
+              "（拿到真实商品图后自动生效）")
 
     pose_options = vision.PoseLandmarkerOptions(
         base_options=python.BaseOptions(model_asset_path=POSE_MODEL_PATH),
@@ -363,11 +386,18 @@ def extract_cover_candidates(
             curr_t += sample_step_sec
             continue
 
-        # 5. 衣着一致性（WARN 级，不拦截）
+        # 5. 衣着一致性（WARN 级，不拦截；但阈值必须真正生效）
+        #    修复（2026-10-24）：此前 garment_check 被 import 却从未调用，
+        #    导致 constraints 的 histogram_min / garment_match_min 阈值形同虚设。
+        #    现在真正执行约束校验，并把 passed/failed_keys/level 写进候选元数据。
         garment_result = None
         if product_image:
             garment_result = garment_match_score(frame, product_image, lm,
                                                  engine=garment_c.get("engine", "auto"))
+            g_passed, g_failed, g_level = garment_check(garment_result, garment_c)
+            garment_result["passed"] = bool(g_passed)
+            garment_result["failed_keys"] = g_failed
+            garment_result["level"] = g_level
 
         # 6. 构图归一化（水平 1:6:1）
         seg_mask = None
@@ -376,11 +406,14 @@ def extract_cover_candidates(
             seg_mask = m.numpy_view() if hasattr(m, "numpy_view") else np.asarray(m)
             if seg_mask.shape[:2] != frame.shape[:2]:
                 seg_mask = cv2.resize(seg_mask, (frame.shape[1], frame.shape[0]))
-        norm_frame, f_meta = normalize_subject_framing(frame, lm, seg_mask, policy=framing_policy)
+        norm_frame, f_meta = normalize_subject_framing(
+            frame, lm, seg_mask, policy=framing_policy, framing_params=cover_c)
 
         # 7. 多目标评分
-        width_dev = abs(f_meta["achieved_width_ratio"] - PERSON_WIDTH_RATIO)
-        s_width = max(0.0, 1.0 - width_dev / PERSON_WIDTH_TOL) * 35.0
+        width_target = float(cover_c.get("person_width_ratio", PERSON_WIDTH_RATIO))
+        width_tol = float(cover_c.get("person_width_tolerance", PERSON_WIDTH_TOL))
+        width_dev = abs(f_meta["achieved_width_ratio"] - width_target)
+        s_width = max(0.0, 1.0 - width_dev / width_tol) * 35.0
         s_sharp = min(30.0, sharp / 15.0)
         s_face = 20.0 if face_passed else 0.0
         s_yaw = max(0.0, 1.0 - face_m["yaw_deg"] / cover_c.get("face_yaw_max_deg", 12)) * 15.0
@@ -482,6 +515,10 @@ def extract_cover_candidates(
             "face": item["face"],
             "garment_match": (item["garment"] or {}).get("score"),
             "garment_engine": (item["garment"] or {}).get("engine"),
+            "garment_passed": (item["garment"] or {}).get("passed"),
+            "garment_level": (item["garment"] or {}).get("level"),
+            "garment_failed_keys": (item["garment"] or {}).get("failed_keys", []),
+            "garment_not_evaluable": item["garment"] is None and is_placeholder,
             "background_text_ratio": (item.get("background_text") or {}).get("ratio"),
             "background_text_passed": (item.get("background_text") or {}).get("passed"),
             "ocr_fallback": bool(item.get("ocr_fallback", False)),
@@ -502,6 +539,22 @@ def extract_cover_candidates(
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(result_manifest, f, ensure_ascii=False, indent=2)
     print(f"[EXTRACT-COVER v2] 候选清单已生成: {manifest_path}")
+
+    # 衣着一致性汇总（阈值已真正生效，此处只做可见性提示，不淘汰候选）
+    if is_placeholder:
+        print("[EXTRACT-COVER v2] 衣着一致性: 未评估（商品图为占位示例图）")
+    elif selected and selected[0].get("garment"):
+        gs = [(c.get("garment_match"), c.get("garment_passed")) for c in result_manifest]
+        ok = sum(1 for _, p in gs if p)
+        eng = result_manifest[0].get("garment_engine")
+        thr = garment_c.get("garment_match_min", 0.75) if eng == "clip" \
+            else garment_c.get("histogram_min", 0.15)
+        print(f"[EXTRACT-COVER v2] 衣着一致性: {ok}/{len(gs)} 个候选达标"
+              f"（引擎 {eng}，阈值 {thr}）")
+        for c in result_manifest:
+            if c.get("garment_passed") is False:
+                print(f"    [WARN {c.get('garment_level')}] {c['id']} 衣着不匹配: "
+                      f"score={c.get('garment_match')} {c.get('garment_failed_keys')}")
     if cache_key and cache_work_dir:
         from src.tools.stage_cache import save_stage
         save_stage(cache_work_dir, "cover_candidates", cache_key, result_manifest)

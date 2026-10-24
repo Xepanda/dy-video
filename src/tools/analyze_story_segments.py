@@ -175,10 +175,17 @@ def analyze_story_segments(
 
     all_verified: List[Dict[str, Any]] = []
     per_source: List[Dict[str, Any]] = []
+    # ASR 层缓存键必须含**代码与配置指纹**（2026-10-24 修复）。
+    # 此前 src_key 仅为视频路径 → 改了 ASR 行为（如禁用 initial_prompt）
+    # 缓存依然命中，跑出的是带 prompt 回声的陈旧结果，修复"看起来没生效"。
+    # 这里复用 stage_cache 的代码指纹机制，保证输入/代码/约束任一变更即重算。
+    from src.tools.stage_cache import code_fingerprint
+    asr_fingerprint = code_fingerprint()
     for src_path in sources:
         tag = os.path.basename(src_path)
         print(f"\n[STORY-ANALYZER] === 源素材 ASR: {tag} ===")
-        src_key = f"{src_path}"  # 逐源缓存隔离，避免同名串味
+        # 逐源缓存隔离（避免同名串味）+ 代码/配置指纹（避免陈旧命中）
+        src_key = f"{src_path}|{asr_fingerprint}"
         raw_cache = os.path.join(cache_dir, "asr",
                                  os.path.splitext(tag)[0] + ".whisper.json")
         verified_cache = os.path.join(cache_dir, "asr",

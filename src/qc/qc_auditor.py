@@ -493,6 +493,10 @@ class QcAuditor:
         self._assert(knees, "封面完整人体复测",
                      "膝盖可见" if knees else "膝盖不可见（违反 C5）",
                      metric_key="cover.knees_visible", measured=knees, threshold=True)
+        # 衣着一致性复测（2026-10-24 接入）
+        # 此前 detect_garment_match 的 check_constraints 被 import 却从未调用，
+        # 阈值形同虚设。此处对 Agent 选定候选做独立复测。
+        self._audit_garment_match(candidates[0], self.constraints.get("garment_match", {}) or {})
         # 放大后清晰度复测（C1 防糊脸硬门禁，v1.2）
         post_sharp = framing.get("post_scale_sharpness", 0)
         sharp_min = cover_c.get("sharpness_min", 200)
@@ -501,6 +505,46 @@ class QcAuditor:
                      f"防上采样糊脸）",
                      metric_key="cover.sharpness_min",
                      measured=post_sharp, threshold=sharp_min)
+
+    def _audit_garment_match(self, chosen: Dict[str, Any],
+                             garment_c: Dict[str, Any]) -> None:
+        """衣着一致性复测（对应纪要"模特身着衣服和商品图片一致"）。
+
+        分级规则（与 detect_garment_match.check_constraints 一致）：
+          - CLIP 引擎（精确语义）→ BLOCK，阈值 garment_match_min
+          - 直方图引擎（弱信号，仅能识别 gross 色差）→ WARN，阈值 histogram_min
+          - 商品图为占位示例图 → 无法评估，跳过（WARN 级提示，不误报）
+        """
+        if chosen.get("garment_not_evaluable"):
+            self._assert(True, "封面衣着一致性",
+                         "商品图为占位示例图，无法评估衣着一致性"
+                         "（拿到真实商品图后自动生效）",
+                         level="WARN", metric_key="cover.garment_match")
+            return
+        score = chosen.get("garment_match")
+        if score is None:
+            self._assert(True, "封面衣着一致性",
+                         "未提供商品图，跳过衣着一致性评估",
+                         level="WARN", metric_key="cover.garment_match")
+            return
+        engine = chosen.get("garment_engine") or "histogram"
+        if engine == "clip":
+            threshold = garment_c.get("garment_match_min", 0.75)
+            level = "BLOCK"
+        else:
+            threshold = garment_c.get("histogram_min", 0.15)
+            level = "WARN"
+        passed = chosen.get("garment_passed")
+        if passed is None:
+            # 候选清单由旧版本生成（无该字段）→ 用阈值重算一次
+            passed = float(score) >= float(threshold)
+        self._assert(bool(passed), "封面衣着一致性",
+                     f"score={score}（阈值 {threshold}，引擎 {engine}）"
+                     if passed else
+                     f"score={score} 未达阈值 {threshold}（引擎 {engine}，"
+                     f"模特衣着与商品图可能不一致）",
+                     level=level, metric_key="cover.garment_match",
+                     measured=score, threshold=threshold)
 
 
 if __name__ == "__main__":

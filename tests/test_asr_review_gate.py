@@ -86,6 +86,47 @@ def case_warn_escalation():
     print(f"[PASS] WARN 分级正确（放行时 warn={r['warn_count']}）")
 
 
+def case_prompt_echo():
+    """A10：initial_prompt 回声污染检测（2026-10-24 新增）。
+
+    背景：给 faster-whisper 注入 initial_prompt 后，模型把 prompt 文本当成
+    音频内容识别，挤占开头约 30s 真实语音。真实样本：
+      "连帽衫·绵羊毛"(7字/30s)、"蕉个朋友·环保毛绒，"(10字/30s)、
+      "主播口语高频词，羽绒服，羽绒，"(15字/8s)
+
+    注：样本需满足 A5 识别密度（句/秒 >= min_density），否则会先被 A5 阻断。
+    """
+    # 1) 固定措辞命中（任意位置）
+    segs = [{"start": 0.0, "end": 8.0, "text": "主播口语高频词，羽绒服，羽绒，"}] + [
+        {"start": 8.0 + i * 1.5, "end": 9.4 + i * 1.5, "text": f"这个面料很舒服第{i}句"}
+        for i in range(6)]
+    r = AsrReviewGate(media_duration=20.0).review(segs)
+    codes = [f["code"] for f in r["findings"]]
+    assert "A10_PROMPT_ECHO" in codes, f"应检出 prompt 回声，实际 {codes}"
+    assert r["passed"] is True, "回声是 WARN 级，不阻断（根治靠不注入 prompt）"
+
+    # 2) 首段异常长 + 文字极少（商品名回声，未命中固定措辞）
+    segs2 = [{"start": 0.0, "end": 30.0, "text": "连帽衫·绵羊毛"}] + [
+        {"start": 30.0 + i * 1.5, "end": 31.4 + i * 1.5, "text": f"这个版型很修身第{i}句"}
+        for i in range(6)]
+    r2 = AsrReviewGate(media_duration=40.0).review(segs2)
+    codes2 = [f["code"] for f in r2["findings"]]
+    assert "A10_PROMPT_ECHO" in codes2, f"应检出首段回声，实际 {codes2}"
+
+    # 3) 正常首段不得误报（真实语音，短且密）
+    segs3 = [{"start": 0.0, "end": 1.8, "text": "厚度也不是那种超级厚的"}] + [
+        {"start": 1.8 + i * 1.5, "end": 3.2 + i * 1.5, "text": f"上身很显瘦第{i}句"}
+        for i in range(6)]
+    r3 = AsrReviewGate(media_duration=12.0).review(segs3)
+    codes3 = [f["code"] for f in r3["findings"]]
+    assert "A10_PROMPT_ECHO" not in codes3, f"正常首段被误报回声: {codes3}"
+    assert "A10_LOW_DENSITY_LONG" not in codes3, f"正常首段被误报低密度: {codes3}"
+
+    # 4) 校验点清单含A10
+    assert "A10_prompt_echo" in r3["checks"], "报告校验点清单缺少 A10"
+    print("[PASS] A10 提示词回声检测（命中 2 类样本，正常首段零误报）")
+
+
 def case_wired_into_verifier():
     """机制性保证：门禁自动挂载，不依赖调用方自觉。"""
     from src.core.asr_agent_verifier import AsrContextVerifier
@@ -139,6 +180,7 @@ def case_constraints_override():
 def main():
     failures = []
     for fn in (case_block_points, case_pass_ok, case_warn_escalation,
+               case_prompt_echo,
                case_wired_into_verifier, case_report_persisted, case_constraints_override):
         try:
             fn()

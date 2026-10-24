@@ -1,6 +1,6 @@
 {
   "project_id": "workwear_11186",
-  "raw_video_path": "D:/Projects/dy-live-ecommerce-editor/data/raw_samples/8 蕉个朋友·环保毛绒轻暖翻领工装外套11186/1007 蕉个朋友·环保毛绒轻暖翻领工装外套11186  0326.mp4",
+  "raw_video_path": "data/raw_samples/8 蕉个朋友·环保毛绒轻暖翻领工装外套11186/1007 蕉个朋友·环保毛绒轻暖翻领工装外套11186  0326.mp4",
   "brand": {
     "title_en": "MIXCITY",
     "subtitle_cn": "深圳高端女装"
@@ -9,8 +9,8 @@
     "title_line1": "蕉个朋友·环保毛绒",
     "title_line2": "轻暖翻领工装外套",
     "item_images": [
-      "D:/Projects/dy-live-ecommerce-editor/data/placeholders/workwear_11186_placeholder_1.png",
-      "D:/Projects/dy-live-ecommerce-editor/data/placeholders/workwear_11186_placeholder_2.png"
+      "data/placeholders/workwear_11186_placeholder_1.png",
+      "data/placeholders/workwear_11186_placeholder_2.png"
     ],
     "placeholder_images": true,
     "placeholder_note": "当前为占位示例图，仅用于保证封面版面完整；拿到真实商品图后替换 product.item_images 同名文件即可"
@@ -32,8 +32,8 @@
     ]
   },
   "raw_video_paths": [
-    "D:/Projects/dy-live-ecommerce-editor/data/raw_samples/8 蕉个朋友·环保毛绒轻暖翻领工装外套11186/1007 蕉个朋友·环保毛绒轻暖翻领工装外套11186  0101.mp4",
-    "D:/Projects/dy-live-ecommerce-editor/data/raw_samples/8 蕉个朋友·环保毛绒轻暖翻领工装外套11186/1007 蕉个朋友·环保毛绒轻暖翻领工装外套11186  0326.mp4",
-    "D:/Projects/dy-live-ecommerce-editor/data/raw_samples/8 蕉个朋友·环保毛绒轻暖翻领工装外套11186/1008 蕉个朋友·环保毛绒轻暖翻领工装外套11186  0214.mp4"
+    "data/raw_samples/8 蕉个朋友·环保毛绒轻暖翻领工装外套11186/1007 蕉个朋友·环保毛绒轻暖翻领工装外套11186  0101.mp4",
+    "data/raw_samples/8 蕉个朋友·环保毛绒轻暖翻领工装外套11186/1007 蕉个朋友·环保毛绒轻暖翻领工装外套11186  0326.mp4",
+    "data/raw_samples/8 蕉个朋友·环保毛绒轻暖翻领工装外套11186/1008 蕉个朋友·环保毛绒轻暖翻领工装外套11186  0214.mp4"
   ]
 }

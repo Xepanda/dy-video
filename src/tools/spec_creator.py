@@ -167,8 +167,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 </div>
                 <div class="form-group">
                     <label>原始直播视频绝对路径 (Raw Video File)</label>
-                    <input type="text" id="raw_video_path" name="raw_video_path" value="D:/Projects/dy-live-ecommerce-editor/data/raw_samples/10 绵羊 半岛棉镂空钩花气质显瘦针织衫7270/0826  绵羊 半岛棉镂空钩花气质显瘦针织衫7270  0425.mp4" required>
-                    <div class="hint">支持复制完整路径粘贴（支持 .mp4, .mov）</div>
+                    <input type="text" id="raw_video_path" name="raw_video_path" value="{{RAW_VIDEO_DEFAULT}}" required>
+                    <div class="hint">支持复制完整路径粘贴（支持 .mp4, .mov）；可填相对仓库根的路径</div>
                 </div>
             </div>
 
@@ -202,8 +202,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 </div>
                 <div class="form-group">
                     <label>封面浮动商品贴图 1 (正方形平铺白底图/挂件)</label>
-                    <input type="text" id="product_img_1" name="product_img_1" value="D:/Projects/dy-live-ecommerce-editor/data/raw_samples/sample_product_card.png">
-                    <div class="hint">选填，留空则不渲染贴图卡片</div>
+                    <input type="text" id="product_img_1" name="product_img_1" value="{{PRODUCT_IMG_DEFAULT}}">
+                    <div class="hint">选填。留空时流水线会**自动补一张占位示例图**（标明为占位，后续替换为真实商品图）</div>
                 </div>
                 <div class="form-group">
                     <label>封面浮动商品贴图 2 (第二款/另一颜色)</label>
@@ -301,7 +301,11 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
-        self.wfile.write(HTML_TEMPLATE.encode("utf-8"))
+        # 注入本机实际路径（可移植性，2026-10-24）
+        html = (HTML_TEMPLATE
+                .replace("{{RAW_VIDEO_DEFAULT}}", _default_raw_video())
+                .replace("{{PRODUCT_IMG_DEFAULT}}", _default_product_image()))
+        self.wfile.write(html.encode("utf-8"))
 
     def do_POST(self):
         if self.path == "/save":
@@ -340,6 +344,27 @@ def start_server():
     except KeyboardInterrupt:
         print("\n服务已停止。")
         server.server_close()
+
+
+def _default_raw_video() -> str:
+    """挑一个本机存在的直播素材作为表单默认值（无则留空）。"""
+    base = os.path.join(PROJECT_ROOT, "data", "raw_samples")
+    if not os.path.isdir(base):
+        return ""
+    for dirpath, _, files in os.walk(base):
+        for fn in sorted(files):
+            if fn.lower().endswith(".mp4"):
+                return os.path.join(dirpath, fn).replace("\\", "/")
+    return ""
+
+
+def _default_product_image() -> str:
+    """挑一个本机存在的商品图作为表单默认值（无则留空）。"""
+    for rel in ("data/raw_samples/sample_product_card.png",):
+        p = os.path.join(PROJECT_ROOT, rel)
+        if os.path.exists(p):
+            return p.replace("\\", "/")
+    return ""
 
 if __name__ == "__main__":
     start_server()
