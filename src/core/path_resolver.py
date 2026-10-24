@@ -39,7 +39,7 @@ def resolve_path(path: str, base_dir: str = None) -> Optional[str]:
         return None
 
     # 1) 绝对路径且存在
-    if os.path.isabs(p):
+    if _looks_absolute(p):
         if os.path.exists(p):
             return os.path.abspath(p)
         # 3) 旧机器绝对路径 → 按尾部片段在仓库内重新定位
@@ -56,6 +56,31 @@ def resolve_path(path: str, base_dir: str = None) -> Optional[str]:
         if os.path.exists(cand):
             return cand
     return os.path.abspath(os.path.join(base_dir, p))
+
+
+def _looks_absolute(p: str) -> bool:
+    """跨平台判定"绝对路径"。
+
+    ⚠️ 不能只用 os.path.isabs()——它在两个方向上都会出错：
+      - Linux 上对 Windows 风格的 `D:/Projects/...` 返回 **False**
+        （不以 '/' 开头）→ 旧绝对路径被误当相对路径，拼成
+        `<cwd>/D:/Projects/...` 这种垃圾路径（2026-10-24 CI 实测踩到）；
+      - Windows 上对 POSIX 风格的 `/old/machine/...` 也返回 **False**
+        （单斜杠在 Windows 上是"驱动器相对"）→ 同类问题反向发生。
+    这里统一按"看起来像绝对路径"来判定，消除平台差异。
+    """
+    if os.path.isabs(p):
+        return True
+    # Windows 盘符形式：C: 或 C:/ 或 C:\
+    if len(p) >= 2 and p[1] == ":" and p[0].isalpha():
+        return True
+    # POSIX 风格根路径（含 Windows 上的单斜杠形式）
+    if p.startswith("/"):
+        return True
+    # UNC 形式：\\server\share
+    if p.startswith("\\\\"):
+        return True
+    return False
 
 
 def _relocate_by_tail(abs_path: str) -> Optional[str]:

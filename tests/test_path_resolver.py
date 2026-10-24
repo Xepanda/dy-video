@@ -46,13 +46,32 @@ def case_absolute_path():
 
 
 def case_stale_absolute_relocated():
-    """旧机器绝对路径应按尾部片段在仓库内自动重新定位。"""
-    stale = "D:/Projects/OLD_MACHINE_NAME/data/raw_samples/sample_product_card.png"
-    got = resolve_path(stale)
-    assert got and os.path.exists(got), \
-        f"旧机器绝对路径应被重新定位到仓库内: {got}"
-    assert got.startswith(PROJECT_ROOT), f"应定位到仓库内: {got}"
-    print(f"[PASS] 旧机器绝对路径自动重定位 -> {os.path.basename(got)}")
+    """旧机器绝对路径应按尾部片段在仓库内自动重新定位。
+
+    覆盖三种"旧机器路径"形态（跨平台都可能遇到）：
+      - Windows 盘符：D:/old/...
+      - POSIX 根路径：/old/...
+      - Windows 反斜杠：C:\\old\\...
+
+    ⚠️ 这里刻意用**盘符形式**做主断言——`os.path.isabs()` 在 Linux 上对
+    `D:/...` 返回 False、在 Windows 上对 `/...` 返回 False，
+    两边都会把"旧机器绝对路径"误当相对路径（2026-10-24 CI 实测踩到）。
+    """
+    from src.core.path_resolver import _looks_absolute
+    stale_forms = [
+        "D:/Projects/OLD_MACHINE_NAME/data/raw_samples/sample_product_card.png",
+        "/old/machine/data/raw_samples/sample_product_card.png",
+        "C:\\old\\data\\raw_samples\\sample_product_card.png",
+    ]
+    for stale in stale_forms:
+        assert _looks_absolute(stale), \
+            f"应被识别为绝对路径形态: {stale!r}（isabs 跨平台不可靠）"
+        got = resolve_path(stale)
+        assert got and os.path.exists(got), \
+            f"旧机器绝对路径应被重新定位到仓库内: {stale!r} -> {got!r}"
+        assert os.path.abspath(got).startswith(os.path.abspath(PROJECT_ROOT)), \
+            f"应定位到仓库内: {got!r}"
+    print(f"[PASS] 旧机器绝对路径自动重定位（{len(stale_forms)} 种形态，跨平台）")
 
 
 def case_relativize():
