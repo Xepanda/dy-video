@@ -63,7 +63,7 @@ DEFAULTS = {
         "margin_a": 32,
         "gap_a": 32,
         "side": "right",
-        "layout": "horizontal",           # horizontal（示例图：两张并排）| vertical（纪要文字：上下堆叠）
+        "layout": "vertical",           # vertical（上下堆叠，靠右对齐）| horizontal（两张并排）
         "radius": 20,
         "border_color": "#E2E8F0",
         "border_width": 2,

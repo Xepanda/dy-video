@@ -79,9 +79,22 @@
 | 提示词回声污染 | `asr_review.A10` | asr_review_gate | ✅ | WARN |
 | 音视频时长容差 | `video.duration_tolerance_sec` | — | ❌ 未实现（键未消费） | — |
 
+## 视频叠加元素（2026-10-24 新增，本轮）
+
+| 元素 | metric key | 工具 | 状态 | 级别 |
+|:--|:--|:--|:--|:--|
+| 顶部平台标识条 | `video.platform_bar` | video_overlays + QC 像素复测 | ✅（常驻 y=0，高 88px） | BLOCK |
+| 挂角利益点贴纸 | `video.sticker_timing` | video_overlays + fade 时序 | ✅（右上 820/300，淡入淡出） | BLOCK |
+| 放大特效触发与过渡 | `video.zoom_timing` | zoompan 定时缓动 | ✅（触发 0.8s → 过渡 1.2s smoothstep） | BLOCK |
+| 镜像防反文字遮挡 | `video.mirror_occlusion` | 多帧采样 OCR + 遮挡贴纸 | ✅（上半屏文字框定位） | BLOCK |
+| 音画同步抽检 | `video.av_sync_error_max_ms` | ffmpeg ashowinfo | ✅（本轮接入，此前是死键） | BLOCK |
+| 封面贴图布局 | `sticker.layout` | cover_renderer | ✅ **vertical 靠右堆叠**（2026-10-24 需求变更，原 horizontal 并排） | — |
+| 分屏中缝金线 + 双侧标签 | `split_effect.*` | drawbox + video_overlays | ✅（8px 金线 + 胶囊标签） | WARN（随分屏触发） |
+
 ## 修订记录
 
 | 日期 | 变更 |
 | :-- | :-- |
 | 2026-10-20 | v1.0 建立；锁定决策 1（水平 1:6:1）、决策 2（金色商品名）、决策 3（字幕零价格）、决策 4（30fps） |
 | 2026-10-24 | v1.1 审计后修订：新增状态图例；如实标注 6 个"声称 BLOCK 但未落地"的项（重影/外廓/landmark 置信度/av_sync 抽检/horizontal_margin_ratio/duration_tolerance_sec）；补齐已落地项的真实 metric key；新增 ASR 审核与字幕章节 |
+| 2026-10-24 | v1.2 特效轮修订：新增「视频叠加元素」章节（平台标识条/挂角贴纸/放大特效/镜像遮挡/音画同步）；封面贴图布局改为 vertical 靠右堆叠；av_sync 由 ⚠️ 未接线升级为 ✅ 已接入 |

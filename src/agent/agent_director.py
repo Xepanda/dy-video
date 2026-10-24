@@ -196,11 +196,12 @@ class AgentDirector:
     def run_director_workflow(
         self,
         chosen_cover_id: Optional[str] = None,
-        custom_plan_path: Optional[str] = None
+        custom_plan_path: Optional[str] = None,
+        edited_timeline_path: Optional[str] = None
     ) -> Dict[str, Any]:
         start_time = time.time()
-        # 外部干预模式（指定封面/自定义计划）禁用阶段缓存，保证每次重算
-        if chosen_cover_id or custom_plan_path:
+        # 外部干预模式（指定封面/自定义计划/人工精修时间线）禁用阶段缓存，保证每次重算
+        if chosen_cover_id or custom_plan_path or edited_timeline_path:
             self.use_cache = False
             self.cache_key = None
         ck = self.cache_key if self.use_cache else None
@@ -342,6 +343,48 @@ class AgentDirector:
                               cache_key=ck, work_dir=self.work_dir)
             plan_source = "build_plan"
             plan_forced = False
+            # 保留自动计划的分镜与包装配置（人工精修只改时间轴）
+            built_clips = list(plan.get("clips", []))
+            built_plan_extras = {
+                "hook_card": plan.get("hook_card"),
+                "cta": plan.get("cta"),
+                "brand": plan.get("brand"),
+                "subtitles": plan.get("subtitles"),
+            }
+
+            # 决策 2.2b: 人工精修时间线回注（2026-10-24 接入生产）
+            # 此前 chatcut_bridge 只在测试里被调用，用户无法从成片反推修改。
+            # 现提供 --timeline 入口：导出 → 人工在 OpenChatCut 精修 → 回注重总装。
+            if edited_timeline_path and os.path.exists(edited_timeline_path):
+                try:
+                    from src.tools.chatcut_bridge import (timeline_to_plan,
+                                                        validate_timeline)
+                    with open(edited_timeline_path, "r", encoding="utf-8") as f:
+                        edited = json.load(f)
+                    ok, problems = validate_timeline(edited)
+                    if not ok:
+                        print(f"  [外部干预] 精修时间线校验未通过，回注被拒绝: {problems[:3]}")
+                    else:
+                        plan = timeline_to_plan(edited)
+                        # 保留 build_plan 生成的特效决策（桥接只搬运时间轴）
+                        for c in plan.get("clips", []):
+                            src_clip = next((o for o in built_clips
+                                             if o["id"] == c["id"]), None)
+                            if src_clip:
+                                for k in ("effect", "zoom", "y_anchor", "sticker_text",
+                                          "category", "source_file", "source_tag",
+                                          "split_pair_st", "split_label_left",
+                                          "split_label_right"):
+                                    if k in src_clip:
+                                        c[k] = src_clip[k]
+                        plan["hook_card"] = built_plan_extras.get("hook_card", plan.get("hook_card"))
+                        plan["cta"] = built_plan_extras.get("cta", plan.get("cta"))
+                        plan["brand"] = built_plan_extras.get("brand", plan.get("brand"))
+                        plan_source = "edited_timeline"
+                        plan_forced = True
+                        print(f"  [外部干预] 已回注人工精修时间线: {edited_timeline_path}")
+                except Exception as e:
+                    print(f"  [外部干预] 精修时间线回注失败（沿用自动计划）: {e}")
         try:
             self.gateway.validate_and_record_plan(
                 plan, forced=plan_forced, source=plan_source)
@@ -439,6 +482,7 @@ class AgentDirector:
             passed = qc_cached.get("all_passed", False)
             auditor.report = qc_cached
         else:
+            overlay_meta_path = os.path.join(self.work_dir, "video_overlay_meta.json")
             passed = auditor.audit_final_deliverables(
                 video_path=out_mp4,
                 cover_path=final_cover_path,
@@ -446,6 +490,7 @@ class AgentDirector:
                 report_output_path=qc_report_path,
                 cover_meta_path=cover_meta_path,
                 candidates_path=candidates_json,
+                overlay_meta_path=overlay_meta_path,
             )
             if ck:
                 from src.tools.stage_cache import save_stage

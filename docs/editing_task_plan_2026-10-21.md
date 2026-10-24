@@ -6,7 +6,7 @@
 
 | # | 需求 | 落地方式 | 状态 |
 |---|---|---|---|
-| 1 | 缺商品图则不插图，仅保留直播画面，不补图不占位 | `cover_renderer.py`：`num_cards==0` 时跳过整个贴图渲染段，meta 不写 `sticker_*` 元素；QC「封面贴图几何」输出"无贴图"PASS | ✅ |
+| 1 | 缺商品图则**自动补占位示例图**（原为"不补图不占位"，2026-10-24 需求变更） | `make_placeholder_cards.py` 生成灰蓝斜纹占位图并登记 `product.item_images` + `placeholder_images=True`；封面走标准贴图渲染路径（C11~C14 几何断言与 QC「封面贴图几何」得以真实验证）。**注意：占位图会被衣着匹配跳过**（灰蓝斜纹 vs 直播暖色必然 0 分），拿到真实商品图后自动生效 | ✅ |
 | 2 | 成片 45–65s，区间内浮动，优先内容完整 | spec `duration_range` 统一 `45-65`；`build_plan` 漏斗配额贪心 + 补齐 + 上限修剪；新增 0.5s 切片安全余量（防ffmpeg 切片物理时长溢出） | ✅ |
 | 3 | 允许丢段，只留商品介绍/卖点/演示 | 三层过滤：① 黑名单（价格/库存/换款离场）② `_is_idle_chatter` ASR 幻觉与元话语 ③ `_top_up` 补齐阶段只接纳 `categories` 非空的语义块 | ✅ |
 | 4 | 本地 ASR + 本地 agent 校对，无错字/无断句错误 | Faster-Whisper 转录 → `AsrContextVerifier` 本体引擎（错词表+滑动窗口消歧）+ `_polish_for_subtitle`（叠词去重、冗余标点清理、超长句按可读性切分且时间戳守恒） | ✅ |
@@ -26,7 +26,7 @@ Phase 2 Agent 决策（全部过 DecisionGateway 约束网关）
 Phase 3 渲染总装
   ├─ render_cover_with_meta   品牌区固定顶部 y=125 + 金色商品名 + 可选贴图
   └─ assemble_video_tool      按 clip.source_file 逐源切片 → 拼接 → ASS 字幕 → Hook/CTA 贴片 → 两遍 loudnorm
-Phase 4 QcAuditor 量化门禁（17 项断言）
+Phase 4 QcAuditor 量化门禁（24 项断言，2026-10-24 起新增视频叠加元素复测）
 ```
 
 ## 三、跨素材选段（需求 5 核心实现）
@@ -68,7 +68,11 @@ c04_styling 23.64s   ← 0326 源
 
 ```
 Whisper(small, zh, VAD, condition_on_previous_text=False)
-   ↓  initial_prompt 注入商品/品牌/卖点词
+   ↓  ⚠️ 不注入 initial_prompt（2026-10-24 修正）
+   ↓     实测：注入后模型会把 prompt 文本当成音频内容识别，挤占开头约 30s
+   ↓     真实语音（6 号素材：前 90s 仅 348 字 vs 无 prompt 的 495 字，-30%）；
+   ↓     8/11 份素材首段都是纯回声。领域词纠错改由下方本地本体引擎负责，
+   ↓     不依赖 Whisper 的 prompt 偏置。审核门禁新增 A10 检出回声。
 本地本体引擎（AsrContextVerifier）
    ├─ 静态同音错词表（22 条：食物→实物、半导棉→半岛棉、卡马→卡码、马术→码数…）
    ├─ 商品专项词根动态提权

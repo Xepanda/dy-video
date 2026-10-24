@@ -47,6 +47,7 @@ UNIT_TESTS = [
     "tests/test_path_resolver.py",
     "tests/test_asr_prompt_policy.py",
     "tests/test_stage_cache_fingerprint.py",
+    "tests/test_video_effects.py",
 ]
 
 PYTHON = sys.executable

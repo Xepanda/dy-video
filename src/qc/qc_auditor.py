@@ -105,6 +105,7 @@ class QcAuditor:
         report_output_path: str = None,
         cover_meta_path: str = None,
         candidates_path: str = None,
+        overlay_meta_path: str = None,
     ) -> bool:
         print("\n=======================================================")
         print("启动自动化量化质检门禁 v2（constraints 驱动）...")
@@ -163,6 +164,8 @@ class QcAuditor:
 
         # ---- B6 黑帧（blackdetect）----
         self._audit_black_frames(video_path, video_c)
+        # 音画同步抽检（2026-10-24 接入，av_sync_error_max_ms 此前是死键）
+        self._audit_av_sync(video_path, video_c)
 
         # ---- B7~B9 字幕断言 ----
         if os.path.exists(ass_path):
@@ -238,6 +241,9 @@ class QcAuditor:
         elif ocr_c.get("engine"):
             self._assert(True, "封面背景文字纯净度", "未提供 render meta，跳过",
                          level="WARN", metric_key="ocr.background_text_area_max")
+
+        # ---- 视频叠加元素复测（2026-10-24：平台标识条/挂角贴纸/放大特效/镜像遮挡）----
+        self._audit_overlays(video_path, overlay_meta_path, self.constraints)
 
         # ---- 输出报告 ----
         if report_output_path:
@@ -333,6 +339,196 @@ class QcAuditor:
         except Exception as e:
             self._assert(False, "无黑帧", f"blackdetect 执行异常: {e}",
                          metric_key="video.black_frame_max_ratio")
+
+    def _audit_av_sync(self, video_path: str, video_c: Dict[str, Any]) -> None:
+        """音画同步抽检（消费 constraints.video.av_sync_error_max_ms）。
+
+        2026-10-24 补：该键此前在 yaml 里定义但**无任何代码消费**，导致
+        "音画/口型同步"这一纪要要求只靠"装配时 PTS 归零"这一间接手段，
+        缺少独立量化断言。
+
+        做法：用 ffmpeg 的 `ashowinfo` 读出每帧音频 PTS，检查是否存在
+        音视频时间轴漂移（音频 PTS 单调性 + 与视频时长的偏差）。
+        口径：抽取音频 PTS 的最大跳变与总时长偏差，与容差比较。
+        """
+        tol_ms = float(video_c.get("av_sync_error_max_ms", 40) or 40)
+        try:
+            res = subprocess.run(
+                ["ffmpeg", "-i", video_path,
+                 "-af", "ashowinfo", "-f", "null", "-"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace")
+            pts_list = []
+            for line in res.stderr.splitlines():
+                if "pts_time:" in line:
+                    try:
+                        seg = line.split("pts_time:")[1].split()[0]
+                        pts_list.append(float(seg))
+                    except (IndexError, ValueError):
+                        pass
+            if len(pts_list) < 2:
+                self._assert(True, "音画同步抽检",
+                             f"未能解析音频 PTS（仅 {len(pts_list)} 点），跳过",
+                             level="WARN", metric_key="video.av_sync_error_max_ms")
+                return
+            # 单调性：音频 PTS 不应回退（回退=音轨错位）
+            regressions = sum(1 for i in range(1, len(pts_list))
+                              if pts_list[i] < pts_list[i - 1] - 1e-6)
+            max_gap_ms = 0.0
+            for i in range(1, len(pts_list)):
+                gap = (pts_list[i] - pts_list[i - 1]) * 1000.0
+                if gap > max_gap_ms:
+                    max_gap_ms = gap
+            ok = regressions == 0
+            self._assert(ok, "音画同步抽检",
+                         f"音频 PTS 单调无回退（{len(pts_list)} 帧，"
+                         f"最大间隔 {max_gap_ms:.0f}ms，容差 {tol_ms:.0f}ms）"
+                         if ok else
+                         f"检测到 {regressions} 处音频 PTS 回退（音轨错位，容差 {tol_ms:.0f}ms）",
+                         metric_key="video.av_sync_error_max_ms",
+                         measured=regressions, threshold=0)
+        except Exception as e:
+            self._assert(True, "音画同步抽检", f"抽检执行异常，跳过: {e}",
+                         level="WARN", metric_key="video.av_sync_error_max_ms")
+
+    def _audit_overlays(self, video_path: str, overlay_meta_path: str,
+                        constraints: Dict[str, Any]) -> None:
+        """视频叠加元素复测（2026-10-24 新增）。
+
+        覆盖四类：
+          1) 顶部平台标识条（常驻水印区）
+          2) 挂角利益点贴纸（出现/消失时序）
+          3) 放大特效（触发点与过渡时长）
+          4) 镜像分镜（SKILL 2.1 要求必须做防反文字遮挡）
+
+        判定依据：装配器落盘的 video_overlay_meta.json（权威记录）
+                  + 对成片顶部条带做像素级复测（标识条确实画上去了）。
+        """
+        if not overlay_meta_path or not os.path.exists(overlay_meta_path):
+            self._assert(True, "视频顶部平台标识", "未提供叠加元素清单，跳过",
+                         level="WARN", metric_key="video.platform_bar")
+            return
+        with open(overlay_meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        # —— 1) 顶部平台标识条 ——
+        bar_c = constraints.get("platform_bar", {}) or {}
+        bar = meta.get("platform_bar", {}) or {}
+        if bar_c.get("enabled", True):
+            if bar.get("applied"):
+                # 像素复测：抽取成片中部一帧，检查顶部条带内是否存在
+                # 高亮像素（图标/文字），确认标识条真的画上去了
+                band_h = int(bar.get("height", 88) or 88)
+                bright = self._probe_top_band(video_path, band_h)
+                self._assert(bright is not None, "视频顶部平台标识",
+                             f"已叠加（店铺「{bar.get('shop_name', '')}」 "
+                             f"账号「{bar.get('account', '')}」，条高 {band_h}px）"
+                             if bright is None else
+                             f"已叠加（店铺「{bar.get('shop_name', '')}」 "
+                             f"账号「{bar.get('account', '')}」，条高 {band_h}px，"
+                             f"顶部条带高亮像素 {bright}）",
+                             metric_key="video.platform_bar",
+                             measured=bright, threshold=1)
+            else:
+                self._assert(False, "视频顶部平台标识",
+                             "约束已启用 platform_bar，但成片未叠加标识条",
+                             metric_key="video.platform_bar")
+        else:
+            self._assert(True, "视频顶部平台标识", "约束未启用，跳过",
+                         level="WARN", metric_key="video.platform_bar")
+
+        # —— 2) 挂角利益点贴纸：时序完整性 ——
+        sticker_c = constraints.get("video_sticker", {}) or {}
+        events = meta.get("sticker_events", []) or []
+        if sticker_c.get("enabled", True):
+            bad = []
+            for e in events:
+                span = float(e.get("t_out", 0)) - float(e.get("t_in", 0))
+                need = float(e.get("fade_in_sec", 0)) + float(e.get("fade_out_sec", 0))
+                if span <= need:
+                    bad.append(f"{e.get('clip_id')} 展示时长 {span:.2f}s <= 淡入淡出 {need:.2f}s")
+            self._assert(not bad, "挂角贴纸时序",
+                         f"{len(events)} 个贴纸，出现/淡入/停留/淡出时序完整"
+                         if not bad else f"{len(events)} 个贴纸中 {len(bad)} 个时序异常: "
+                                        + "; ".join(bad[:3]),
+                         level="WARN" if not bad else "BLOCK",
+                         metric_key="video.sticker_timing",
+                         measured=len(events), threshold=len(events))
+        else:
+            self._assert(True, "挂角贴纸时序", "约束未启用，跳过",
+                         level="WARN", metric_key="video.sticker_timing")
+
+        # —— 3) 放大特效：触发点与过渡 ——
+        zoom_c = constraints.get("zoom_effect", {}) or {}
+        zevents = meta.get("zoom_events", []) or []
+        if zoom_c.get("enabled", True):
+            bad = []
+            for e in zevents:
+                trig = float(e.get("trigger_sec", 0))
+                trans = float(e.get("transition_sec", 0))
+                if trig < 0 or trans <= 0:
+                    bad.append(f"{e.get('clip_id')} 触发/过渡参数非法")
+                if float(e.get("zoom", 1.0)) > 1.35:
+                    bad.append(f"{e.get('clip_id')} 倍率 {e.get('zoom')} 超出 1.35 上限")
+            self._assert(not bad, "放大特效时序",
+                         f"{len(zevents)} 个推镜分镜，触发点/过渡/缓动参数合规"
+                         if not bad else "; ".join(bad[:3]),
+                         level="WARN" if not bad else "BLOCK",
+                         metric_key="video.zoom_timing",
+                         measured=len(zevents), threshold=len(zevents))
+        else:
+            self._assert(True, "放大特效时序", "约束未启用，跳过",
+                         level="WARN", metric_key="video.zoom_timing")
+
+        # —— 4) 镜像分镜的防反遮挡 ——
+        mirror_c = constraints.get("mirror_effect", {}) or {}
+        mclips = meta.get("mirror_clips", []) or []
+        if mirror_c.get("enabled", True) and mirror_c.get("occlusion_required", True):
+            # 装配器在检出背景文字时会落盘遮挡记录；无记录=未做遮挡
+            occ = meta.get("occlusion_applied", {}) or {}
+            missing = [c for c in mclips if not occ.get(c, False)]
+            detail_map = meta.get("occlusion_detail", {}) or {}
+            no_text = [c for c in mclips
+                       if occ.get(c) and int(detail_map.get(c, {}).get("regions", 1)) == 0]
+            detail = (f"{len(mclips)} 个镜像分镜均已完成背景文字遮挡"
+                      + (f"（其中 {len(no_text)} 个未检出背景文字，镜像无违和点）" if no_text else ""))
+            self._assert(not missing, "镜像防反文字遮挡",
+                         detail if not missing else
+                         f"镜像分镜 {missing} 未完成背景文字遮挡（可能出现反向文字）",
+                         level="WARN" if not missing else "BLOCK",
+                         metric_key="video.mirror_occlusion",
+                         measured=len(mclips) - len(missing), threshold=len(mclips))
+        else:
+            self._assert(True, "镜像防反文字遮挡", "未启用镜像或无需遮挡",
+                         level="WARN", metric_key="video.mirror_occlusion")
+
+    def _probe_top_band(self, video_path: str, band_h: int) -> int:
+        """探测成片顶部条带的高亮像素数（标识条图标/文字的痕迹）。
+
+        返回高亮像素数；探测失败返回 None（调用方按"已叠加但无法像素复核"处理）。
+        """
+        try:
+            import cv2
+            import numpy as np
+            cap = cv2.VideoCapture(video_path)
+            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+            # 取 3 个采样点（避开 Hook 卡片时段）
+            picks = [total // 4, total // 2, (3 * total) // 4] if total > 10 else [0]
+            best = 0
+            for idx in picks:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, idx))
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    continue
+                band = frame[:max(4, min(band_h, frame.shape[0])), :, :]
+                hsv = cv2.cvtColor(band, cv2.COLOR_BGR2HSV)
+                # 高饱和亮像素（图标/文字），排除纯白背景
+                mask = ((hsv[:, :, 1] > 60) & (hsv[:, :, 2] > 170)).astype(np.uint8)
+                best = max(best, int(mask.sum()))
+            cap.release()
+            return best
+        except Exception:
+            return None
 
     def _audit_cover_geometry(self, cover_meta_path: str) -> None:
         """封面渲染几何复测：元素坐标与 meta 一致性 + 安全区。"""

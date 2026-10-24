@@ -440,16 +440,23 @@ def extract_cover_candidates(
         })
         curr_t += sample_step_sec
 
-      # 内层扫描窗结束：候选不足 2 个时自适应扩扫描（长视频泛化保障，硬上限 600s）
-      if extended or len(raw_candidates) >= 2 or scan_end >= hard_cap:
+      # 内层扫描窗结束：候选数够填满 Top-K 时才停止扩扫描
+      # 2026-10-24 修复：原条件 `len(raw_candidates) >= 2` 一旦满足就停止扩扫，
+      # 导致**首窗只有 2 个候选时，180s 之后的画面永不参与竞争**——
+      # 而最终要选 Top-K(默认5) 个，候选不够只能硬凑，可能错过后段更好的正脸帧。
+      # 现改为：候选数达到 top_k 才停（够填满才不必再扫），
+      # 兼顾覆盖度与扫描成本；硬上限 hard_cap 兜底。
+      if extended or len(raw_candidates) >= top_k or scan_end >= hard_cap \
+              or scan_end >= video_dur - 1:
           break
       new_end = min(video_dur, max(scan_limit_sec * 2, scan_end + scan_limit_sec), hard_cap)
       if new_end <= scan_end:
           break
       scan_end = new_end
       extended = True
-      print(f"[EXTRACT-COVER v2] 首轮候选不足 2 个，自适应扩扫描至 {scan_end:.0f}s"
-            f"（视频全长 {video_dur:.0f}s，硬上限 {hard_cap:.0f}s）")
+      print(f"[EXTRACT-COVER v2] 自适应扩扫描至 {scan_end:.0f}s"
+            f"（视频全长 {video_dur:.0f}s，硬上限 {hard_cap:.0f}s，"
+            f"当前候选 {len(raw_candidates)}/{top_k} 个）")
 
     cap.release()
 

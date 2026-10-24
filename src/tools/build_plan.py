@@ -368,6 +368,52 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
     return trimmed
 
 
+# ---------------------------------------------------------------- 特效决策
+
+# 挂角利益点贴纸的文案兜底（按分镜类目）
+_CATEGORY_STICKER_TEXT = {
+    "hook": "开场必看",
+    "fabric": "面料细节",
+    "fit": "版型显瘦",
+    "styling": "一衣多穿",
+}
+# 面料/工艺类更具体的高频卖点短语（命中即优先用）
+_STICKER_PHRASES = [
+    "3M新雪丽", "半导棉", "半岛棉", "桑蚕丝", "羊绒", "羊毛", "针织",
+    "显瘦", "遮肉", "不挑人", "透气", "亲肤", "软糯", "不起球", "不易变形",
+]
+
+
+def _build_sticker_texts(clips: List[Dict[str, Any]],
+                         spec_data: Dict[str, Any],
+                         sticker_c: Dict[str, Any]) -> Dict[str, str]:
+    """为每个分镜生成挂角利益点贴纸文案（2026-10-24 新增）。
+
+    优先级：spec.options.sticker_texts 显式指定
+          → 分镜原文命中的具体卖点短语
+          → 分镜类目兜底短语
+    贴纸文案需短（正方形贴纸内换行显示），超长截断。
+    """
+    if not sticker_c.get("enabled", True):
+        return {}
+    explicit = ((spec_data.get("options", {}) or {}).get("sticker_texts") or {})
+    out: Dict[str, str] = {}
+    for clip in clips:
+        cid = clip["id"]
+        text = explicit.get(cid, "")
+        if not text:
+            desc = clip.get("desc", "") or ""
+            for phrase in _STICKER_PHRASES:
+                if phrase in desc:
+                    text = phrase
+                    break
+        if not text:
+            text = _CATEGORY_STICKER_TEXT.get(clip.get("category", ""), "")
+        if text:
+            out[cid] = text[:8]
+    return out
+
+
 # ---------------------------------------------------------------- 主入口
 
 def build_plan(
@@ -545,11 +591,14 @@ def build_plan(
             "is_hook": (i == 0),
             "zoom": 1.3 if has_fabric_kw else 1.0,
             "y_anchor": 0.35,
+            # 默认值，随后由下方「特效决策」按规则改写（hflip / split）。
+            # 2026-10-24 修复：此前这里写死 "none" 且无任何决策逻辑，
+            # 导致装配器里已完整实现的镜像/分屏成为永不触发的死代码。
             "effect": "none",
             "category": cat,
             "desc": (b.get("text", "")[:24] + "…") if len(b.get("text", "")) > 24 else b.get("text", ""),
         }
-        # 多源：记录该分镜来自哪个素材文件（单源时留空 → 下游回退 plan.raw_video_path）
+
         if b.get("source_file"):
             clip["source_file"] = b["source_file"]
             clip["source_tag"] = b.get("source_tag", "")
@@ -557,6 +606,64 @@ def build_plan(
 
     if not clips:
         raise ValueError("未能在素材中选出任何合规分镜块（可能全部命中黑名单）")
+
+    # ————————————————————————————————————————————————————————————
+    # 特效决策（2026-10-24）：effect 从"写死常量"改为**决策变量**
+    # ————————————————————————————————————————————————————————————
+    # 此前 clip["effect"] 恒为 "none"，导致装配器里已完整实现的
+    # hflip（镜像）与 split（分屏对比）成为**永不触发的死代码**。
+    # 现按下列规则决策：
+    #   1) 挂角利益点贴纸：每个分镜一条，文字取该分镜的核心卖点
+    #      （面料/工艺关键词优先，否则用类目短语）；
+    #   2) 镜像 hflip：用于**非首镜**的 styling/fit 分镜，且素材里确实
+    #      检测到背景文字（无文字则镜像没有违和点，无需遮挡）——
+    #      实际遮挡由装配器用 OCR 定位后贴纸覆盖（SKILL 2.1）；
+    #   3) 分屏 split：仅当 spec 显式提供 split_pairs（同商品两个不同色/款
+    #      的时间点）时启用，避免凭空捏造"另一款"。
+    mirror_c = (constraints.get("mirror_effect", {}) or {})
+    split_c = (constraints.get("split_effect", {}) or {})
+    sticker_c = (constraints.get("video_sticker", {}) or {})
+
+    # —— 挂角贴纸：卖点短句 ——
+    sticker_texts = _build_sticker_texts(clips, spec_data, sticker_c)
+    for clip in clips:
+        clip["sticker_text"] = sticker_texts.get(clip["id"], "")
+
+    # —— 分屏决策：仅在 spec 显式给出配对时启用 ——
+    # 优先于镜像（分屏是更强的表达形式，同一分镜不同时用两种）。
+    # 分屏走独立的 hstack 渲染路径，**不经过 build_clip_filter**，
+    # 因此不叠加推镜（zoom 置 1.0），避免 plan 里的 zoom 与实际渲染不一致。
+    split_pairs = (spec_data.get("options", {}) or {}).get("split_pairs") or []
+    if split_c.get("enabled", True) and split_pairs:
+        pair = split_pairs[0]
+        try:
+            target = clips[1] if len(clips) > 1 else clips[0]
+            target["effect"] = "split"
+            target["zoom"] = 1.0
+            target["split_pair_st"] = float(pair.get("st", target["st"]))
+            target["split_label_left"] = pair.get("label_left", "")
+            target["split_label_right"] = pair.get("label_right", "")
+            target["effect_reason"] = "同商品双色/双款对比（SKILL 2.3）"
+        except (TypeError, ValueError):
+            pass
+
+    # —— 镜像决策 ——
+    if mirror_c.get("enabled", True) and len(clips) >= 3:
+        # 只对第 2 个及以后的分镜启用（首镜是黄金 3 秒 Hook，不宜镜像）；
+        # 已被分屏占用的分镜跳过（分屏优先）。
+        for clip in clips[1:]:
+            if clip.get("effect") != "none":
+                continue
+            if clip.get("category") in ("styling", "fit") and clip.get("zoom", 1.0) <= 1.0:
+                clip["effect"] = "hflip"
+                clip["effect_reason"] = "打破连续分镜的站位单一感（SKILL 2.1）"
+                break   # 每条成片最多镜像 1 处，避免观感割裂
+
+    effect_count = {}
+    for c in clips:
+        effect_count[c.get("effect", "none")] = effect_count.get(c.get("effect", "none"), 0) + 1
+    print(f"[BUILD-PLAN] 特效决策: {effect_count}（挂角贴纸 "
+          f"{sum(1 for c in clips if c.get('sticker_text'))} 个）")
 
     options = spec_data.get("options", {}) or {}
     sources_in_plan = sorted({c["source_file"] for c in clips if c.get("source_file")})
@@ -567,6 +674,7 @@ def build_plan(
         "sources_used": sources_in_plan,
         "total_expected_duration": total,
         "clips": clips,
+        "brand": spec_data.get("brand", {}) or {},
         "hook_card": {"text": "极简松弛感 · 显瘦显气质", "dur": 2.5, "y": 280},
         "cta": {"text": "戳左下方小黄车查看上身搭配", "dur": 2.5},
         "boom": {"volume": 0.45, "file": "boom.wav"},

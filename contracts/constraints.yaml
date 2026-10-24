@@ -117,7 +117,75 @@ sticker:
   margin_a: 32                    # C12 靠左/靠右距离 a
   gap_a: 32                       # C13 两图间距 a
   side: right                     # C12 left | right
-  layout: horizontal              # horizontal（示例图：两张并排）| vertical（纪要文字：上下堆叠）
+  # 2026-10-24 需求变更：原先并排（horizontal）→ 改为**靠右对齐、从上到下垂直堆叠**。
+  # vertical 时两张贴图整体垂直居中（vertical_center），左内容区（人物）不受影响。
+  layout: vertical                # vertical（上下堆叠，靠右对齐）| horizontal（两张并排）
+
+# ============ 视频顶部平台标识条（2026-10-24 新增）============
+# 视频画面最上方的平台/店铺账号标识区（抖音生态的"账号角标"位置）。
+# 常驻显示，不参与分镜切分；用于建立账号识别与合规露出。
+platform_bar:
+  enabled: true
+  height: 88                      # 条高（px）
+  top: 0                           # 距顶 0
+  background: "#101014"           # 底色
+  background_alpha: 150           # 底色不透明度（0~255）
+  shop_name: ""                   # 店铺名；空则取 brand.title_en
+  account: ""                     # 账号名（带 @）；空则取 brand.subtitle_cn
+  font_size: 34
+  text_color: "#FFFFFF"
+  accent_color: "#E2C98A"         # 左侧竖条/图标强调色
+  padding_x: 28
+  show_icon: true                 # 左侧圆形店铺图标
+  icon_size: 44
+
+# ============ 视频挂角贴纸特效（阶段式利益点，2026-10-24 新增）============
+# 每个分镜在指定位置挂一枚利益点徽标，按"出现→停留→消失"的时序播放。
+video_sticker:
+  enabled: true
+  size: 220                       # 正方形边长
+  margin_x: 40                    # 距左右边缘
+  margin_y: 300                   # 距顶（避开顶部标识条与 Hook 卡）
+  side: right                     # left | right
+  fade_in_sec: 0.35               # 出现（淡入）时长
+  fade_out_sec: 0.35              # 消失（淡出）时长
+  hold_ratio: 0.72                # 停留时长占分镜时长的比例
+  delay_ratio: 0.10               # 分镜内延迟启动比例（避免与切点撞车）
+  font_size: 40
+  text_color: "#3D1F0E"
+  bg_color: "#FFE9A8"             # 金色底（与封面商品名呼应）
+  border_color: "#E8A91E"
+
+# ============ 放大特效（推镜）============
+# 分镜内的动态推镜：到达触发点后按缓动曲线推到目标倍率。
+# 2026-10-24 起由静态裁切（zoom 一次性生效）升级为**定时缓动推镜**。
+zoom_effect:
+  trigger_sec: 0.8                # 分镜内触发点（秒，从分镜起点算）
+  transition_sec: 1.2             # 过渡时长（秒）
+  easing: smoothstep              # smoothstep | linear
+  max_zoom: 1.35                  # 目标倍率上限（1.25~1.35 符合 SKILL 规格）
+  y_anchor: 0.35                  # 锚点（0.35h~0.65h）
+  enabled: true
+
+# ============ 镜像/分屏特效（2026-10-24 接线）============
+mirror_effect:
+  enabled: true
+  # 镜像后背景招牌文字会反向，必须用贴纸精确遮挡（SKILL 2.1）
+  occlusion_required: true        # 找不到可遮挡文字时，是否拒绝启用镜像
+  min_occlusion_ratio: 0.25       # 可遮挡文字面积占比下限（低于则放弃镜像）
+  patch_color: "#1A1A1E"
+  patch_alpha: 235
+  patch_radius: 14
+
+split_effect:
+  enabled: true
+  divider_width: 8                # 中缝金色发光分割线宽度（6~10px）
+  divider_color: "#E8A91E"
+  label_font_size: 30
+  label_text_color: "#3D1F0E"
+  label_bg_color: "#FFE9A8"
+  label_padding: 14
+  label_gap: 24                   # 标签距分割线的水平距离
   radius: 20                      # C14 圆角半径
   border_color: "#E2E8F0"         # C14 淡灰描边
   border_width: 2
