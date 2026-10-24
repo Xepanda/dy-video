@@ -64,6 +64,13 @@ def run_unit_tests() -> dict:
         results[t] = {"status": "PASS" if r.returncode == 0 else "FAIL",
                       "returncode": r.returncode,
                       "tail": (r.stdout or "")[-400:]}
+        # 失败时把细节打到stdout——否则 CI 日志只有一行 [FAIL]，
+        # 排查时看不到具体哪个用例挂了（2026-10-24 踩坑）。
+        if r.returncode != 0:
+            print(f"    ---- {t} 失败详情 ----")
+            for line in ((r.stdout or "") + (r.stderr or "")).splitlines()[-25:]:
+                print(f"    {line}")
+    return results
     return results
 
 
