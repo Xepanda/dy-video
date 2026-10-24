@@ -54,10 +54,11 @@
 
 ## 阶段五：同步发光字幕与整片渲染 (Subtitles & Master Export)
 1. 编写或生成精确贴合发音停顿的 `.ass` 字幕，核心卖点词亮黄色高亮，设置 `MarginV=240` 避开底部小黄车。
-2. 调用 FFmpeg 一键合流成片，输出规格：
+2. 字幕零价格硬约束（决策 3）：`python src/tools/detect_price.py --ass temp/subtitles.ass`，检出价格即回炉重剪。
+3. 调用 FFmpeg 一键合流成片，输出规格：
    - 分辨率：`1080x1920` (9:16)
-   - 帧率：`60 FPS`
-   - 音频：`48 kHz` 高保真立体声
+   - 帧率：`30 FPS`（决策 4 定稿）
+   - 音频：`48 kHz` 高保真立体声，响度归一 −14±1.5 LUFS / True Peak ≤ −0.5 dBTP
    - 输出至：`project1/output/douyin_jacket_final.mp4`
 
 ---

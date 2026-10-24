@@ -53,3 +53,11 @@ data/*.wav
 # Scratch & Temporary Logs
 scripts/scratch/
 *.log
+
+# 本地运行日志（仅保留 json 指标产物入庫）
+logs/*.jpg
+logs/*.png
+
+# WorkBuddy 本地工作区数据（不入库）
+.workbuddy/
+logs/pr_body.md

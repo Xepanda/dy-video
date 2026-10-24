@@ -1,0 +1,38 @@
+{
+  "project_id": "down_jacket_11241",
+  "raw_video_path": "data/raw_samples/7 麦穗羽绒·翻领百搭松弛感羽绒服11241/1011 麦穗羽绒·翻领百搭松弛感羽绒服11241  0353.mp4",
+  "brand": {
+    "title_en": "MIXCITY",
+    "subtitle_cn": "深圳高端女装"
+  },
+  "product": {
+    "title_line1": "麦穗羽绒·翻领百搭",
+    "title_line2": "松弛感羽绒服",
+    "item_images": [
+      "data/placeholders/down_jacket_11241_placeholder_1.png",
+      "data/placeholders/down_jacket_11241_placeholder_2.png"
+    ],
+    "placeholder_images": true,
+    "placeholder_note": "当前为占位示例图，仅用于保证封面版面完整；拿到真实商品图后替换 product.item_images 同名文件即可"
+  },
+  "options": {
+    "duration_range": "45-65",
+    "split_strategy": "auto",
+    "highlight_keywords": [
+      "麦穗",
+      "羽绒",
+      "翻领",
+      "百搭",
+      "松弛感",
+      "羽绒服",
+      "保暖",
+      "轻盈",
+      "显瘦",
+      "冬天"
+    ]
+  },
+  "raw_video_paths": [
+    "data/raw_samples/7 麦穗羽绒·翻领百搭松弛感羽绒服11241/1011 麦穗羽绒·翻领百搭松弛感羽绒服11241  0240.mp4",
+    "data/raw_samples/7 麦穗羽绒·翻领百搭松弛感羽绒服11241/1011 麦穗羽绒·翻领百搭松弛感羽绒服11241  0353.mp4"
+  ]
+}

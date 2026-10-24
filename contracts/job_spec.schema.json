@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "job_spec.schema.json",
+  "title": "抖音带货直播剪辑任务契约 job_spec.json",
+  "type": "object",
+  "required": ["project_id", "raw_video_path"],
+  "additionalProperties": true,
+  "properties": {
+    "project_id": { "type": "string", "minLength": 1, "description": "任务代号，用于输出目录命名" },
+    "raw_video_path": { "type": "string", "minLength": 1, "description": "原始直播视频绝对路径" },
+    "brand": {
+      "type": "object",
+      "description": "品牌信息（有则做，无则默认 MIXCITY）",
+      "properties": {
+        "title_en": { "type": "string", "default": "MIXCITY" },
+        "subtitle_cn": { "type": "string", "default": "深圳高端女装" }
+      }
+    },
+    "product": {
+      "type": "object",
+      "properties": {
+        "title_line1": { "type": "string", "description": "商品名第1行（材质/卖点）" },
+        "title_line2": { "type": "string", "description": "商品名第2行（品类）" },
+        "item_images": {
+          "type": "array",
+          "maxItems": 2,
+          "items": { "type": "string" },
+          "description": "封面商品贴图 0~2 张（正方形平铺图）"
+        },
+        "sticker_side": { "enum": ["left", "right"], "default": "right", "description": "贴图靠左/靠右" }
+      }
+    },
+    "options": {
+      "type": "object",
+      "properties": {
+        "duration_range": {
+          "type": "string",
+          "pattern": "^\\d{2}-\\d{2}$",
+          "default": "45-55",
+          "description": "成片目标时长区间（秒），须落在 [45,65] 内"
+        },
+        "highlight_keywords": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "字幕亮黄高亮营销词"
+        },
+        "cover_source": {
+          "enum": ["video", "user_image"],
+          "default": "video",
+          "description": "封面背景来源：视频截取或用户提供商品图"
+        },
+        "user_cover_path": { "type": "string", "description": "cover_source=user_image 时的底图路径" },
+        "split_strategy": {
+          "enum": ["auto", "force_off"],
+          "default": "force_off",
+          "description": "双色对比分屏策略（规划中，当前版本不生效）"
+        }
+      }
+    }
+  }
+}

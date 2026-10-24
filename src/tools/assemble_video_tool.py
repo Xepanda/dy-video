@@ -29,9 +29,13 @@ from src.core.video_assembler import VideoAssembler
 def assemble_video_tool(
     plan_path: str,
     output_mp4_path: str,
-    work_dir: str = None
+    work_dir: str = None,
+    cache_key: str = None
 ) -> Tuple[str, float]:
-    """根据剪辑计划 plan.json 执行确定性总装"""
+    """根据剪辑计划 plan.json 执行确定性总装。
+
+    cache_key（B13）：命中 final_video 阶段缓存且成片存在则跳过总装。
+    """
     if not os.path.exists(plan_path):
         raise FileNotFoundError(f"剪辑计划文件不存在: {plan_path}")
 
@@ -42,9 +46,33 @@ def assemble_video_tool(
         project_id = plan.get("project_id", "demo")
         work_dir = os.path.join(PROJECT_ROOT, "data", "work_dirs", project_id)
 
-    assembler = VideoAssembler(work_dir)
+    # 阈值唯一来源：contracts/constraints.yaml（响度/真峰值目标）
+    constraints = {}
+    _cpath = os.path.join(PROJECT_ROOT, "contracts", "constraints.yaml")
+    if os.path.exists(_cpath):
+        import yaml
+        with open(_cpath, "r", encoding="utf-8") as f:
+            constraints = yaml.safe_load(f) or {}
+
+    if cache_key:
+        from src.tools.stage_cache import load_stage_video
+        cached_video = load_stage_video(work_dir, cache_key)
+        if cached_video:
+            import subprocess
+            res = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "csv=p=0", cached_video],
+                stdout=subprocess.PIPE, text=True)
+            duration = float(res.stdout.strip() or 0.0)
+            print(f"[ASSEMBLE-TOOL] 命中阶段缓存，跳过总装: {cached_video} ({duration:.2f}s)")
+            return cached_video, duration
+
+    assembler = VideoAssembler(work_dir, constraints=constraints)
     out_mp4, duration = assembler.assemble_final_video(plan, output_mp4_path)
     print(f"[ASSEMBLE-TOOL] 成片总装完成: {out_mp4} (实测物理时长: {duration:.2f}s)")
+    if cache_key:
+        from src.tools.stage_cache import save_stage_video
+        save_stage_video(work_dir, cache_key, out_mp4, duration)
     return out_mp4, duration
 
 

@@ -36,7 +36,7 @@ description: Use when turning raw livestream or long e-commerce video recordings
 [尾部 2~3s 下单引导气泡/提示 + 成片 1080x1920 60FPS]
        │
        ▼ (6. 爆款高点击率封面矩阵制作)
-[默认首推：Option 1 爆款大促型封面（实心金星排版、模特原身利落穿搭、底部300+价格腰封）]
+[默认首推：Option 1 爆款卖点型封面（金色渐变商品名、模特原身利落穿搭、右侧悬浮商品贴图、无价格信息）]
 ```
 
 ---
@@ -109,14 +109,17 @@ description: Use when turning raw livestream or long e-commerce video recordings
 
 ## 4. 爆款视频封面设计矩阵 (High-CTR Covers)
 
-短视频发布必须配备 1080x1920 高清封面。**首选默认采用 Option 1（爆款大促促销型）**：
+短视频发布必须配备 1080x1920 高清封面。**首选默认采用 Option 1（爆款卖点型，无价格版）**：
 
-### 4.1 核心推荐：Option 1 爆款促销型（转化率最高）
+### 4.1 核心推荐：Option 1 爆款卖点型（转化率最高）
+
+> **2026-10-20 修订（决策 3）**：封面与视频字幕均**不出现具体价格**。原"300+ 价格腰封"方案已废弃，改为卖点腰封。
+
 - **视觉构成**：
-  1. **底图选择**：模特自然穿搭、眼神交流自信、衣物版型展示完整的**纯净无字正帧**（如米白款全身/半身）。
-  2. **顶部主标**：`y = 150 ~ 430`，大红底搭配亮金字「**别的棉服都被它比下去！**」，副标黑金胶囊「**★ 3M新雪丽防寒夹棉 · 假两件连帽爆款 ★**」，彻底覆盖背景杂乱店名，且距头顶有充足净空。
-  3. **底部福利腰封**：`y = 1550 ~ 1780`，左侧红色「**生日专场**」圆角标签 + 亮黄色加粗大字「**到手只要 300+ ！！**」，下方附带 3 大核心利益点：
-     `★ 高级哑光面料   ★ 立体显瘦捏褶   ★ 可拆卸内胆连帽`（注：统一采用通用支持的实心星号 `★`，避免符号缺字方框）。
+  1. **底图选择**：模特自然穿搭、眼神交流自信、衣物版型展示完整的**纯净无字正帧**（如米白款全身/半身）；人物主体宽占画幅约 75% 居中（水平 1:6:1，尽力居中），可见膝盖及以下。
+  2. **顶部主标**：`y = 120 ~ 290`，品牌英文 3D 金字 + 中文副标白字褐描边，名称过长自动换行保持比例。
+  3. **底部卖点腰封**：`y = 1520 ~ 1720`，金色渐变商品名（#FFE9A8→#E8A91E）+ 深褐描边 + 动感斜体，名称过长自动换行；离底保留 ≥200px 避让小黄车。
+  4. **右侧悬浮商品贴图**（0~2 张）：280×280 正方形圆角卡片，圆角 20px，淡灰描边 #E2E8F0，靠右距离 32px，两张时间距 32px 上下居中。
 
 ### 4.2 备选风格矩阵：
 - **Option 2: 双色对比型**：左右 50:50 藏青 vs 米白同时上身对比 + 顶部“今冬闭眼入”横幅（适合用户纠结选色场景）。
@@ -134,11 +137,11 @@ description: Use when turning raw livestream or long e-commerce video recordings
 
 ## 6. Python 工业化自动化脚本代码模板
 
-### 6.1 爆款促销封面自动绘制脚本
+### 6.1 爆款卖点封面自动绘制脚本（无价格版，决策 3）
 ```python
 from PIL import Image, ImageDraw, ImageFont
 
-def render_promotion_cover(clean_frame_path, output_path):
+def render_promo_cover(clean_frame_path, output_path):
     base = Image.open(clean_frame_path).convert('RGBA')
     overlay = Image.new('RGBA', base.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -146,23 +149,22 @@ def render_promotion_cover(clean_frame_path, output_path):
     font_heavy = 'C:/Windows/Fonts/simhei.ttf'
     font_msyh = 'C:/Windows/Fonts/msyhbd.ttc'
     
-    # 1. 顶部大标题 (y=150~430，完全覆盖背景，与头顶保持安全距离)
-    draw.rounded_rectangle([40, 150, 1040, 430], radius=30, fill=(215, 20, 35, 245), outline=(255, 225, 110, 255), width=6)
-    f_h1 = ImageFont.truetype(font_heavy, 66)
-    f_sub = ImageFont.truetype(font_msyh, 36)
-    draw.text((540, 245), '别的棉服都被它比下去！', font=f_h1, fill=(255, 240, 85), anchor='mm', stroke_width=4, stroke_fill=(110, 10, 10))
-    draw.rounded_rectangle([140, 335, 940, 395], radius=24, fill=(18, 18, 22, 230), outline=(255, 215, 0, 220), width=3)
-    draw.text((540, 365), '★ 3M新雪丽防寒夹棉 · 假两件连帽爆款 ★', font=f_sub, fill=(255, 255, 255), anchor='mm')
+    # 1. 顶部品牌区 (y=120~290)：3D 金字主标 + 白字褐描边副标
+    draw.text((540, 140), 'MIXCITY', font=ImageFont.truetype(font_heavy, 74),
+              fill=(255, 235, 170), anchor='mt', stroke_width=4, stroke_fill=(56, 30, 17))
+    draw.text((540, 240), '深圳高端女装', font=ImageFont.truetype(font_msyh, 52),
+              fill=(255, 255, 255), anchor='mt', stroke_width=3, stroke_fill=(56, 30, 17))
     
-    # 2. 底部价格福利腰封 (y=1550~1780)
-    draw.rectangle([0, 1550, 1080, 1780], fill=(12, 12, 16, 230))
-    f_tag = ImageFont.truetype(font_heavy, 46)
-    f_price = ImageFont.truetype(font_heavy, 70)
-    f_desc = ImageFont.truetype(font_msyh, 34)
-    draw.rounded_rectangle([60, 1585, 330, 1665], radius=16, fill=(230, 30, 45, 255))
-    draw.text((195, 1625), '生日专场', font=f_tag, fill=(255, 255, 255), anchor='mm')
-    draw.text((365, 1625), '到手只要 300+ ！！', font=f_price, fill=(255, 235, 60), anchor='lm', stroke_width=3, stroke_fill=(150, 20, 20))
-    draw.text((540, 1720), '★ 高级哑光面料   ★ 立体显瘦捏褶   ★ 可拆卸内胆连帽', font=f_desc, fill=(255, 235, 120), anchor='mm')
+    # 2. 右侧商品贴图 (280x280 圆角 + 淡灰描边，靠右 32px，上下居中)
+    draw.rounded_rectangle([768, 820, 1048, 1100], radius=20,
+                           outline=(226, 232, 240), width=2)
+    
+    # 3. 底部商品名 (y=1530~1720)：金色渐变 + 深褐描边 + 微斜体
+    #    名称过长自动换行保持比例；离底 >=200px 避让小黄车；无任何价格信息（决策 3）
+    draw.text((540, 1540), '桑蚕丝羊绒羊毛', font=ImageFont.truetype(font_msyh, 64),
+              fill=(255, 233, 170), anchor='mm', stroke_width=4, stroke_fill=(61, 31, 14))
+    draw.text((540, 1630), '渐变针织衫', font=ImageFont.truetype(font_msyh, 64),
+              fill=(232, 169, 30), anchor='mm', stroke_width=4, stroke_fill=(61, 31, 14))
     
     final = Image.alpha_composite(base, overlay).convert('RGB')
     final.save(output_path, quality=95)

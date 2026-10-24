@@ -32,11 +32,13 @@ sys.path.insert(0, PROJECT_ROOT)
 from src.agent.agent_director import AgentDirector
 
 
-def run_pipeline(spec_path: str, cover_id: str = None, plan_path: str = None) -> bool:
+def run_pipeline(spec_path: str, cover_id: str = None, plan_path: str = None,
+                 timeline_path: str = None) -> bool:
     director = AgentDirector(spec_path)
     res = director.run_director_workflow(
         chosen_cover_id=cover_id,
-        custom_plan_path=plan_path
+        custom_plan_path=plan_path,
+        edited_timeline_path=timeline_path
     )
     return res.get("qc_passed", False)
 
@@ -46,6 +48,9 @@ if __name__ == "__main__":
     parser.add_argument("--spec", default="job_spec.json", help="任务契约文件路径")
     parser.add_argument("--cover-id", default=None, help="干预指定封面候选 ID (如 cand_01)")
     parser.add_argument("--plan", default=None, help="干预指定自定义剪辑计划路径")
+    parser.add_argument("--timeline", default=None,
+                        help="回注人工精修后的时间线 JSON（OpenChatCut 导出，2026-10-24 接入生产）")
     args = parser.parse_args()
 
-    run_pipeline(args.spec, cover_id=args.cover_id, plan_path=args.plan)
+    run_pipeline(args.spec, cover_id=args.cover_id, plan_path=args.plan,
+                 timeline_path=args.timeline)
