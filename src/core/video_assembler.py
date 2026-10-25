@@ -87,6 +87,12 @@ def build_clip_filter(clip: Dict[str, Any], zoom_c: Dict[str, Any] = None) -> st
     """
     zoom_c = zoom_c or {}
     z = float(clip.get("zoom", 1.0) or 1.0)
+    # 上限钳制：zoom_effect.max_zoom 是渲染与 QC 的共同硬上限。
+    # 2026-10-25 接线：此前 max_zoom 只写在 constraints.yaml 里没有任何代码消费
+    # （死键），改 yaml 不会改变行为；现在渲染端真实读取并钳制。
+    z_max = float(zoom_c.get("max_zoom", 1.35) or 1.35)
+    if z > z_max:
+        z = z_max
     ya = float(clip.get("y_anchor", zoom_c.get("y_anchor", 0.35)) or 0.35)
     effect = clip.get("effect", "none")
 
@@ -173,6 +179,7 @@ class VideoAssembler:
         self.clips_dir = os.path.join(self.work_dir, "clips")
         self.constraints = constraints or {}
         self.occlusion_log: Dict[str, Any] = {}
+        self.mirror_abandoned: set = set()
         os.makedirs(self.clips_dir, exist_ok=True)
 
     # ------------------------------------------------ 2026-10-24 新增：特效辅助
@@ -199,6 +206,12 @@ class VideoAssembler:
         流程：抽一帧 → OCR 检测文字框 → 生成深色遮挡贴纸 → overlay 回该分镜。
         检测不到足够文字时不遮挡（保持画面干净），但会在日志里提示——
         决策层据此可在下一轮放弃该分镜的镜像。
+
+        min_occlusion_ratio（2026-10-25 接线，此前是死键）：
+          口径 = 镜像分镜**上半屏**可遮挡文字面积 / 上半屏画面面积。
+          占比 **≥ 阈值** 判定为"背景文字密集"——镜像后大量店招/LOGO 反向，
+          违规观感强，此时**放弃该分镜的镜像**（把画面翻转回原方向，不做遮挡贴纸）；
+          占比 < 阈值说明背景文字零散，镜像后反向文字面积小，保留镜像并用贴纸精确遮挡。
         """
         mirror_c = self.constraints.get("mirror_effect", {}) or {}
         if not mirror_c.get("enabled", True):
@@ -276,13 +289,35 @@ class VideoAssembler:
 
         min_area = float(ocr_c.get("min_box_area_px", 400))
         # 只遮挡画面上半部分（背景店招/LOGO 区域），人物身上的印花不遮挡
-        upper = [r for r in rects
-                 if r["y0"] < OUT_H * 0.42
-                 and (r["x1"] - r["x0"]) * (r["y1"] - r["y0"]) >= min_area]
+        eligible = [r for r in rects
+                    if (r["x1"] - r["x0"]) * (r["y1"] - r["y0"]) >= min_area]
+        upper = [r for r in eligible if r["y0"] < OUT_H * 0.42]
         if not upper:
             print(f"[ASSEMBLER] 镜像分镜 {clip['id']}：上半屏无背景文字，无需遮挡")
             self.occlusion_log[clip["id"]] = {
                 "applied": True, "regions": 0, "reason": "上半屏无背景文字（镜像无违和点）"}
+            return
+
+        # —— min_occlusion_ratio 门禁（2026-10-25 接线，此前是死键）——
+        # 口径：**可遮挡文字面积 / 全部有效文字面积**（遮挡覆盖率）。
+        # 覆盖率过低说明镜面后的大部分反向文字位于可遮挡范围之外（如下半身服饰印花、
+        # 字幕带），贴纸遮不全 → 保留镜像必然露出反向文字，此时**放弃该分镜的镜像**
+        # （把画面翻转回原方向），而不是贴一个遮不全的补丁。
+        min_ratio = float(mirror_c.get("min_occlusion_ratio", 0.25) or 0.25)
+        total_area = sum((r["x1"] - r["x0"]) * (r["y1"] - r["y0"]) for r in eligible)
+        upper_area = sum((r["x1"] - r["x0"]) * (r["y1"] - r["y0"]) for r in upper)
+        coverage = (upper_area / total_area) if total_area > 0 else 1.0
+        if coverage < min_ratio:
+            reason = (f"遮挡覆盖率 {coverage:.2f} < 阈值 {min_ratio:.2f}"
+                      f"（反向文字遮不全，放弃镜像）")
+            print(f"[ASSEMBLER] 镜像分镜 {clip['id']}：{reason}")
+            self._undo_mirror(clip, clip_path)
+            self.occlusion_log[clip["id"]] = {
+                "applied": False, "regions": 0,
+                "occlusion_coverage": round(coverage, 4),
+                "min_occlusion_ratio": min_ratio,
+                "reason": reason}
+            self.mirror_abandoned.add(clip["id"])
             return
 
         # 归一化为 (x0,y0,x1,y1) 并适度外扩，覆盖文字描边
@@ -325,6 +360,33 @@ class VideoAssembler:
                 except OSError:
                     pass
             self.occlusion_log[clip["id"]] = {"applied": False, "error": str(e)[:120]}
+
+    def _undo_mirror(self, clip: Dict[str, Any], clip_path: str) -> None:
+        """把已渲染的镜像分镜翻转回原方向（放弃镜像）。
+
+        原理：滤镜链 hflip → crop(居中) → zoompan(x 居中) 在水平方向对称，
+        而 hflip 是对合变换（做两次等于没做），因此对成片再补一次 hflip
+        即可得到与"从未镜像"完全一致的画面，无需回源重切。
+        """
+        tmp_out = clip_path + ".unflip.mp4"
+        try:
+            run_cmd([
+                "ffmpeg", "-y",
+                "-i", clip_path,
+                "-vf", "hflip",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+                "-c:a", "copy",
+                tmp_out,
+            ], desc=f"放弃镜像 {clip['id']}（翻转回原方向）")
+            os.replace(tmp_out, clip_path)
+            print(f"[ASSEMBLER] 镜像分镜 {clip['id']}：已放弃镜像，翻转回原方向")
+        except Exception as e:
+            print(f"[WARN] 放弃镜像失败（保留镜像画面）: {e}")
+            if os.path.exists(tmp_out):
+                try:
+                    os.remove(tmp_out)
+                except OSError:
+                    pass
 
     def _measure_loudness(self, concat_txt: str, boom_wav: str,
                           total_dur: float) -> dict:
@@ -782,7 +844,10 @@ class VideoAssembler:
                 for c in plan["clips"] if float(c.get("zoom", 1.0) or 1.0) > 1.0
             ],
             "mirror_clips": [c["id"] for c in plan["clips"]
-                             if c.get("effect") == "hflip"],
+                             if c.get("effect") == "hflip"
+                             and c["id"] not in self.mirror_abandoned],
+            # 2026-10-25：因 min_occlusion_ratio 门禁被放弃镜像的分镜
+            "mirror_abandoned": sorted(self.mirror_abandoned),
             "occlusion_applied": {
                 cid: v.get("applied", False)
                 for cid, v in (self.occlusion_log or {}).items()

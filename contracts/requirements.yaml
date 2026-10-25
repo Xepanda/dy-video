@@ -141,28 +141,32 @@ requirements:
     title: hflip 必须配防反文字遮挡，找不到可遮挡文字则拒绝镜像
     level: BLOCK
     status: implemented
-    constraint_keys: ["mirror_effect.enabled", "mirror_effect.occlusion_required"]
+    constraint_keys: ["mirror_effect.enabled", "mirror_effect.occlusion_required",
+                      "mirror_effect.min_occlusion_ratio"]
     qc_assertions: ["镜像防反文字遮挡"]
     code_symbols: ["generate_occlusion_patch"]
     note: >-
-      ⚠️ 已知缺口：mirror_effect.min_occlusion_ratio（可遮挡面积占比下限）已声明但代码
-      全流程未消费——遮挡判定目前只走"OCR → 上半屏筛选 → 面积阈值"，
-      面积下限阈值实际未参与决策。已登记为 R-X01。
+      2026-10-25 接线 mirror_effect.min_occlusion_ratio（此前是死键，改 yaml 无效）：
+      遮挡覆盖率 = 上半屏可遮挡文字面积 / 全部有效文字面积；覆盖率低于阈值说明
+      反向文字大多落在贴纸遮不到的范围内，贴纸遮不全 → 放弃该分镜的镜像
+      （成片再补一次 hflip 翻转回原方向），而不是留一个遮不全的补丁。
+      放弃结果落盘到 video_overlay_meta.json 的 mirror_abandoned 段。
 
   - id: R-S202
     source: "[SKILL] §2.2 细节推镜放大特写"
     title: 推镜倍率 1.25~1.35x，锚点 y=0.35h~0.65h
     level: BLOCK
-    status: partial
+    status: implemented
     constraint_keys: ["zoom_effect.trigger_sec", "zoom_effect.transition_sec",
-                      "zoom_effect.easing", "zoom_effect.y_anchor"]
+                      "zoom_effect.easing", "zoom_effect.y_anchor",
+                      "zoom_effect.zoom", "zoom_effect.max_zoom"]
     qc_assertions: ["放大特效时序"]
     code_symbols: ["build_clip_filter"]
     note: >-
       定时缓动推镜已实现（触发点 + 过渡 + smoothstep 缓动 + 锚点）。
-      ⚠️ 缺口：zoom_effect.max_zoom（目标倍率上限）代码不读，实际倍率由
-      build_plan 的硬编码 1.3 决定，改 yaml 无效。已登记为 R-X02。
-    allow_dead: true
+      2026-10-25 接线 zoom_effect.max_zoom（此前是死键）：新增 zoom_effect.zoom
+      作为面料块目标倍率（build_plan 不再硬编码 1.3），max_zoom 作为渲染端钳制上限
+      与 QC 断言阈值（qc_auditor 不再硬编码 1.35），三方口径一致。
 
   - id: R-S203
     source: "[SKILL] §2.3 多款式/颜色对比展示"
@@ -480,26 +484,29 @@ requirements:
   # ========================================================
   - id: R-X01
     source: "[AUDIT] mirror_effect.min_occlusion_ratio"
-    title: 镜像遮挡面积占比下限未接线
+    title: ~~镜像遮挡面积占比下限未接线~~ ✅ 已修复（2026-10-25）
     level: INFO
-    status: unimplemented
+    status: implemented
     constraint_keys: ["mirror_effect.min_occlusion_ratio"]
     qc_assertions: []
-    code_symbols: []
-    allow_dead: true
-    note: 遮挡判定走 OCR → 上半屏筛选 → 面积阈值，面积占比下限阈值未参与决策。
+    code_symbols: ["_apply_mirror_occlusion", "_undo_mirror"]
+    note: >-
+      2026-10-25 已接线：video_assembler._apply_mirror_occlusion 计算遮挡覆盖率，
+      低于阈值时调用 _undo_mirror 放弃该分镜的镜像（翻转回原方向），
+      结果落盘 meta 的 mirror_abandoned 段。已从死键清单移除。
 
   - id: R-X02
     source: "[AUDIT] zoom_effect.max_zoom"
-    title: 推镜目标倍率上限未接线（实际倍率硬编码 1.3）
+    title: ~~推镜目标倍率上限未接线（实际倍率硬编码 1.3）~~ ✅ 已修复（2026-10-25）
     level: INFO
-    status: unimplemented
-    constraint_keys: ["zoom_effect.max_zoom"]
+    status: implemented
+    constraint_keys: ["zoom_effect.zoom", "zoom_effect.max_zoom"]
     qc_assertions: []
-    code_symbols: []
-    allow_dead: true
+    code_symbols: ["build_clip_filter", "build_plan"]
     note: >-
-      build_plan 里 zoom 取硬编码 1.3（有面料关键词时）否则 1.0；1.35 上限写在 QC 里。
+      2026-10-25 已接线：新增 zoom_effect.zoom 作为面料块目标倍率（build_plan 读约束，
+      不再硬编码 1.3），max_zoom 同时作为渲染端钳制上限与 QC 断言阈值。
+      已从死键清单移除。
 
   - id: R-X03
     source: "[AUDIT] video.subtitle_safe_zone_px / cover.ocr_area_ratio_max"

@@ -52,8 +52,6 @@ EXPECTED_DEAD_KEYS = {
     "text.brand_en_stroke",
     "text.brand_cn_fill",
     "text.brand_cn_stroke",
-    "zoom_effect.max_zoom",
-    "mirror_effect.min_occlusion_ratio",
     "split_effect.radius",
     "split_effect.border_color",
     "split_effect.border_width",

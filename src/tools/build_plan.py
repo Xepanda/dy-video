@@ -583,14 +583,21 @@ def build_plan(
         else:
             cat = "styling"
         has_fabric_kw = any(k in b.get("text", "") for k in FABRIC_KEYWORDS)
+        # 面料块推镜倍率：读约束（zoom_effect.zoom），并受 zoom_effect.max_zoom 钳制。
+        # 2026-10-25：此前硬编码 1.3，改为约束驱动，改 yaml 即改行为。
+        zoom_c = (constraints.get("zoom_effect", {}) or {})
+        z_target = float(zoom_c.get("zoom", 1.3) or 1.3)
+        z_max = float(zoom_c.get("max_zoom", 1.35) or 1.35)
+        if z_target > z_max:
+            z_target = z_max
         clip = {
             "id": f"c{i+1:02d}_{cat}",
             "st": round(b["start"], 3),
             "end": round(b["end"], 3),
             "dur": round(b["dur"], 3),
             "is_hook": (i == 0),
-            "zoom": 1.3 if has_fabric_kw else 1.0,
-            "y_anchor": 0.35,
+            "zoom": z_target if has_fabric_kw else 1.0,
+            "y_anchor": float(zoom_c.get("y_anchor", 0.35) or 0.35),
             # 默认值，随后由下方「特效决策」按规则改写（hflip / split）。
             # 2026-10-24 修复：此前这里写死 "none" 且无任何决策逻辑，
             # 导致装配器里已完整实现的镜像/分屏成为永不触发的死代码。
