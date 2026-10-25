@@ -268,19 +268,29 @@ class DecisionGateway:
     # ------------------------------------------------------------ Hook 卡避让校验
 
     def validate_hook_card(self, plan: Dict[str, Any]) -> Tuple[bool, List[str]]:
-        """Hook 卡不得压人脸顶（B10）：卡底 ≤ 人脸顶 − 30px。"""
+        """Hook 卡不得压人脸顶（B10）：卡底 ≤ 人脸顶 − 30px。
+
+        卡片尺寸/定位区间取自 constraints.yaml 的 `hook_card` 段
+        （2026-10-25 全局统一 720×168），改 yaml 即改校验口径。
+        """
         hook_card = (plan.get("hook_card") or {})
         if not hook_card or "y" not in hook_card:
             return True, []  # 未启用 Hook 卡避让，不阻塞
+        hc_c = self.constraints.get("hook_card", {}) or {}
+        card_h = int(hc_c.get("height", 168) or 168)
+        y_min = int(hc_c.get("y_min", 150) or 150)
+        y_max = int(hc_c.get("y_max", 430) or 430)
+        gap = int(hc_c.get("face_top_gap_px", 30) or 30)
         violations = []
         y = int(hook_card["y"])
-        if not (150 <= y <= 430):
-            violations.append(f"Hook 卡 y={y} 超出 150~430 区间")
+        if not (y_min <= y <= y_max):
+            violations.append(f"Hook 卡 y={y} 超出 {y_min}~{y_max} 区间")
         if hook_card.get("face_top_y") is not None:
             face_top_px = float(hook_card["face_top_y"]) * 1920
-            if y + 130 > face_top_px - 30:
+            if y + card_h > face_top_px - gap:
                 violations.append(
-                    f"Hook 卡底 y+130={y+130} 超过人脸顶−30px={face_top_px-30:.0f}（压脸）")
+                    f"Hook 卡底 y+{card_h}={y + card_h} 超过人脸顶−{gap}px="
+                    f"{face_top_px - gap:.0f}（压脸）")
         return (len(violations) == 0), violations
 
     def record_generic(self, kind: str, accepted: bool, reasons: List[str],

@@ -44,7 +44,7 @@
    ```bash
    python -c "from src.pipeline import LiveVideoPipeline; p = LiveVideoPipeline('project1'); p.generate_sub_bass_boom()"
    ```
-2. 自动生成 980px 超大黄金 3 秒视觉冲击标题卡（定位于 `y=150~430`，帽子上方安全避障，不遮挡面部）：
+2. 自动生成 720px 黄金 3 秒视觉冲击标题卡（720×168，定位于 `y=150~430`，帽子上方安全避障，不遮挡面部）：
    ```bash
    python -c "from src.pipeline import LiveVideoPipeline; p = LiveVideoPipeline('project1'); p.render_hook_card()"
    ```
@@ -57,7 +57,7 @@
 2. 字幕零价格硬约束（决策 3）：`python src/tools/detect_price.py --ass temp/subtitles.ass`，检出价格即回炉重剪。
 3. 调用 FFmpeg 一键合流成片，输出规格：
    - 分辨率：`1080x1920` (9:16)
-   - 帧率：`30 FPS`（决策 4 定稿）
+   - 帧率：`60 FPS`（2026-10-25 全局统一）
    - 音频：`48 kHz` 高保真立体声，响度归一 −14±1.5 LUFS / True Peak ≤ −0.5 dBTP
    - 输出至：`project1/output/douyin_jacket_final.mp4`
 

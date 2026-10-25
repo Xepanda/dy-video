@@ -109,16 +109,19 @@ requirements:
 
   - id: R-S102
     source: "[SKILL] §1.2 超大视觉标题卡"
-    title: 标题卡 940~980×160~180，定位 y=150~430 且不遮挡五官
+    title: 标题卡 720×168，定位 y=150~430 且不遮挡五官
     level: BLOCK
     status: implemented
-    constraint_keys: []
+    constraint_keys: ["hook_card.width", "hook_card.height",
+                      "hook_card.y_min", "hook_card.y_max",
+                      "hook_card.face_top_gap_px"]
     qc_assertions: []
-    code_symbols: ["validate_hook_card"]
+    code_symbols: ["validate_hook_card", "generate_hook_card"]
     note: >-
-      决策_gateway.validate_hook_card 校验 y ∈ [150,430] 且 y+130 ≤ face_top_y*1920-30；
-      实际实现用 720×168 折中卡（宽度未占满 940~980，属已知偏差）。
-    allow_dead: true
+      2026-10-25 决策：**全局统一 720 宽**（原 SKILL 的 940~980 口径作废——
+      1080 画幅上 940~980 仅剩左右各 50px 边距且与顶部标识条争空间）。
+      尺寸/定位区间全部由 constraints.yaml 的 hook_card 段驱动，
+      决策网关 validate_hook_card 与 Agent Director 均从约束读取，改 yaml 即改行为。
 
   - id: R-S103
     source: "[SKILL] §1.3 音频冲击混音"
@@ -353,7 +356,7 @@ requirements:
 
   - id: R-C002
     source: "[CON] V1~V2, V6 成片硬指标"
-    title: 成片 1080×1920 / 30fps / 45~65s / 无黑帧"
+    title: 成片 1080×1920 / 60fps / 45~65s / 无黑帧"
     level: BLOCK
     status: implemented
     constraint_keys: ["video.resolution", "video.fps", "video.duration_range",
@@ -361,9 +364,9 @@ requirements:
     qc_assertions: ["竖屏分辨率合规性", "帧率合规性", "成片时长合规性", "无黑帧"]
     code_symbols: []
     note: >-
-      ⚠️ 已知冲突：SKILL.md §5 写"成片 1080x1920 60FPS"，项目决策 4 定为 30fps
-      （未拍板）。当前以 constraints.yaml（30fps）为准，SKILL 文档待同步。
-    allow_dead: true
+      2026-10-25 决策：**帧率全局统一 60fps**（覆盖原决策 4 的 30fps）。
+      SKILL.md §5 原本就写"成片 1080x1920 60FPS"，此前是实现与 SKILL 脱节，
+      现已三方口径一致（SKILL.md / constraints.yaml / 装配器与 QC 代码）。
 
   - id: R-C003
     source: "[CON] V4 音频响度"

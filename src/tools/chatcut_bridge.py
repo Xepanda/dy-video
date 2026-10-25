@@ -41,7 +41,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 TIMELINE_VERSION = 1
-CANVAS_W, CANVAS_H, FPS = 1080, 1920, 30
+CANVAS_W, CANVAS_H, FPS = 1080, 1920, 60
 
 
 # ---------------------------------------------------------------- plan → timeline

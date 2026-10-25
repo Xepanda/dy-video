@@ -129,7 +129,7 @@ python -u scripts/run_regression.py --quick
 
 ## 五、遗留与待决
 
-1. **SKILL.md 与项目决策冲突（未拍板）**：SKILL.md §5 写"成片 1080x1920 60FPS"，项目决策 4 定为 30fps（`constraints.yaml` 的 `video.fps: 30`）。当前以 constraints 为准，SKILL 文档待同步。
-2. **Hook 卡宽度偏差**：SKILL 要求标题卡宽 940~980px，实际实现用 720×168 折中卡。
+1. ~~**SKILL.md 与项目决策冲突（未拍板）**~~ → **已拍板（2026-10-25）**：帧率全局统一 **60fps**。SKILL.md §5、`constraints.yaml` 的 `video.fps`、装配器 `FPS`、ChatCut 时间轴、QC 帧率断言五处全部改为 60。
+2. ~~**Hook 卡宽度偏差**~~ → **已拍板（2026-10-25）**：标题卡全局统一 **720×168**（原 940~980 口径作废），并新增 `hook_card` 约束段（width/height/y_min/y_max/face_top_gap_px），决策网关与 Agent Director 均改为从约束读取，改 yaml 即改画面。
 3. **`duration_tolerance_sec` 键不存在**：`constraints_map.md` 曾引用 `video.duration_tolerance_sec`，实际 yaml 里该键在 `asr_review` 段（`asr_review.duration_tolerance_sec`），且已被消费。文档笔误，本步已顺带核实。
 4. **未接线的三处若要修复，建议单独开 PR**：本次第 30 步的目标是**建立审计基准**而非修改实现，故所有死键一律如实登记、未动实现代码。其中 `zoom_effect.max_zoom`、`mirror_effect.min_occlusion_ratio` 两项接线风险最低（纯阈值透传，不改默认行为），可作为后续独立改动。
