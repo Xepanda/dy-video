@@ -101,7 +101,7 @@
 | 项 | 状态 | 依据 |
 |:--|:--|:--|
 | ASS 字幕烧录 | ✅ 已实现 | 相对路径规避 Windows 冒号转义（`cwd=temp_dir` + `subtitles=douyin_subtitles.ass`） |
-| Hook 卡（0~2.5s） | ⚠️ **部分实现** | 已实现：`video_assembler.py:355` overlay，`enable='between(t,0,2.5)'`，尺寸 640×130，位置 `hook_y` 动态避让人脸顶（实测 y=310，占据 310~440 < 人物区 460 ✅）。**但 SKILL 要求 940~980×160~180 的"超大标题卡"**——当前是 640×130 的小胶囊 |
+| Hook 卡（0~2.5s） | ✅ **已全局统一 720×168** | 已实现：`video_assembler.py` overlay，`enable='between(t,0,2.5)'`，尺寸 **720×168**，位置 `hook_y` 动态避让人脸顶（实测 y=310，占据 310~478 < 人物区 460 ✅）。2026-10-25 拍板：全局统一 720 宽（原 940~980 口径作废），尺寸改由 `hook_card` 约束段驱动 |
 | CTA 徽章（末 2.5s） | ✅ 已实现 | `overlay=40:1440`，`enable='gte(t,{total-2.5})'` |
 | Sub-Bass Boom | ✅ 已实现 | `sfx_generator.py`：45→90Hz 阻尼正弦，1.2s；`amix` 混音，volume 0.45 |
 | 封面品牌区 | ✅ 已实现 | `cover_renderer.py` 品牌标 `top_y=125`（SKILL 120~290） |
@@ -123,7 +123,7 @@
 | 响度归一 | ✅ 已实现 | 两遍 loudnorm(linear) + `alimiter=0.92` 兜底；实测 -14.0 LUFS / TP -1.3 dBTP |
 | 编码导出 | ✅ 已实现 | libx264 crf18 + aac 192k 48kHz + yuv420p |
 | 竖屏 1080×1920 | ✅ 已实现 | 实测 5 素材全部 1080×1920 |
-| 帧率 | ⚠️ **与 SKILL 不符** | 实际 30fps（决策 4）；**SKILL.md 写"成片 1080x1920 60FPS"** |
+| 帧率 | ✅ **已全局统一 60fps** | 2026-10-25 拍板统一 60fps（原决策 4 的 30fps 作废）；SKILL.md / 约束 / 装配器 / QC / ChatCut 五处一致 |
 | 无黑帧检测 | ✅ 已实现 | blackdetect，QC BLOCK 断言 |
 | QC 量化门禁 | ✅ 已实现 | **20 项断言**（BLOCK 19 + WARN 1），实测 5/5 素材全绿 |
 | 指标区间锁定 | ✅ 已实现（本轮修） | `fixtures/baselines.json` 9 指标 × 5 素材；注入异常值能被抓到 |
@@ -170,7 +170,7 @@
 | # | 问题 | 断点位置 | 证据 |
 |:--|:--|:--|:--|
 | 8 | 封面候选池 180s 盲区 | `extract_cover_candidates.py:280,443` | 首窗有 ≥2 候选则不再扩扫 |
-| 9 | Hook 标题卡尺寸不符 | `video_assembler.py:81`（640×130） | SKILL 要求 940~980×160~180 |
+| 9 | ~~Hook 标题卡尺寸不符~~ → **已统一 720×168** | `video_assembler.py`（720×168） | 2026-10-25 全局统一，与 SKILL.md §1.2 一致 |
 | 10 | 无音画同步量化断言 | `qc_auditor.py` 缺该项 | `av_sync_error_max_ms` 键在 yaml 但零消费 |
 | 11 | 60FPS vs 30FPS 规格冲突 | `constraints.yaml: fps: 30` | SKILL.md 写 60FPS |
 | 12 | 文档失同步 3 处 | 见 §2 | — |
@@ -246,7 +246,7 @@ python -u src/main_pipeline.py --spec <spec.json>
 
 | 产物 | 路径 | 预期 |
 |:--|:--|:--|
-| 成片 | `output/<pid>/<pid>_final.mp4` | 1080×1920 / 30fps / 58~65s / 约 53MB |
+| 成片 | `output/<pid>/<pid>_final.mp4` | 1080×1920 / 60fps / 58~65s / 约 53MB |
 | 封面 | `output/<pid>/<pid>_cover.jpg` | 1080×1920，品牌标 top_y=125，商品名金色渐变 |
 | 封面渲染元数据 | `output/<pid>/<pid>_cover_render_meta.json` | 含 brand_en/brand_cn/product_name/sticker 元素 |
 | 决策清单 | `output/<pid>/agent_decision_manifest.json` | chosen_cover / chosen_clips / gateway_decisions |

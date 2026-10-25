@@ -413,8 +413,12 @@ class AgentDirector:
                 if pose_lm is not None:
                     face_m = FaceAnalyzer().analyze(hook_frame, pose_landmarks=pose_lm)
                     if face_m:
-                        # Hook 卡高 130px，底边距人脸顶 30px
-                        card_y = int(max(150, face_m["face_top_y"] * 1920 - 160))
+                        # Hook 卡底边距人脸顶 30px（卡高取 constraints 的全局统一值）
+                        hc_c = self.gateway.constraints.get("hook_card", {}) or {}
+                        card_h = int(hc_c.get("height", 168) or 168)
+                        gap = int(hc_c.get("face_top_gap_px", 30) or 30)
+                        y_min = int(hc_c.get("y_min", 150) or 150)
+                        card_y = int(max(y_min, face_m["face_top_y"] * 1920 - card_h - gap))
                         plan.setdefault("hook_card", {})["y"] = card_y
                         plan["hook_card"]["face_top_y"] = face_m["face_top_y"]
                         print(f"  [Hook 卡避让] 人脸顶 y={face_m['face_top_y']:.3f} → "

@@ -79,6 +79,8 @@
 | 封面纯净 | `ocr.background_text_area_max` | detect_ocr + QC | ✅ | BLOCK |
 | 字幕不出现具体价格（决策3） | `price.subtitle_matches` | detect_price + QC | ✅ | BLOCK |
 | 帧率 | `video.fps` | ffprobe + QC | ✅ | BLOCK |
+| Hook 标题卡尺寸 | `hook_card.width` / `hook_card.height` | PIL 渲染 | ✅ **720×168 全局统一**（2026-10-25） | — |
+| Hook 卡定位区间 | `hook_card.y_min` / `hook_card.y_max` | 决策网关 validate_hook_card | ✅ | BLOCK（压脸） |
 
 ## 字幕与 ASR（2026-10-24 新增）
 
@@ -109,3 +111,4 @@
 | 2026-10-24 | v1.1 审计后修订：新增状态图例；如实标注 6 个"声称 BLOCK 但未落地"的项（重影/外廓/landmark 置信度/av_sync 抽检/horizontal_margin_ratio/duration_tolerance_sec）；补齐已落地项的真实 metric key；新增 ASR 审核与字幕章节 |
 | 2026-10-24 | v1.2 特效轮修订：新增「视频叠加元素」章节（平台标识条/挂角贴纸/放大特效/镜像遮挡/音画同步）；封面贴图布局改为 vertical 靠右堆叠；av_sync 由 ⚠️ 未接线升级为 ✅ 已接入 |
 | 2026-10-25 | v1.3 审计基线轮：新增「关联文档」段落，指向 `contracts/requirements.yaml`（43 条既定需求机器可读基线）与 AST 审计引擎；确认 27 个死键并逐条登记（R-X01~R-X10）；补记 `video.av_sync_error_max_ms` 已接线（此前记为未接线） |
+| 2026-10-25 | v1.4 规格全局统一轮：**帧率 30fps → 60fps**（覆盖原决策 4，`video.fps` 与 SKILL.md §5 口径对齐）；**Hook 标题卡统一 720×168**（原 940~980 口径作废），新增 `hook_card` 段（width/height/y_min/y_max/face_top_gap_px），决策网关与 Agent Director 均改为从约束读取 |

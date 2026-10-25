@@ -22,6 +22,17 @@ updated: "2026-10-21"
 #     防糊硬门禁仍是归一化放大后的 post_scale_sharpness ≥200（BLOCK）。
 #   - 漏斗配额默认降为 WARN（funnel_enforce_level），类目稀薄素材不再一票否决。
 
+# ============ 黄金 3 秒 Hook 标题卡（2026-10-25 全局统一 720）============
+# 原 SKILL.md §1.2 写"940~980px 超大标题卡"，实际实现为 720×168 折中卡。
+# 2026-10-25 决策：**全局统一 720 宽**（不再保留 940~980 口径），
+# 理由——1080 画幅上 940~980 只剩左右各 50px 边距，且与顶部平台标识条争空间。
+hook_card:
+  width: 720                      # 标题卡宽（px），全局统一值
+  height: 168                     # 标题卡高（px），落在 SKILL 的 160~180 区间
+  y_min: 150                      # 纵向定位下限（px）
+  y_max: 430                      # 纵向定位上限（px）
+  face_top_gap_px: 30             # 卡底与人脸顶的最小安全间距（px）
+
 # ============ 封面底图约束（C1~C7, V7）============
 cover:
   sharpness_min: 200              # C1 归一化放大后清晰度门禁（post_scale_sharpness，BLOCK）
@@ -195,7 +206,7 @@ split_effect:
 video:
   duration_range: [45, 65]        # V1
   resolution: [1080, 1920]        # V2
-  fps: 30                         # 决策 4：30fps 定稿
+  fps: 60                         # 全局统一 60fps（2026-10-25 决策，覆盖原决策 4 的 30fps）
   subtitle_margin_v_min: 220      # V5 小黄车避让
   subtitle_safe_zone_px: 220      # ⚠️ 未接线：字幕安全区实际由 subtitle_margin_v_min 控制
   av_sync_error_max_ms: 40        # ⚠️ 未接线：PTS 归零已保证物理同步，但无独立量化断言

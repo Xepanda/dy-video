@@ -148,14 +148,14 @@ class QcAuditor:
                      metric_key="video.resolution", measured=[width, height],
                      threshold=res_target)
 
-        fps_target = video_c.get("fps", 30)
+        fps_target = video_c.get("fps", 60)
         try:
-            num, den = v_stream.get("r_frame_rate", "30/1").split("/")
+            num, den = v_stream.get("r_frame_rate", "60/1").split("/")
             fps_actual = float(num) / float(den)
         except (ValueError, ZeroDivisionError):
             fps_actual = 0.0
         self._assert(abs(fps_actual - fps_target) < 0.1, "帧率合规性",
-                     f"实测 {fps_actual:.2f}fps（决策 4：{fps_target}fps）",
+                     f"实测 {fps_actual:.2f}fps（全局统一 {fps_target}fps）",
                      metric_key="video.fps", measured=round(fps_actual, 3),
                      threshold=fps_target)
 

@@ -37,7 +37,7 @@ def _hex_to_rgb(hex_color: str, default=(255, 255, 255)) -> Tuple[int, int, int]
             return default
     return default
 
-OUT_W, OUT_H, FPS = 1080, 1920, 30
+OUT_W, OUT_H, FPS = 1080, 1920, 60
 FONT_BOLD = "C:/Windows/Fonts/msyhbd.ttc" if os.name == "nt" else "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 
@@ -122,17 +122,22 @@ def build_clip_filter(clip: Dict[str, Any], zoom_c: Dict[str, Any] = None) -> st
     return ",".join(parts)
 
 
-def generate_hook_card(text: str, out_path: str) -> str:
+def generate_hook_card(text: str, out_path: str,
+                       width: int = 720, height: int = 168) -> str:
     """生成前 2.5 秒黄金 Hook 悬浮卡片 (香槟金细边框 + 半透明深褐底)
 
-    尺寸说明（2026-10-24 对齐 SKILL 1.2）：
-      原文要求"超大视觉标题卡"宽 940~980px、高 160~180px。但该宽度在 1080
-      画幅上只剩左右各 50px 边距，且会与顶部平台标识条（高 88px）争抢顶部
-      空间。此处取折中 **720 x 168px**——高度落在 SKILL 的 160~180 区间内，
+    尺寸说明（2026-10-25 全局统一 720）：
+      SKILL.md §1.2 原写"超大视觉标题卡"宽 940~980px、高 160~180px。
+      2026-10-25 决策**全局统一为 720px 宽**（不再保留 940~980 口径）：
+      1080 画幅上 940~980 只剩左右各 50px 边距，且与顶部平台标识条（高 88px）
+      争抢顶部空间。高度沿用 168px，仍落在 SKILL 的 160~180 区间内，
       宽度足以承载 10~12 字卖点且不压边；纵向位置由 plan.hook_card.y 动态
       给出，装配前已自动避让人物头顶（实测 y=310 → 占据 310~478）。
+
+      尺寸来源：contracts/constraints.yaml 的 `hook_card.width/height`
+      （由 VideoAssembler 注入，改 yaml 即改画面）。
     """
-    w, h = 720, 168
+    w, h = int(width), int(height)
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     # 半透明深褐胶囊底色
@@ -535,7 +540,10 @@ class VideoAssembler:
         hook_text = plan.get("hook_card", {}).get("text", "极简松弛感 · 显瘦显气质")
         hook_y = int(plan.get("hook_card", {}).get("y", 280))  # 动态避让人脸顶（B10）
         hook_png = os.path.join(self.work_dir, "hook_card.png")
-        generate_hook_card(hook_text, hook_png)
+        hook_c = self.constraints.get("hook_card", {}) or {}
+        generate_hook_card(hook_text, hook_png,
+                           width=int(hook_c.get("width", 720) or 720),
+                           height=int(hook_c.get("height", 168) or 168))
 
         cta_text = plan.get("cta", {}).get("text", "戳左下方小黄车查看上身搭配")
         cta_png = os.path.join(self.work_dir, "cta_badge.png")

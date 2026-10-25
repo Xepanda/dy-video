@@ -117,13 +117,18 @@ def case_zoom_timed_transition():
     # 推镜分镜：必须有 zoompan 且带触发点/缓动表达式
     vf2 = build_clip_filter({"zoom": 1.3, "y_anchor": 0.35}, zc)
     assert "zoompan" in vf2, f"推镜分镜应有 zoompan: {vf2}"
-    trig_f = int(round(zc["trigger_sec"] * 30))
-    trans_f = int(round(zc["transition_sec"] * 30))
+    # 帧号由全局帧率推导（2026-10-25 起全局统一 60fps，不再硬编码 30）
+    from src.core.video_assembler import FPS as ASSEMBLER_FPS
+    trig_f = int(round(zc["trigger_sec"] * ASSEMBLER_FPS))
+    trans_f = max(1, int(round(zc["transition_sec"] * ASSEMBLER_FPS)))
     assert f"on-{trig_f}" in vf2, f"应含触发帧号 on-{trig_f}: {vf2}"
     assert f"/{trans_f}" in vf2, f"应含过渡帧数 /{trans_f}: {vf2}"
     assert "pow(" in vf2, "应使用 smoothstep 缓动（pow 表达式）"
+    # 全局帧率口径：SKILL / constraints / 装配器三方必须一致
+    assert CONSTRAINTS["video"]["fps"] == ASSEMBLER_FPS, \
+        f"约束帧率 {CONSTRAINTS['video']['fps']} 与装配器 {ASSEMBLER_FPS} 不一致"
     print(f"[PASS] 放大特效: 触发 {zc['trigger_sec']}s(frame {trig_f}) → "
-          f"过渡 {zc['transition_sec']}s({trans_f}帧, smoothstep)")
+          f"过渡 {zc['transition_sec']}s({trans_f}帧, smoothstep, {ASSEMBLER_FPS}fps)")
 
 
 def case_effect_is_decision_variable():
@@ -188,13 +193,70 @@ def case_qc_overlay_audit():
     print("[PASS] QC 已接入叠加元素复测 + 音画同步抽检")
 
 
+def case_spec_unified_60fps_and_hook720():
+    """2026-10-25 全局统一：帧率 60fps + Hook 标题卡 720×168。
+
+    守卫目标——防止再次出现"文档说一套、代码做一套"：
+      1) SKILL.md / constraints.yaml / 装配器 / QC / ChatCut 时间轴
+         五处帧率必须全部为 60；
+      2) Hook 标题卡宽度必须为 720，且由 constraints 驱动（改 yaml 即改画面）；
+      3) 仓库内不得残留 940~980 的旧口径。
+    """
+    from src.core.video_assembler import FPS as ASM_FPS, generate_hook_card
+    from src.tools.chatcut_bridge import FPS as BRIDGE_FPS
+    from src.qc.qc_auditor import QcAuditor
+    import inspect
+
+    # —— 1) 帧率五方一致 ——
+    assert ASM_FPS == 60, f"装配器帧率应为 60，实为 {ASM_FPS}"
+    assert BRIDGE_FPS == 60, f"ChatCut 时间轴帧率应为 60，实为 {BRIDGE_FPS}"
+    assert CONSTRAINTS["video"]["fps"] == 60, \
+        f"constraints.video.fps 应为 60，实为 {CONSTRAINTS['video']['fps']}"
+    skill = open(os.path.join(ROOT, "skills", "live-ecommerce-video-editor", "SKILL.md"),
+                 encoding="utf-8").read()
+    assert "60FPS" in skill, "SKILL.md 应写 60FPS"
+    # QC 默认阈值与约束一致
+    qc_src = inspect.getsource(QcAuditor)
+    assert 'video_c.get("fps", 60)' in qc_src, "QC 帧率默认阈值应为 60"
+    # 不允许残留旧口径 30fps（除输入素材探测的兜底值外）
+    for f in ("src/core/video_assembler.py", "src/tools/chatcut_bridge.py",
+              "src/qc/qc_auditor.py"):
+        txt = open(os.path.join(ROOT, f), encoding="utf-8").read()
+        assert "1920, 30" not in txt, f"{f} 仍残留 30fps 常量"
+        assert '"fps", 30' not in txt, f"{f} 仍残留 30fps 默认值"
+
+    # —— 2) Hook 卡 720×168 且约束驱动 ——
+    hc = CONSTRAINTS["hook_card"]
+    assert hc["width"] == 720, f"Hook 卡宽应为 720，实为 {hc['width']}"
+    assert hc["height"] == 168, f"Hook 卡高应为 168，实为 {hc['height']}"
+    out = os.path.join(TMP, "hook.png")
+    generate_hook_card("极简松弛感 · 显瘦显气质", out)
+    from PIL import Image
+    img = Image.open(out)
+    assert img.size == (720, 168), f"Hook 卡应 720x168，实为 {img.size}"
+    # 改 yaml 即改画面（约束驱动验证）
+    out2 = os.path.join(TMP, "hook_wide.png")
+    generate_hook_card("测试", out2, width=hc["width"], height=hc["height"])
+    assert Image.open(out2).size == (720, 168)
+
+    # —— 3) 旧口径 940~980 不得残留于规范类文档 ——
+    for f in ("skills/live-ecommerce-video-editor/SKILL.md",
+              "workflows/standard_pipeline.md"):
+        txt = open(os.path.join(ROOT, f), encoding="utf-8").read()
+        assert "940~980" not in txt, f"{f} 仍残留 940~980 旧口径"
+        assert "980px" not in txt, f"{f} 仍残留 980px 旧口径"
+    print("[PASS] 全局统一：60fps（SKILL/约束/装配器/QC/ChatCut 五方一致）+ "
+          "Hook 卡 720×168（约束驱动，旧 940~980 口径已清零）")
+
+
 def main():
     failures = []
     for fn in (case_sticker_layout_vertical, case_platform_bar,
                case_stage_sticker_text, case_stage_sticker_render,
                case_zoom_timed_transition, case_effect_is_decision_variable,
                case_occlusion_patch, case_split_labels,
-               case_qc_overlay_audit):
+               case_qc_overlay_audit,
+               case_spec_unified_60fps_and_hook720):
         try:
             fn()
         except AssertionError as e:

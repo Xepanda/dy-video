@@ -15,7 +15,7 @@
 | workwear_11186 | 64.59s | 4 | **跨源** | 0101 + 0326 | 27 | 219 | PASS | 1 |
 | grid_coat_11231 | 62.06s | 4 | **跨源** | 0123 + 0303 | 31 | 276 | PASS | 1 |
 
-全部成片 1080×1920 / 30fps / H.264+AAC，时长落在 45–65s 区间内。
+全部成片 1080×1920 / 60fps / H.264+AAC，时长落在 45–65s 区间内。
 
 唯一 WARN 项均为**封面人像宽占比**（0.37–0.56，未达0.75 目标）——这是 `framing_policy: example`
 示例版式的预期结果：为底部商品名区预留空间并保全完整人体，纪要语义为"尽力居中"，不拦截交付。
@@ -93,7 +93,7 @@ c04_styling  23.64s  ← 0326
 ## 四、交付物
 
 ### 成片（output/&lt;project_id&gt;/）
-- `&lt;pid&gt;_final.mp4` — 1080×1920 / 30fps / 46.6–56.3 MB
+- `&lt;pid&gt;_final.mp4` — 1080×1920 / 60fps / 46.6–56.3 MB
 - `&lt;pid&gt;_cover.jpg` — 1080×1920 封面（品牌区固定顶部 y=125，商品名区 y=1536–1770）
 - `qc_report.json` / `agent_decision_manifest.json` / `asr_verification_report.json`
 
