@@ -48,6 +48,7 @@ UNIT_TESTS = [
     "tests/test_asr_prompt_policy.py",
     "tests/test_stage_cache_fingerprint.py",
     "tests/test_video_effects.py",
+    "tests/test_requirements_audit.py",
 ]
 
 PYTHON = sys.executable
@@ -145,7 +146,7 @@ def main():
 
     # ---- 层 1：单元测试 ----
     print("=" * 66)
-    print("[回归层 1/3] 单元测试（价格/OCR/网关/桥接/LLM/管道）")
+    print("[回归层 1/3] 单元测试（价格/OCR/网关/桥接/LLM/管道/需求审计）")
     print("=" * 66)
     unit = run_unit_tests()
     unit_fail = [k for k, v in unit.items() if v["status"] != "PASS"]

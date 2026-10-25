@@ -2,6 +2,16 @@
 
 > 每个纪要要求都有唯一 metric key 与测量工具，保证可追溯。阈值定义见 `constraints.yaml`。
 
+## 📌 关联文档
+
+- **既定需求基线（机器可读）**：`contracts/requirements.yaml` —— 43 条既定需求的证据锚点与实现状态
+- **审计引擎**：`src/tools/audit_requirements.py` —— AST 级判定"yaml 键是否真被代码消费"
+- **人读版基线**：`docs/requirements_baseline_2026-10-25.md`
+- 校验命令：`python -u src/tools/audit_requirements.py`（已接入 `scripts/run_regression.py` 回归层）
+
+> 本表的手工状态标注与 `requirements.yaml` 的自动判定互为交叉校验：
+> 出现不一致时以审计引擎输出为准，并同步修正两处。
+
 ## 📌 状态图例（2026-10-24 审计后新增）
 
 本表原先把"计划实现"当成"已实现"，导致文档与代码脱节。现明确标注真实状态：
@@ -98,3 +108,4 @@
 | 2026-10-20 | v1.0 建立；锁定决策 1（水平 1:6:1）、决策 2（金色商品名）、决策 3（字幕零价格）、决策 4（30fps） |
 | 2026-10-24 | v1.1 审计后修订：新增状态图例；如实标注 6 个"声称 BLOCK 但未落地"的项（重影/外廓/landmark 置信度/av_sync 抽检/horizontal_margin_ratio/duration_tolerance_sec）；补齐已落地项的真实 metric key；新增 ASR 审核与字幕章节 |
 | 2026-10-24 | v1.2 特效轮修订：新增「视频叠加元素」章节（平台标识条/挂角贴纸/放大特效/镜像遮挡/音画同步）；封面贴图布局改为 vertical 靠右堆叠；av_sync 由 ⚠️ 未接线升级为 ✅ 已接入 |
+| 2026-10-25 | v1.3 审计基线轮：新增「关联文档」段落，指向 `contracts/requirements.yaml`（43 条既定需求机器可读基线）与 AST 审计引擎；确认 27 个死键并逐条登记（R-X01~R-X10）；补记 `video.av_sync_error_max_ms` 已接线（此前记为未接线） |
