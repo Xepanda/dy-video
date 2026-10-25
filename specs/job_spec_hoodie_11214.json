@@ -1,0 +1,38 @@
+{
+  "project_id": "hoodie_11214",
+  "raw_video_path": "data/raw_samples/6 松弛帽衫·绵羊毛假两件连帽拉链卫衣11214/1011 松弛帽衫·绵羊毛假两件连帽拉链卫衣11214  0518.mp4",
+  "brand": {
+    "title_en": "MIXCITY",
+    "subtitle_cn": "深圳高端女装"
+  },
+  "product": {
+    "title_line1": "松弛帽衫·绵羊毛假两件",
+    "title_line2": "连帽拉链卫衣",
+    "item_images": [
+      "data/placeholders/hoodie_11214_placeholder_1.png",
+      "data/placeholders/hoodie_11214_placeholder_2.png"
+    ],
+    "placeholder_images": true,
+    "placeholder_note": "当前为占位示例图，仅用于保证封面版面完整；拿到真实商品图后替换 product.item_images 同名文件即可"
+  },
+  "options": {
+    "duration_range": "45-65",
+    "split_strategy": "auto",
+    "highlight_keywords": [
+      "松弛帽衫",
+      "绵羊毛",
+      "假两件",
+      "连帽",
+      "拉链",
+      "卫衣",
+      "保暖",
+      "百搭",
+      "宽松",
+      "显瘦"
+    ]
+  },
+  "raw_video_paths": [
+    "data/raw_samples/6 松弛帽衫·绵羊毛假两件连帽拉链卫衣11214/1011 松弛帽衫·绵羊毛假两件连帽拉链卫衣11214  0044.mp4",
+    "data/raw_samples/6 松弛帽衫·绵羊毛假两件连帽拉链卫衣11214/1011 松弛帽衫·绵羊毛假两件连帽拉链卫衣11214  0518.mp4"
+  ]
+}

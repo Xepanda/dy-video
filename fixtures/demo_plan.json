@@ -1,0 +1,114 @@
+{
+  "project_id": "fixture_demo",
+  "raw_video_path": "data/raw_samples/demo.mp4",
+  "multi_source": false,
+  "sources_used": [
+    "data/raw_samples/demo.mp4"
+  ],
+  "total_expected_duration": 62.59,
+  "clips": [
+    {
+      "id": "c01_hook",
+      "st": 259.33,
+      "end": 265.47,
+      "dur": 6.14,
+      "is_hook": true,
+      "zoom": 1.0,
+      "y_anchor": 0.35,
+      "effect": "none",
+      "category": "hook",
+      "desc": "好看，没有气质，我今天没怎么看美洋",
+      "source_file": "data/raw_samples/demo.mp4",
+      "source_tag": "demo.mp4"
+    },
+    {
+      "id": "c02_fabric",
+      "st": 72.59,
+      "end": 91.47,
+      "dur": 18.88,
+      "is_hook": false,
+      "zoom": 1.3,
+      "y_anchor": 0.35,
+      "effect": "none",
+      "category": "fabric",
+      "desc": "买颜色，它这个面料是进口的，然后很立体，就其实我…",
+      "source_file": "data/raw_samples/demo.mp4",
+      "source_tag": "demo.mp4"
+    },
+    {
+      "id": "c03_fit",
+      "st": 127.24,
+      "end": 138.4,
+      "dur": 11.16,
+      "is_hook": false,
+      "zoom": 1.0,
+      "y_anchor": 0.35,
+      "effect": "none",
+      "category": "fit",
+      "desc": "这个我跟你说，我要穿的话，我搭着黑色裙子，简直人…",
+      "source_file": "data/raw_samples/demo.mp4",
+      "source_tag": "demo.mp4"
+    },
+    {
+      "id": "c04_styling",
+      "st": 18.0,
+      "end": 44.41,
+      "dur": 26.41,
+      "is_hook": false,
+      "zoom": 1.0,
+      "y_anchor": 0.35,
+      "effect": "none",
+      "category": "styling",
+      "desc": "然后这个你们不一定一定要搭我们这种窄一点裤，其实…",
+      "source_file": "data/raw_samples/demo.mp4",
+      "source_tag": "demo.mp4"
+    }
+  ],
+  "hook_card": {
+    "text": "极简松弛感 · 显瘦显气质",
+    "dur": 2.5,
+    "y": 361,
+    "face_top_y": 0.2715
+  },
+  "cta": {
+    "text": "戳左下方小黄车查看上身搭配",
+    "dur": 2.5
+  },
+  "boom": {
+    "volume": 0.45,
+    "file": "boom.wav"
+  },
+  "subtitles": {
+    "keywords": [
+      "半岛棉",
+      "镂空",
+      "显瘦",
+      "针织",
+      "做工",
+      "进口",
+      "浪漫",
+      "老钱",
+      "松弛",
+      "超显瘦",
+      "更漂亮"
+    ]
+  },
+  "selection_meta": {
+    "funnel": {
+      "hook": 6.14,
+      "fabric": 18.88,
+      "fit": 11.16,
+      "styling": 28.41
+    },
+    "rejected_count": 28,
+    "candidate_blocks": 19,
+    "notes": [
+      "配额补齐后总时长 64.59s"
+    ],
+    "total_duration": 62.59,
+    "target_range": [
+      45.0,
+      64.5
+    ]
+  }
+}

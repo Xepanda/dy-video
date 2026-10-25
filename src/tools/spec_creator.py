@@ -167,8 +167,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 </div>
                 <div class="form-group">
                     <label>原始直播视频绝对路径 (Raw Video File)</label>
-                    <input type="text" id="raw_video_path" name="raw_video_path" value="D:/Projects/dy-live-ecommerce-editor/data/raw_samples/10 绵羊 半岛棉镂空钩花气质显瘦针织衫7270/0826  绵羊 半岛棉镂空钩花气质显瘦针织衫7270  0425.mp4" required>
-                    <div class="hint">支持复制完整路径粘贴（支持 .mp4, .mov）</div>
+                    <input type="text" id="raw_video_path" name="raw_video_path" value="{{RAW_VIDEO_DEFAULT}}" required>
+                    <div class="hint">支持复制完整路径粘贴（支持 .mp4, .mov）；可填相对仓库根的路径</div>
                 </div>
             </div>
 
@@ -202,8 +202,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 </div>
                 <div class="form-group">
                     <label>封面浮动商品贴图 1 (正方形平铺白底图/挂件)</label>
-                    <input type="text" id="product_img_1" name="product_img_1" value="D:/Projects/dy-live-ecommerce-editor/data/raw_samples/sample_product_card.png">
-                    <div class="hint">选填，留空则不渲染贴图卡片</div>
+                    <input type="text" id="product_img_1" name="product_img_1" value="{{PRODUCT_IMG_DEFAULT}}">
+                    <div class="hint">选填。留空时流水线会**自动补一张占位示例图**（标明为占位，后续替换为真实商品图）</div>
                 </div>
                 <div class="form-group">
                     <label>封面浮动商品贴图 2 (第二款/另一颜色)</label>
@@ -219,17 +219,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     <div class="form-group">
                         <label>成片目标时长区间 (秒)</label>
                         <select id="duration_range" name="duration_range">
+                            <option value="45-65" selected>45 ~ 65 秒 (标准区间，区间内浮动)</option>
                             <option value="45-55">45 ~ 55 秒 (完播率优先)</option>
-                            <option value="50-60" selected>50 ~ 60 秒 (标准推荐)</option>
+                            <option value="50-60">50 ~ 60 秒 (紧凑)</option>
                             <option value="55-65">55 ~ 65 秒 (丰富卖点)</option>
                         </select>
                     </div>
                     <div class="form-group">
                         <label>双色对比分屏策略</label>
                         <select id="split_strategy" name="split_strategy">
-                            <option value="auto" selected>自动探测 (检测到双色上身则分屏，否则单画面)</option>
-                            <option value="force_off">强制关闭分屏 (仅保留单画面特写)</option>
+                            <option value="force_off" selected>强制关闭分屏（当前版本默认）</option>
+                            <option value="auto" disabled>自动探测（规划中：v2 分屏算子开发后开放）</option>
                         </select>
+                        <div class="hint">分屏算子（540:540 双色对比）开发中，暂不生效；选 auto 也不会改变输出</div>
                     </div>
                 </div>
                 <div class="form-group">
@@ -269,6 +271,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             if (img1) payload.product.item_images.push(img1);
             if (img2) payload.product.item_images.push(img2);
 
+            // 跨素材选段（2026-10-21）：同目录多视频视为同一商品的直播素材，
+            // 流水线会自动扫描 raw_video_path 所在目录的全部视频并跨源挑选最优片段。
+            // 此处显式置空数组，由流水线侧按目录扫描补全（避免 GUI 猜测）。
+            payload.raw_video_paths = [];
+
             fetch('/save', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -294,7 +301,11 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
-        self.wfile.write(HTML_TEMPLATE.encode("utf-8"))
+        # 注入本机实际路径（可移植性，2026-10-24）
+        html = (HTML_TEMPLATE
+                .replace("{{RAW_VIDEO_DEFAULT}}", _default_raw_video())
+                .replace("{{PRODUCT_IMG_DEFAULT}}", _default_product_image()))
+        self.wfile.write(html.encode("utf-8"))
 
     def do_POST(self):
         if self.path == "/save":
@@ -333,6 +344,27 @@ def start_server():
     except KeyboardInterrupt:
         print("\n服务已停止。")
         server.server_close()
+
+
+def _default_raw_video() -> str:
+    """挑一个本机存在的直播素材作为表单默认值（无则留空）。"""
+    base = os.path.join(PROJECT_ROOT, "data", "raw_samples")
+    if not os.path.isdir(base):
+        return ""
+    for dirpath, _, files in os.walk(base):
+        for fn in sorted(files):
+            if fn.lower().endswith(".mp4"):
+                return os.path.join(dirpath, fn).replace("\\", "/")
+    return ""
+
+
+def _default_product_image() -> str:
+    """挑一个本机存在的商品图作为表单默认值（无则留空）。"""
+    for rel in ("data/raw_samples/sample_product_card.png",):
+        p = os.path.join(PROJECT_ROOT, rel)
+        if os.path.exists(p):
+            return p.replace("\\", "/")
+    return ""
 
 if __name__ == "__main__":
     start_server()
