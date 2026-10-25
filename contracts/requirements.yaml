@@ -1,0 +1,599 @@
+# 既定需求基线（Requirements Baseline）v1.0
+# ============================================================
+# 目的：把散落在文档里的"既定需求"抽取为**可机器复核**的结构化清单，
+#       使"是否满足"从人工判断变成自动判据。
+#
+# 来源（需求原文出处）：
+#   [PLAN]  docs/editing_task_plan_2026-10-21.md   —— 需求编号表 + 字幕校对流水线
+#   [SKILL] skills/live-ecommerce-video-editor/SKILL.md —— 7 大节制作规范
+#   [CON]   contracts/constraints.yaml + contracts/constraints_map.md —— 量化约束
+#
+# 字段说明：
+#   id            需求编号（R-xxx）
+#   source        需求原文出处 + 章节
+#   title         需求摘要
+#   level         约束级别：BLOCK（不满足即失败）/ WARN（提示）/ INFO（登记）
+#   status        实现状态：implemented / partial / unimplemented
+#   constraint_keys   证据锚点 ①：constraints.yaml 键路径（应存在且被消费）
+#   qc_assertions     证据锚点 ②：qc_auditor.py 中的断言名（应存在）
+#   code_symbols      证据锚点 ③：代码符号（函数/类名，应存在）
+#   allow_dead    true 表示该锚点允许"yaml 有键但无消费者"（仅登记需求）
+#   note          补充说明（偏离、冲突、待决策项）
+#
+# 校验方式：
+#   python -u src/tools/audit_requirements.py          # 逐条核对 + 死键清单
+#   python -u tests/test_requirements_audit.py         # 单元测试（回归层）
+#
+# 规则：任何一条 status 与实测不符 → 测试失败。
+#       这就是"阈值只改本文件"与"声明即实现"两条纪律的机器化守卫。
+
+version: 1.0
+updated: "2026-10-25"
+
+requirements:
+
+  # ========================================================
+  # A. 剪辑任务计划（PLAN）—— 5 条编号需求
+  # ========================================================
+  - id: R-P01
+    source: "[PLAN] docs/editing_task_plan_2026-10-21.md §一 #1"
+    title: 缺商品图时自动补占位示例图并登记
+    level: BLOCK
+    status: implemented
+    constraint_keys: []
+    qc_assertions: ["封面贴图几何"]
+    code_symbols: ["make_placeholder_card", "ensure_placeholder_cards"]
+    note: 占位图走标准贴图渲染路径，C11~C14 几何断言得以真实验证；占位图会被衣着匹配跳过。
+
+  - id: R-P02
+    source: "[PLAN] docs/editing_task_plan_2026-10-21.md §一 #2"
+    title: 成片时长 45–65s 区间内浮动，优先内容完整
+    level: BLOCK
+    status: implemented
+    constraint_keys: ["video.duration_range"]
+    qc_assertions: ["成片时长合规性"]
+    code_symbols: ["build_plan"]
+    note: 漏斗配额贪心 + 补齐 + 上限修剪；切片留 0.5s 安全余量防物理时长溢出。
+
+  - id: R-P03
+    source: "[PLAN] docs/editing_task_plan_2026-10-21.md §一 #3"
+    title: 允许丢段，只保留商品介绍/卖点/演示
+    level: BLOCK
+    status: implemented
+    constraint_keys: ["blacklist.inventory", "blacklist.changover"]
+    qc_assertions: []
+    code_symbols: ["build_plan"]
+    note: 三层过滤：黑名单 → ASR 幻觉/元话语闲聊 → 补齐阶段只接纳 categories 非空块。
+
+  - id: R-P04
+    source: "[PLAN] docs/editing_task_plan_2026-10-21.md §一 #4 + §四"
+    title: 本地 ASR + 本地 agent 校对，无错字/无断句错误
+    level: BLOCK
+    status: implemented
+    constraint_keys: ["asr_review.max_seg_sec", "asr_review.min_density",
+                      "asr_review.warn_ratio_limit", "asr_review.cjk_min_ratio",
+                      "asr_review.repeat_run_len", "asr_review.overlap_tolerance_sec",
+                      "asr_review.duration_tolerance_sec"]
+    qc_assertions: ["ASR字幕语境纯净度"]
+    code_symbols: ["AsrContextVerifier", "verify_and_correct"]
+    note: >-
+      Whisper(small, zh, VAD, condition_on_previous_text=False) → AsrContextVerifier
+      （22 条同音错词表 + 滑动窗口消歧 + _polish_for_subtitle）→ LLM 复核（可降级）。
+      ⚠️ 不注入 initial_prompt（实测注入后模型把 prompt 当音频内容，挤占开头约 30s），
+      领域词纠错改由本地本体引擎负责。
+
+  - id: R-P05
+    source: "[PLAN] docs/editing_task_plan_2026-10-21.md §一 #5 + §三"
+    title: 同目录多视频跨素材挑选最优片段
+    level: BLOCK
+    status: implemented
+    constraint_keys: []
+    qc_assertions: []
+    code_symbols: ["_collect_source_videos", "compute_pipeline_key"]
+    note: >-
+      时间轴隔离关键：ASR 逐源独立转录、滑动窗口不跨文件、build_blocks 按 source_file
+      分组绝不跨文件合并、字幕映射只取同源 segments、缓存键升 v3 纳入全部源哈希。
+
+  # ========================================================
+  # B. SKILL §1 黄金 3 秒
+  # ========================================================
+  - id: R-S101
+    source: "[SKILL] §1.1 打破素材线性时间顺序"
+    title: Hook 剪切到 0.0s~2.5s，不得从寒暄开场
+    level: BLOCK
+    status: implemented
+    constraint_keys: ["video.funnel.hook.min", "video.funnel.hook.max"]
+    qc_assertions: []
+    code_symbols: ["build_plan"]
+    note: hook 类分镜配额 3~8 段，首段为 hook。
+
+  - id: R-S102
+    source: "[SKILL] §1.2 超大视觉标题卡"
+    title: 标题卡 940~980×160~180，定位 y=150~430 且不遮挡五官
+    level: BLOCK
+    status: implemented
+    constraint_keys: []
+    qc_assertions: []
+    code_symbols: ["validate_hook_card"]
+    note: >-
+      决策_gateway.validate_hook_card 校验 y ∈ [150,430] 且 y+130 ≤ face_top_y*1920-30；
+      实际实现用 720×168 折中卡（宽度未占满 940~980，属已知偏差）。
+    allow_dead: true
+
+  - id: R-S103
+    source: "[SKILL] §1.3 音频冲击混音"
+    title: 0.0s 混入 45~90Hz Sub-Bass Boom 带阻尼衰减
+    level: WARN
+    status: implemented
+    constraint_keys: []
+    qc_assertions: []
+    code_symbols: ["generate_sub_bass_boom"]
+    note: f_start=90.0 → f_end=45.0，duration=1.2s，envelope=exp(-4.5t)，48kHz。
+
+  # ========================================================
+  # C. SKILL §2 镜头语言与特效
+  # ========================================================
+  - id: R-S201
+    source: "[SKILL] §2.1 镜像翻转与文字防反遮罩"
+    title: hflip 必须配防反文字遮挡，找不到可遮挡文字则拒绝镜像
+    level: BLOCK
+    status: implemented
+    constraint_keys: ["mirror_effect.enabled", "mirror_effect.occlusion_required"]
+    qc_assertions: ["镜像防反文字遮挡"]
+    code_symbols: ["generate_occlusion_patch"]
+    note: >-
+      ⚠️ 已知缺口：mirror_effect.min_occlusion_ratio（可遮挡面积占比下限）已声明但代码
+      全流程未消费——遮挡判定目前只走"OCR → 上半屏筛选 → 面积阈值"，
+      面积下限阈值实际未参与决策。已登记为 R-X01。
+
+  - id: R-S202
+    source: "[SKILL] §2.2 细节推镜放大特写"
+    title: 推镜倍率 1.25~1.35x，锚点 y=0.35h~0.65h
+    level: BLOCK
+    status: partial
+    constraint_keys: ["zoom_effect.trigger_sec", "zoom_effect.transition_sec",
+                      "zoom_effect.easing", "zoom_effect.y_anchor"]
+    qc_assertions: ["放大特效时序"]
+    code_symbols: ["build_clip_filter"]
+    note: >-
+      定时缓动推镜已实现（触发点 + 过渡 + smoothstep 缓动 + 锚点）。
+      ⚠️ 缺口：zoom_effect.max_zoom（目标倍率上限）代码不读，实际倍率由
+      build_plan 的硬编码 1.3 决定，改 yaml 无效。已登记为 R-X02。
+    allow_dead: true
+
+  - id: R-S203
+    source: "[SKILL] §2.3 多款式/颜色对比展示"
+    title: 分屏 540:1920 等分 + 6~10px 金线 + 双侧独立胶囊标签
+    level: BLOCK
+    status: implemented
+    constraint_keys: ["split_effect.enabled", "split_effect.divider_width",
+                      "split_effect.divider_color", "split_effect.label_gap"]
+    qc_assertions: []
+    code_symbols: []
+    note: >-
+      分屏各占半屏（540×1920），中缝金色发光分割线，双侧胶囊标签。
+      ⚠️ split_effect 的 radius/border_color/border_width/vertical_center 四个键
+      实际被 sticker 段消费（cover_renderer 读 sticker_c[...]），分屏路径并不读它们
+      ——属"键归属错位"，已登记为 R-X05。
+
+  # ========================================================
+  # D. SKILL §3 字幕系统
+  # ========================================================
+  - id: R-S301
+    source: "[SKILL] §3.2 安全视域规范"
+    title: 字幕 MarginV=240、Alignment=2、字号 48~52pt
+    level: BLOCK
+    status: implemented
+    constraint_keys: ["video.subtitle_margin_v_min"]
+    qc_assertions: ["字幕避让小黄车盲区"]
+    code_symbols: []
+    note: >-
+      ASS 样式实测 MarginV=240 / Alignment=2 / 字号 50pt（落在 48~52 区间内）。
+      ⚠️ video.subtitle_safe_zone_px（安全区）与 subtitle_margin_v_min（避让）
+      语义重复，实际生效的是后者——已登记为 R-X03。
+
+  - id: R-S302
+    source: "[SKILL] §3.3 高转化字幕样式"
+    title: 主体白底黑边，核心卖点词用 &H003CEBFF& 覆盖为亮黄
+    level: WARN
+    status: implemented
+    constraint_keys: []
+    qc_assertions: []
+    code_symbols: []
+    note: 实测 ASS_HL_YELLOW = "&H0000E6FF&"（ASS 为 BGR，等价于 RGB 亮黄 #FFE96B）。
+
+  - id: R-S301A
+    source: "[SKILL] §3.1.4 时间戳硬性守恒"
+    title: 仅纠错文字层，start/end/duration 严禁偏移
+    level: BLOCK
+    status: implemented
+    constraint_keys: ["asr_review.duration_tolerance_sec", "asr_review.overlap_tolerance_sec"]
+    qc_assertions: []
+    code_symbols: ["verify_and_correct"]
+    note: _polish_for_subtitle 的超长句切分按字数比例分配时长，保证时间戳守恒。
+
+  - id: R-S303
+    source: "[SKILL] §3.1.1~3.1.3 语境感知校验三件套"
+    title: prompt 注入 / 滑动窗口消歧 / 拼音同音置换
+    level: BLOCK
+    status: partial
+    constraint_keys: ["subtitle_banned_tokens"]
+    qc_assertions: ["ASR字幕语境纯净度"]
+    code_symbols: ["AsrContextVerifier"]
+    note: >-
+      静态同音错词表 + 滑动窗口消歧已实现（本地本体引擎）。
+      ⚠️ 未实现项：① 任务契约 prompt 注入（实测有害，2026-10-24 明确禁用）；
+      ② 拼音同音指纹置换（pypinyin 置换网）尚未落地，当前为固定错词表。
+    allow_dead: true
+
+  # ========================================================
+  # E. SKILL §4 封面设计矩阵
+  # ========================================================
+  - id: R-S401
+    source: "[SKILL] §4.1 Option 1 爆款卖点型封面"
+    title: 1080×1920 无价格封面：顶部主标 + 底部金色渐变卖点腰封 + 右侧贴图
+    level: BLOCK
+    status: implemented
+    constraint_keys: ["sticker.size", "sticker.margin_a", "sticker.gap_a",
+                      "text.product_name_top_ratio", "text.wrap_width_ratio",
+                      "text.line_spacing_ratio"]
+    qc_assertions: ["封面品牌区几何", "封面商品名几何", "封面贴图几何"]
+    code_symbols: ["render_cover_with_meta"]
+    note: >-
+      贴图 280×280 正方形圆角卡片、圆角 20px、淡灰描边、靠右距离 32px。
+      2026-10-24 需求变更：贴图由并排改为**垂直堆叠（sticker.layout=vertical）**。
+
+  - id: R-S402
+    source: "[SKILL] §4.1 封面与字幕均无价格（决策 3）"
+    title: 封面/字幕零价格硬约束
+    level: BLOCK
+    status: implemented
+    constraint_keys: ["price.subtitle_assert_zero"]
+    qc_assertions: ["字幕零价格（决策3）"]
+    code_symbols: ["find_price_matches"]
+    note: >-
+      ⚠️ price.clip_exclude（选段级价格排除）与 price.whitelist_units（单位白名单）
+      已声明但代码不读——选段级排除实际在 detect_price 内部实现，单位白名单为
+      模块内常量。已登记为 R-X04。
+
+  - id: R-S403
+    source: "[SKILL] §4.1.3 商品名金色渐变 + 深褐描边 + 动感斜体"
+    title: 商品名金色渐变 #FFE9A8→#E8A91E + 深褐描边 + 斜体 -0.12"
+    level: BLOCK
+    status: partial
+    constraint_keys: ["text.product_name_shear", "text.product_name_hue_range",
+                      "text.product_name_sat_min", "text.product_name_hue_pixel_ratio"]
+    qc_assertions: ["封面商品名金色色相"]
+    code_symbols: []
+    note: >-
+      斜体与色相/饱和度断言已接线并有 QC 复测。
+      ⚠️ 缺口：text.product_name_gradient / product_name_stroke 及各品牌
+      fill/stroke/gradient 键全部无消费者——封面渲染用的是 cover_renderer 里的
+      硬编码常量（PRODUCT_GRADIENT_TOP 等），改 yaml 不改变画面。已登记为 R-X06。
+
+  - id: R-S404
+    source: "[SKILL] §4.1.1 底图纯净无字正帧 / 人物主体宽占 75% / 可见膝盖及以下"
+    title: 封面底图无背景文字 + 人宽占比 75% + 完整人体（见膝盖）"
+    level: BLOCK
+    status: implemented
+    constraint_keys: ["cover.person_width_ratio", "cover.person_width_tolerance",
+                      "cover.knee_y_max", "cover.ankle_y_max",
+                      "cover.knee_visibility_min", "cover.face_yaw_max_deg",
+                      "cover.ear_min", "cover.mar_max"]
+    qc_assertions: ["封面背景文字纯净度", "封面宽占比复测", "封面完整人体复测"]
+    code_symbols: ["extract_cover_candidates"]
+    note: >-
+      ⚠️ 覆盖段缺口：cover.knees_visible / ankles_visible 两个布尔键无消费者
+      （代码用几何判据 ankle_y_max 取代），cover.garment_match_min 与
+      garment_match 段的同名键重复且未被读取。已登记为 R-X07。
+
+  - id: R-S405
+    source: "[SKILL] §4.1 衣着一致性（模特衣服 = 商品图）"
+    title: 模特衣着与商品图片一致（CLIP 阈值 0.75）"
+    level: BLOCK
+    status: implemented
+    constraint_keys: ["garment_match.engine", "garment_match.garment_match_min",
+                      "garment_match.histogram_min"]
+    qc_assertions: ["封面衣着一致性"]
+    code_symbols: ["garment_match_score", "check_constraints"]
+    note: >-
+      CLIP 引擎 → BLOCK 级，直方图降级 → WARN 级，占位图跳过。
+      ⚠️ garment_match.clip_model（open_clip 模型名）代码硬编码 ViT-B-32，
+      改 yaml 无效——已登记为 R-X08。
+
+  # ========================================================
+  # F. SKILL §5 尾部 CTA
+  # ========================================================
+  - id: R-S501
+    source: "[SKILL] §5 尾部 CTA 转化闭环"
+    title: 末 2~3s 收单金句 + 指向提示承接小黄车"
+    level: WARN
+    status: implemented
+    constraint_keys: []
+    qc_assertions: []
+    code_symbols: []
+    note: 尾部 CTA 贴片与收单文案在 assemble_video_tool 的总装阶段合成。
+
+  # ========================================================
+  # G. SKILL §7 避坑指南（工程约束）
+  # ========================================================
+  - id: R-S701
+    source: "[SKILL] §7 表格行 6：单图 -loop 1 挂起死锁"
+    title: ffmpeg 单图输入必须追加 -t 或 -shortest，避免后台不退出"
+    level: BLOCK
+    status: implemented
+    constraint_keys: []
+    qc_assertions: []
+    code_symbols: []
+    note: 所有单图贴纸/封面输入均带 -t 限时。
+
+  - id: R-S702
+    source: "[SKILL] §3.1 FFmpeg Windows 路径转义"
+    title: Windows 下字幕用相对路径 + cwd=temp_dir，避免 original_size 报错"
+    level: BLOCK
+    status: implemented
+    constraint_keys: []
+    qc_assertions: ["字幕文件存在性"]
+    code_symbols: []
+    note: 字幕烧录在临时目录内以相对路径调用。
+
+  # ========================================================
+  # H. 量化约束（CON）—— 纪要硬指标
+  # ========================================================
+  - id: R-C001
+    source: "[CON] C1 人物不要糊"
+    title: 封面底图放大后清晰度 ≥200（BLOCK），扫描期绝对地板 80"
+    level: BLOCK
+    status: implemented
+    constraint_keys: ["cover.sharpness_min", "cover.sharp_admission_min",
+                      "cover.sharp_relative_ratio", "cover.face_sharpness_min"]
+    qc_assertions: ["封面放大清晰度复测"]
+    code_symbols: ["extract_cover_candidates"]
+    note: v1.2 起由绝对阈值改为"绝对地板 80 + 素材分位相对校准"。
+
+  - id: R-C002
+    source: "[CON] V1~V2, V6 成片硬指标"
+    title: 成片 1080×1920 / 30fps / 45~65s / 无黑帧"
+    level: BLOCK
+    status: implemented
+    constraint_keys: ["video.resolution", "video.fps", "video.duration_range",
+                      "video.black_frame_max_ratio", "video.blackdetect_min_duration"]
+    qc_assertions: ["竖屏分辨率合规性", "帧率合规性", "成片时长合规性", "无黑帧"]
+    code_symbols: []
+    note: >-
+      ⚠️ 已知冲突：SKILL.md §5 写"成片 1080x1920 60FPS"，项目决策 4 定为 30fps
+      （未拍板）。当前以 constraints.yaml（30fps）为准，SKILL 文档待同步。
+    allow_dead: true
+
+  - id: R-C003
+    source: "[CON] V4 音频响度"
+    title: 综合响度 -14 LUFS ±1.5，真峰值 ≤ -0.5 dBTP"
+    level: BLOCK
+    status: implemented
+    constraint_keys: ["audio.loudness_lufs", "audio.loudness_tolerance",
+                      "audio.true_peak_max_dbtp"]
+    qc_assertions: ["音频响度合规性"]
+    code_symbols: []
+    note: 两遍 loudnorm 混流；⚠️ audio.sample_rate（48000）代码未读，实际由 ffmpeg 参数写死。
+
+  - id: R-C004
+    source: "[CON] V5 字幕安全区"
+    title: 字幕底部避让小黄车盲区"
+    level: BLOCK
+    status: implemented
+    constraint_keys: ["video.subtitle_margin_v_min"]
+    qc_assertions: ["字幕避让小黄车盲区"]
+    code_symbols: []
+    note: 见 R-S301。
+
+  - id: R-C005
+    source: "[CON] 音画同步"
+    title: 音画同步抽检（容差 40ms）"
+    level: WARN
+    status: implemented
+    constraint_keys: ["video.av_sync_error_max_ms"]
+    qc_assertions: ["音画同步抽检"]
+    code_symbols: []
+    note: >-
+      QC「音画同步抽检」断言已接入 ffmpeg ashowinfo 抽检，阈值键
+      video.av_sync_error_max_ms 已被代码消费（src/qc/qc_auditor.py:354）。
+
+  - id: R-C006
+    source: "[CON] C7 衣着一致性阈值"
+    title: CLIP 精确阈值 0.75（BLOCK）"
+    level: BLOCK
+    status: implemented
+    constraint_keys: ["garment_match.garment_match_min", "garment_match.histogram_min"]
+    qc_assertions: ["封面衣着一致性"]
+    code_symbols: ["garment_match_score", "check_constraints"]
+    note: 见 R-S405。
+
+  - id: R-C007
+    source: "[CON] V7 / B11 背景文字纯净度"
+    title: 封面背景文字面积占比 ≤2%（BLOCK）"
+    level: BLOCK
+    status: implemented
+    constraint_keys: ["ocr.background_text_area_max", "ocr.min_confidence",
+                      "ocr.min_box_area_px", "ocr.enforce_level", "ocr.engine"]
+    qc_assertions: ["封面背景文字纯净度"]
+    code_symbols: ["detect_text_boxes", "check_background_text"]
+    note: >-
+      ⚠️ cover.ocr_area_ratio_max 与 ocr.background_text_area_max 语义重复，
+      生效的是后者——已登记为 R-X03。
+
+  - id: R-C008
+    source: "[CON] 构图几何（决策 1 / 决策 2）"
+    title: 人宽 75%、脚底 78%、头顶预留、商品名金色"
+    level: BLOCK
+    status: implemented
+    constraint_keys: ["cover.person_width_ratio", "cover.person_width_tolerance",
+                      "cover.person_height_max_ratio", "cover.feet_target_ratio",
+                      "cover.head_floor_ratio", "cover.head_top_min_ratio",
+                      "cover.framing_policy"]
+    qc_assertions: ["封面宽占比复测", "封面商品名几何", "封面品牌区几何"]
+    code_symbols: ["normalize_subject_framing"]
+    note: >-
+      2026-10-24 已从模块常量改为 constraints 注入（此前改 yaml 无效）。
+      ⚠️ cover.horizontal_margin_ratio（1:6:1）未接线，语义由 person_width_ratio 承载。
+
+  # ========================================================
+  # I. 2026-10-24 新增特效需求（视频叠加元素）
+  # ========================================================
+  - id: R-V01
+    source: "[CON] platform_bar 段（2026-10-24 新增需求）"
+    title: 视频顶部平台/店铺账号标识条常驻显示"
+    level: WARN
+    status: implemented
+    constraint_keys: ["platform_bar.enabled", "platform_bar.height", "platform_bar.top",
+                      "platform_bar.background", "platform_bar.background_alpha",
+                      "platform_bar.font_size", "platform_bar.text_color",
+                      "platform_bar.accent_color", "platform_bar.padding_x",
+                      "platform_bar.show_icon", "platform_bar.icon_size",
+                      "platform_bar.shop_name", "platform_bar.account"]
+    qc_assertions: ["视频顶部平台标识"]
+    code_symbols: ["generate_platform_bar"]
+    note: 条高 88px、底色 #101014、强调色 #E2C98A、左侧圆形店铺图标。
+
+  - id: R-V02
+    source: "[CON] video_sticker 段（2026-10-24 新增需求）"
+    title: 分镜挂角利益点徽标按"出现→停留→消失"时序播放"
+    level: WARN
+    status: implemented
+    constraint_keys: ["video_sticker.enabled", "video_sticker.size",
+                      "video_sticker.margin_x", "video_sticker.margin_y",
+                      "video_sticker.side", "video_sticker.fade_in_sec",
+                      "video_sticker.fade_out_sec", "video_sticker.hold_ratio",
+                      "video_sticker.delay_ratio", "video_sticker.font_size",
+                      "video_sticker.text_color", "video_sticker.bg_color",
+                      "video_sticker.border_color"]
+    qc_assertions: ["挂角贴纸时序"]
+    code_symbols: ["generate_stage_sticker"]
+    note: 金色底 #FFE9A8 + 边框 #E8A91E，margin_y=300 避开顶部标识条与 Hook 卡。
+
+  # ========================================================
+  # J. 死键登记（yaml 有声明、代码无消费者 —— 已知缺口）
+  #    这些条目不是"新需求"，而是把散落的实现缺口显性化，
+  #    使"改 yaml 不改行为"这一类缺陷无法再被 ✅ 掩盖。
+  # ========================================================
+  - id: R-X01
+    source: "[AUDIT] mirror_effect.min_occlusion_ratio"
+    title: 镜像遮挡面积占比下限未接线
+    level: INFO
+    status: unimplemented
+    constraint_keys: ["mirror_effect.min_occlusion_ratio"]
+    qc_assertions: []
+    code_symbols: []
+    allow_dead: true
+    note: 遮挡判定走 OCR → 上半屏筛选 → 面积阈值，面积占比下限阈值未参与决策。
+
+  - id: R-X02
+    source: "[AUDIT] zoom_effect.max_zoom"
+    title: 推镜目标倍率上限未接线（实际倍率硬编码 1.3）
+    level: INFO
+    status: unimplemented
+    constraint_keys: ["zoom_effect.max_zoom"]
+    qc_assertions: []
+    code_symbols: []
+    allow_dead: true
+    note: >-
+      build_plan 里 zoom 取硬编码 1.3（有面料关键词时）否则 1.0；1.35 上限写在 QC 里。
+
+  - id: R-X03
+    source: "[AUDIT] video.subtitle_safe_zone_px / cover.ocr_area_ratio_max"
+    title: 安全区与 OCR 面积占比存在重复键，仅其中一个真正生效"
+    level: INFO
+    status: unimplemented
+    constraint_keys: ["video.subtitle_safe_zone_px", "cover.ocr_area_ratio_max"]
+    qc_assertions: []
+    code_symbols: []
+    allow_dead: true
+    note: 实际生效的是 video.subtitle_margin_v_min 与 ocr.background_text_area_max。
+
+  - id: R-X04
+    source: "[AUDIT] price.clip_exclude / price.whitelist_units / price.detector"
+    title: 价格选段排除与单位白名单未接线
+    level: INFO
+    status: unimplemented
+    constraint_keys: ["price.clip_exclude", "price.whitelist_units", "price.detector"]
+    qc_assertions: []
+    code_symbols: []
+    allow_dead: true
+    note: >-
+      选段级价格排除在 detect_price 内部实现；单位白名单与检测器版本为模块内常量
+      （PRICE_UNITS / WHITELIST_UNITS / DETECTOR_VERSION）。
+
+  - id: R-X05
+    source: "[AUDIT] split_effect 的 radius/border_color/border_width/vertical_center"
+    title: 分屏段四个几何键实为贴图段消费（键归属错位）
+    level: INFO
+    status: unimplemented
+    constraint_keys: ["split_effect.radius", "split_effect.border_color",
+                      "split_effect.border_width", "split_effect.vertical_center"]
+    qc_assertions: []
+    code_symbols: []
+    allow_dead: true
+    note: cover_renderer 读的是 sticker_c[...]，分屏渲染路径不读这四个键。
+
+  - id: R-X06
+    source: "[AUDIT] text 段颜色类键（gradient/fill/stroke）"
+    title: 封面文字颜色类约束键全部无消费者（渲染用硬编码常量）
+    level: INFO
+    status: unimplemented
+    constraint_keys: ["text.product_name_gradient", "text.product_name_stroke",
+                      "text.brand_en_gradient", "text.brand_en_fill",
+                      "text.brand_en_stroke", "text.brand_cn_fill", "text.brand_cn_stroke"]
+    qc_assertions: []
+    code_symbols: []
+    allow_dead: true
+    note: >-
+      违反 constraints.yaml 头部"阈值只改本文件，不改代码"的原则：
+      PRODUCT_GRADIENT_TOP/BOTTOM、BRAND_EN_GRADIENT_TOP、COLOR_BRAND_STROKE
+      均为 cover_renderer 里的模块常量。
+
+  - id: R-X07
+    source: "[AUDIT] cover.garment_match_min / cover.knees_visible / cover.ankles_visible / cover.horizontal_margin_ratio"
+    title: 封面段存在与其它段重复或已被几何判据取代的键
+    level: INFO
+    status: unimplemented
+    constraint_keys: ["cover.garment_match_min", "cover.knees_visible",
+                      "cover.ankles_visible", "cover.horizontal_margin_ratio"]
+    qc_assertions: []
+    code_symbols: []
+    allow_dead: true
+    note: >-
+      生效的是 garment_match.garment_match_min、cover.knee_y_max、cover.ankle_y_max；
+      水平 1:6:1 的语义由 cover.person_width_ratio 承载。
+
+  - id: R-X08
+    source: "[AUDIT] garment_match.clip_model"
+    title: open_clip 模型名未接线（硬编码 ViT-B-32）
+    level: INFO
+    status: unimplemented
+    constraint_keys: ["garment_match.clip_model"]
+    qc_assertions: []
+    code_symbols: []
+    allow_dead: true
+    note: detect_garment_match 里 `model_name = "ViT-B-32"`。
+
+  - id: R-X09
+    source: "[AUDIT] cover.ghosting_energy_max / contour_completeness_min / landmark_visibility_min"
+    title: 重影能量、人像掩码完整度、关键点置信度三项未实现
+    level: INFO
+    status: unimplemented
+    constraint_keys: ["cover.ghosting_energy_max", "cover.contour_completeness_min",
+                      "cover.landmark_visibility_min"]
+    qc_assertions: []
+    code_symbols: []
+    allow_dead: true
+    note: 仅登记需求，constraints_map.md 已标 ❌。
+
+  - id: R-X10
+    source: "[AUDIT] audio.sample_rate"
+    title: 音频采样率阈值键未接线
+    level: INFO
+    status: unimplemented
+    constraint_keys: ["audio.sample_rate"]
+    qc_assertions: []
+    code_symbols: []
+    allow_dead: true
+    note: 实际由 ffmpeg -ar 48000 参数控制，改 yaml 不生效。
