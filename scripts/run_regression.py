@@ -49,6 +49,7 @@ UNIT_TESTS = [
     "tests/test_stage_cache_fingerprint.py",
     "tests/test_video_effects.py",
     "tests/test_requirements_audit.py",
+    "tests/test_dead_constraint_wiring.py",
 ]
 
 PYTHON = sys.executable

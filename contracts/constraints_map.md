@@ -102,6 +102,9 @@
 | 音画同步抽检 | `video.av_sync_error_max_ms` | ffmpeg ashowinfo | ✅（本轮接入，此前是死键） | BLOCK |
 | 封面贴图布局 | `sticker.layout` | cover_renderer | ✅ **vertical 靠右堆叠**（2026-10-24 需求变更，原 horizontal 并排） | — |
 | 分屏中缝金线 + 双侧标签 | `split_effect.*` | drawbox + video_overlays | ✅（8px 金线 + 胶囊标签） | WARN（随分屏触发） |
+| 推镜倍率上限 | `zoom_effect.max_zoom` | build_clip_filter 钳制 + QC 断言 | ✅ **已接线**（2026-10-25，此前是死键） | BLOCK |
+| 面料块目标倍率 | `zoom_effect.zoom` | build_plan 读约束 | ✅ **已接线**（2026-10-25 新增键） | — |
+| 镜像遮挡覆盖率下限 | `mirror_effect.min_occlusion_ratio` | _apply_mirror_occlusion + _undo_mirror | ✅ **已接线**（2026-10-25，此前是死键） | BLOCK |
 
 ## 修订记录
 
@@ -110,5 +113,6 @@
 | 2026-10-20 | v1.0 建立；锁定决策 1（水平 1:6:1）、决策 2（金色商品名）、决策 3（字幕零价格）、决策 4（30fps） |
 | 2026-10-24 | v1.1 审计后修订：新增状态图例；如实标注 6 个"声称 BLOCK 但未落地"的项（重影/外廓/landmark 置信度/av_sync 抽检/horizontal_margin_ratio/duration_tolerance_sec）；补齐已落地项的真实 metric key；新增 ASR 审核与字幕章节 |
 | 2026-10-24 | v1.2 特效轮修订：新增「视频叠加元素」章节（平台标识条/挂角贴纸/放大特效/镜像遮挡/音画同步）；封面贴图布局改为 vertical 靠右堆叠；av_sync 由 ⚠️ 未接线升级为 ✅ 已接入 |
+| 2026-10-25 | v1.5 死键修复轮：`zoom_effect.max_zoom` / `mirror_effect.min_occlusion_ratio` 接线（新增 `zoom_effect.zoom`），死键 27 → 25；推镜倍率与镜像覆盖率改为约束驱动 |
 | 2026-10-25 | v1.3 审计基线轮：新增「关联文档」段落，指向 `contracts/requirements.yaml`（43 条既定需求机器可读基线）与 AST 审计引擎；确认 27 个死键并逐条登记（R-X01~R-X10）；补记 `video.av_sync_error_max_ms` 已接线（此前记为未接线） |
 | 2026-10-25 | v1.4 规格全局统一轮：**帧率 30fps → 60fps**（覆盖原决策 4，`video.fps` 与 SKILL.md §5 口径对齐）；**Hook 标题卡统一 720×168**（原 940~980 口径作废），新增 `hook_card` 段（width/height/y_min/y_max/face_top_gap_px），决策网关与 Agent Director 均改为从约束读取 |

@@ -174,7 +174,8 @@ zoom_effect:
   trigger_sec: 0.8                # 分镜内触发点（秒，从分镜起点算）
   transition_sec: 1.2             # 过渡时长（秒）
   easing: smoothstep              # smoothstep | linear
-  max_zoom: 1.35                  # 目标倍率上限（1.25~1.35 符合 SKILL 规格）
+  zoom: 1.3                       # 面料块的目标倍率（SKILL 规定 1.25~1.35 区间内）
+  max_zoom: 1.35                  # 目标倍率上限（1.25~1.35 符合 SKILL 规格）——渲染与 QC 的硬上限
   y_anchor: 0.35                  # 锚点（0.35h~0.65h）
   enabled: true
 
@@ -183,7 +184,11 @@ mirror_effect:
   enabled: true
   # 镜像后背景招牌文字会反向，必须用贴纸精确遮挡（SKILL 2.1）
   occlusion_required: true        # 找不到可遮挡文字时，是否拒绝启用镜像
-  min_occlusion_ratio: 0.25       # 可遮挡文字面积占比下限（低于则放弃镜像）
+  min_occlusion_ratio: 0.25       # 遮挡覆盖率下限（低于则放弃该分镜的镜像）
+                             # 含义：镜像分镜"上半屏可遮挡文字面积 / 全部有效文字面积"，
+                             # 覆盖率过低说明反向文字大多落在贴纸遮不到的范围内
+                             # （如下半身服饰印花、字幕带），贴纸遮不全 →
+                             # 保留镜像必然露出反向文字，故放弃镜像（翻转回原方向）
   patch_color: "#1A1A1E"
   patch_alpha: 235
   patch_radius: 14

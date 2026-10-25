@@ -55,10 +55,16 @@ yaml 键 video.funnel.hook.min  ↔  ("video","funnel","hook","min")
 ## 三、审计结果
 
 ```
-约束键 151 个 · 死键 27 个 · QC 断言 27 个 · 需求基线 43 条（证据全部成立）
+约束键 153 个 · 死键 25 个 · QC 断言 27 个 · 需求基线 43 条（证据全部成立）
+
+> 2026-10-25 修订：`zoom_effect.max_zoom` / `mirror_effect.min_occlusion_ratio` 两个死键
+> 已接线修复（新增 `zoom_effect.zoom` 键），死键 27 → 25。
 ```
 
-### 27 个死键（yaml 有声明、代码无消费者）
+### 25 个死键（yaml 有声明、代码无消费者）
+
+> 2026-10-25 修复：`zoom_effect.max_zoom`、`mirror_effect.min_occlusion_ratio` 已接线，
+> 从下表移除（修复详情见文末「死键修复记录」）。
 
 | # | 死键 | 性质 |
 | :-- | :-- | :-- |
@@ -72,14 +78,12 @@ yaml 键 video.funnel.hook.min  ↔  ("video","funnel","hook","min")
 | 8 | `cover.ocr_area_ratio_max` | 重复键，生效的是 `ocr.background_text_area_max` |
 | 9 | `garment_match.clip_model` | open_clip 模型名硬编码 `ViT-B-32` |
 | 10-16 | `text.product_name_gradient` / `product_name_stroke` / `brand_en_gradient` / `brand_en_fill` / `brand_en_stroke` / `brand_cn_fill` / `brand_cn_stroke` | 封面文字颜色类键全部无消费者，渲染用 `cover_renderer` 里的硬编码常量 |
-| 17 | `zoom_effect.max_zoom` | 推镜倍率实际由 `build_plan` 硬编码 1.3 决定，1.35 上限写在 QC 里 |
-| 18 | `mirror_effect.min_occlusion_ratio` | 镜像遮挡全程不读该阈值 |
-| 19-22 | `split_effect.radius` / `border_color` / `border_width` / `vertical_center` | **键归属错位**：分屏路径不读，实际被 `sticker` 段消费 |
-| 23 | `video.subtitle_safe_zone_px` | 与 `video.subtitle_margin_v_min` 重复，生效的是后者 |
-| 24 | `audio.sample_rate` | 由 ffmpeg `-ar 48000` 硬编码 |
-| 25-27 | `price.clip_exclude` / `price.detector` / `price.whitelist_units` | 价格选段排除在 `detect_price` 内部实现，白名单与检测器版本为模块常量 |
+| 17-20 | `split_effect.radius` / `border_color` / `border_width` / `vertical_center` | **键归属错位**：分屏路径不读，实际被 `sticker` 段消费 |
+| 21 | `video.subtitle_safe_zone_px` | 与 `video.subtitle_margin_v_min` 重复，生效的是后者 |
+| 22 | `audio.sample_rate` | 由 ffmpeg `-ar 48000` 硬编码 |
+| 23-25 | `price.clip_exclude` / `price.detector` / `price.whitelist_units` | 价格选段排除在 `detect_price` 内部实现，白名单与检测器版本为模块常量 |
 
-这些死键已**逐条登记**在 `contracts/requirements.yaml` 的 R-X01 ~ R-X10 条目中（`status: unimplemented`，`allow_dead: true`）。这不是"新增缺陷"，而是**把散落的实现缺口显性化**，让它们无法再被 ✅ 掩盖。
+这些死键已**逐条登记**在 `contracts/requirements.yaml` 的 R-X01 ~ R-X10 条目中（`status: unimplemented`，`allow_dead: true`）。其中 R-X01 / R-X02 已于 2026-10-25 修复为 `status: implemented`。这不是"新增缺陷"，而是**把散落的实现缺口显性化**，让它们无法再被 ✅ 掩盖。
 
 ### 43 条需求的实现状态
 
@@ -133,3 +137,10 @@ python -u scripts/run_regression.py --quick
 2. ~~**Hook 卡宽度偏差**~~ → **已拍板（2026-10-25）**：标题卡全局统一 **720×168**（原 940~980 口径作废），并新增 `hook_card` 约束段（width/height/y_min/y_max/face_top_gap_px），决策网关与 Agent Director 均改为从约束读取，改 yaml 即改画面。
 3. **`duration_tolerance_sec` 键不存在**：`constraints_map.md` 曾引用 `video.duration_tolerance_sec`，实际 yaml 里该键在 `asr_review` 段（`asr_review.duration_tolerance_sec`），且已被消费。文档笔误，本步已顺带核实。
 4. **未接线的三处若要修复，建议单独开 PR**：本次第 30 步的目标是**建立审计基准**而非修改实现，故所有死键一律如实登记、未动实现代码。其中 `zoom_effect.max_zoom`、`mirror_effect.min_occlusion_ratio` 两项接线风险最低（纯阈值透传，不改默认行为），可作为后续独立改动。
+
+### 死键修复记录（2026-10-25）
+
+| 死键 | 修复方式 | 影响面 |
+| :-- | :-- | :-- |
+| `zoom_effect.max_zoom` | 新增 `zoom_effect.zoom`（面料块目标倍率 1.3）作为约束源；`build_plan` 读约束不再硬编码；`max_zoom` 同时作为渲染端钳制上限与 QC 断言阈值 | 默认行为不变（1.3 / 1.35 与原硬编码一致） |
+| `mirror_effect.min_occlusion_ratio` | `_apply_mirror_occlusion` 计算遮挡覆盖率 = 上半屏可遮挡文字面积 / 全部有效文字面积；低于阈值 → `_undo_mirror` 放弃该分镜镜像（翻转回原方向），结果落盘 `meta.mirror_abandoned` | 仅在覆盖率不足时触发；常规素材行为不变 |

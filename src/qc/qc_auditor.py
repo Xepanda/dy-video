@@ -462,14 +462,16 @@ class QcAuditor:
         zoom_c = constraints.get("zoom_effect", {}) or {}
         zevents = meta.get("zoom_events", []) or []
         if zoom_c.get("enabled", True):
+            # 上限来自约束（zoom_effect.max_zoom），渲染端同一把尺子
+            z_max = float(zoom_c.get("max_zoom", 1.35) or 1.35)
             bad = []
             for e in zevents:
                 trig = float(e.get("trigger_sec", 0))
                 trans = float(e.get("transition_sec", 0))
                 if trig < 0 or trans <= 0:
                     bad.append(f"{e.get('clip_id')} 触发/过渡参数非法")
-                if float(e.get("zoom", 1.0)) > 1.35:
-                    bad.append(f"{e.get('clip_id')} 倍率 {e.get('zoom')} 超出 1.35 上限")
+                if float(e.get("zoom", 1.0)) > z_max + 1e-6:
+                    bad.append(f"{e.get('clip_id')} 倍率 {e.get('zoom')} 超出 {z_max} 上限")
             self._assert(not bad, "放大特效时序",
                          f"{len(zevents)} 个推镜分镜，触发点/过渡/缓动参数合规"
                          if not bad else "; ".join(bad[:3]),
@@ -492,6 +494,10 @@ class QcAuditor:
                        if occ.get(c) and int(detail_map.get(c, {}).get("regions", 1)) == 0]
             detail = (f"{len(mclips)} 个镜像分镜均已完成背景文字遮挡"
                       + (f"（其中 {len(no_text)} 个未检出背景文字，镜像无违和点）" if no_text else ""))
+            # 2026-10-25：min_occlusion_ratio 门禁放弃的镜像（已翻转回原方向，不需遮挡）
+            abandoned = meta.get("mirror_abandoned", []) or []
+            if abandoned:
+                detail += f"；{len(abandoned)} 个分镜因遮挡覆盖率不足已放弃镜像（{', '.join(abandoned)}）"
             self._assert(not missing, "镜像防反文字遮挡",
                          detail if not missing else
                          f"镜像分镜 {missing} 未完成背景文字遮挡（可能出现反向文字）",
