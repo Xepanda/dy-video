@@ -224,6 +224,7 @@ class AgentDirector:
                 continue
             src = c.get("source_file") or self.raw_video
             cx = cy = None
+            frame = None
             try:
                 cap = cv2.VideoCapture(src)
                 cap.set(cv2.CAP_PROP_POS_MSEC, (float(c.get("st", 0)) + 0.8) * 1000)
@@ -246,6 +247,46 @@ class AgentDirector:
                 cy = int(1920 * float(magn_c.get("anchor_y_ratio", 0.42)))
             cx = max(r + 8, min(1080 - r - 8, int(cx)))
             cy = max(r + 100, min(1920 - r - 260, int(cy)))
+
+            # 2026-10-28 接线 magnifier_effect.require_face_clear（此前为死键）：
+            # 圆圈（含 overlay_face_safety 安全间距）不得覆盖模特面部；
+            # 覆盖则把圆心上拉到面部以下，仍越界则放弃该分镜的放大镜。
+            if (bool(magn_c.get("require_face_clear", True))
+                    and frame is not None):
+                try:
+                    from src.tools.detect_face import FaceAnalyzer
+                    fm = FaceAnalyzer().analyze(frame)
+                    if fm and fm.get("face_detected"):
+                        fh, fw = frame.shape[:2]
+                        x_off = (fw - 1080) / 2.0 if fw > 1080 else 0.0
+                        fx0, fy0, fx1, fy1 = fm["face_bbox_norm"]
+                        fx0o = (fx0 * fw - x_off) * (1080.0 / fw)
+                        fx1o = (fx1 * fw - x_off) * (1080.0 / fw)
+                        fy0o, fy1o = fy0 * fh, fy1 * fh
+                        m_px = int((self.constraints.get(
+                            "overlay_face_safety", {}) or {}).get(
+                            "margin_px", 30) or 30)
+
+                        def _hits_face(cx_, cy_):
+                            return not (cx_ + r < fx0o - m_px
+                                        or cx_ - r > fx1o + m_px
+                                        or cy_ + r < fy0o - m_px
+                                        or cy_ - r > fy1o + m_px)
+
+                        if _hits_face(cx, cy):
+                            cy2 = max(r + 100, min(
+                                1920 - r - 260, int(fy1o + r + m_px)))
+                            if _hits_face(cx, cy2):
+                                print(f"  [MAGNIFIER] {c['id']} 圆圈与面部"
+                                      f"冲突且无法下移避让，跳过")
+                                continue
+                            cy = cy2
+                            print(f"  [MAGNIFIER] {c['id']} 避让面部："
+                                  f"锚点下移至 y={cy}")
+                except Exception as e:
+                    print(f"  [MAGNIFIER] {c['id']} 人脸安全校验异常"
+                          f"（放行）: {e}")
+
             dur = float(c.get("dur", 0))
             c["magnifier"] = {
                 "enabled": True, "cx": cx, "cy": cy, "r": r, "zoom": z,

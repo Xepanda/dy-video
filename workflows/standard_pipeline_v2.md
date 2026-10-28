@@ -305,6 +305,18 @@ python scripts/run_regression.py
     重跑前必须删除对应缓存文件，否则坏结果被复用。
 17. **文案零硬编码**：Hook 卡 / CTA / 贴纸文案从契约商品信息派生，并有测试锁定
     驱动与 build_plan 的派生一致性；换商品不换代码。
+18. **提交前必须跑 CI 同款入口**：`python -u scripts/run_regression.py --quick`
+    （14 个测试文件）。`pytest tests/` 覆盖不全——`test_path_resolver.py`（spec 路径审计）
+    与 `test_requirements_audit.py`（需求/死键审计）不在 pytest 常规收集路径内，
+    曾导致「本地全绿、CI 挂三项」。
+19. **入库 spec 不得含机器专属绝对路径**：`job_spec*.json` 的 `raw_video_path` /
+    `raw_video_paths` / `product.item_images` 必须是相对路径（素材放
+    `data/raw_samples/<任务名>/`，mp4 已被 gitignore）；运行时生成的
+    `specs/*.resolved.json` 含绝对路径，已 gitignore 不入库。
+20. **新增约束键必须接线或登记**：`contracts/requirements.yaml` 是机器可读基线，
+    死键审计（AST 扫描 `.get()/[]` 消费路径）要求每个 yaml 键都有消费者或
+    `allow_dead` 登记（附原因）。注意审计只看 AST 消费链——经 `_deep_merge`
+    间接消费的键不可见（见 R-X11 商品图适配器条目），需登记并靠单测覆盖。
 
 ### 11.5 需求判断基准（贴图类反馈）
 

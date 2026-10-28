@@ -134,3 +134,25 @@
 7. mode 参数与视觉参数解耦 → 三模式产出 md5 相同；修复为 MODE_DEFAULTS 驱动层
 8. numpy 广播崩溃 → 边缘延展改 PIL crop+flip+resize
 9. 历史死键：贴图四键错放 split_effect 段，改配置无效；已归位（教训：改配置前先验证消费方）
+
+---
+
+## 七、CI 修复记录（2026-10-28 晚，PR #8 首次 CI 失败）
+
+PR #8 首次 CI 在「单元测试层」失败（2/14 文件），根因三类，已全部修复：
+
+| # | 失败用例 | 根因 | 修复 |
+| :--- | :--- | :--- | :--- |
+| 1 | `test_path_resolver.case_spec_no_absolute_paths` | 入库 spec 含机器专属绝对路径：`job_spec.json` 指向 `C:\Users\ePanda\Desktop\project\raw`，`specs/*.resolved.json` 含 6 条绝对素材路径 | 素材入库 `data/raw_samples/silk_knitwear_sample/`（mp4 已 gitignore），spec 改相对路径；运行时 resolved spec 删除并 gitignore |
+| 2 | `test_requirements_audit.case_evidence_anchors_resolve` | R-X05 证据锚点指向 `split_effect.radius/border_color/border_width`，四键已归位到 sticker 段 | R-X05 改为 implemented + 锚点更新为 `sticker.*`（四键经 sticker_c[...] 静态可解析） |
+| 3 | `test_requirements_audit.case_dead_keys_match_baseline` | 新增键未接线/未登记：`magnifier_effect.{glass_alpha,require_face_clear}`、`violation_words.{library_path,detect.asr_segments,detect.cover_ocr,handling.mute_fade_ms}`、`product_image_adapter.*`（27） | 除 `glass_alpha`（删除，未实现的空键）外全部接线：缩放镜人脸门禁 / 词库路径与通道开关 / 消音淡变时长；`product_image_adapter.*` 因 `_deep_merge` 间接消费无法被 AST 识别，按 R-X11 登记 allow_dead（10 项单测做功能覆盖） |
+
+**过程教训**（已入 SOP §11 第 18~20 条）：
+- 本地 `pytest tests/` 不等于 CI：CI 入口是 `scripts/run_regression.py --quick`（14 个文件），
+  路径审计与需求审计两个重型测试只有该入口会跑；
+- 配置键接线状态必须用 `python -u src/tools/audit_requirements.py --only-dead` 自查；
+- 入库 spec 一律相对路径，运行时产物（resolved spec / 缓存）不入库。
+
+**修复后验证**：`run_regression.py --quick` 14/14 通过；死键 48 个与基线完全一致；
+需求证据锚点 44/44 可解析；违规检测器真实素材回归 11 处命中（与修复前一致）、
+通道开关/库路径接线生效。

@@ -256,7 +256,6 @@ split_effect:
   label_bg_color: "#FFE9A8"
   label_padding: 14
   label_gap: 24                   # 标签距分割线的水平距离
-  vertical_center: 960            # C13 组合块中心 y
 
 # ============ 视频成片约束（V1~V6, V8）============
 video:
@@ -344,7 +343,6 @@ magnifier_effect:
   radius: 130                   # 圆圈半径（px）
   ring_width: 8                 # 金属环宽（px）
   ring_color: "#E8A91E"         # 金色环（与封面商品名呼应）
-  glass_alpha: 0                # 镜面底色不透明度（0=纯净放大内容）
   margin_x: 60                  # 锚点失效时的兜底位置：距右边缘
   anchor_y_ratio: 0.42          # 锚点失效时的兜底位置：画幅高度比例
   fade_in_sec: 0.35             # 出现/消失淡变

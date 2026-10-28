@@ -505,9 +505,14 @@ class VideoAssembler:
             magnifier_on = False
 
         # —— 音频链：消音表达式（相对分镜本地时间）——
+        # 2026-10-28 接线 violation_words.handling.mute_fade_ms（此前硬编码 0.08）：
+        # 淡变时长从约束读取，改配置即生效（默认 80ms，防爆音）。
+        vw_h = (self.constraints.get("violation_words", {}) or {}).get(
+            "handling", {}) or {}
+        mute_fade = float(vw_h.get("mute_fade_ms", 80) or 80) / 1000.0
         af_chain = ["asetpts=PTS-STARTPTS"]
         for (a, b) in mute_ranges:
-            af_chain.append(self._mute_filter(a, b))
+            af_chain.append(self._mute_filter(a, b, fade=mute_fade))
 
         # —— 简单路径 -—
         if not magnifier_on and not mosaic_regions:

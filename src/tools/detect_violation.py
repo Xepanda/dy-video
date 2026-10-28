@@ -55,10 +55,46 @@ def load_violation_library(library_path: str = None) -> Dict[str, Any]:
     return lib
 
 
-class ViolationDetector:
-    """违规词检测器：词库驱动，支持文本/台词段/字幕/OCR 框四类输入。"""
+def _constraints_from_disk() -> Dict[str, Any]:
+    """读取 constraints.yaml（violation_words 段的默认来源）。"""
+    try:
+        import yaml
+        if os.path.exists(DEFAULT_CONSTRAINTS):
+            with open(DEFAULT_CONSTRAINTS, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+    except Exception:
+        pass
+    return {}
 
-    def __init__(self, library: Dict[str, Any] = None, library_path: str = None):
+
+class ViolationDetector:
+    """违规词检测器：词库驱动，支持文本/台词段/字幕/OCR 框四类输入。
+
+    2026-10-28 接线（此前为死键）：
+      - violation_words.library_path：未显式指定库路径时按 constraints 加载
+        （相对路径以项目根为基准）；
+      - violation_words.detect.{asr_segments, subtitles, cover_ocr}：
+        通道开关，关闭后对应扫描方法直接返回空列表（不影响 scan_text）。
+    """
+
+    def __init__(self, library: Dict[str, Any] = None,
+                 library_path: str = None,
+                 constraints: Dict[str, Any] = None):
+        cons = constraints if constraints is not None else _constraints_from_disk()
+        vw_c = (cons or {}).get("violation_words", {}) or {}
+        # —— 词库路径（约束驱动）——
+        if library_path is None:
+            lib_rel = str(vw_c.get("library_path") or "").strip()
+            if lib_rel:
+                library_path = (lib_rel if os.path.isabs(lib_rel)
+                                else os.path.join(PROJECT_ROOT, lib_rel))
+        # —— 通道开关（约束驱动）——
+        detect_c = vw_c.get("detect", {}) or {}
+        self.channels = {
+            "asr_segments": bool(detect_c.get("asr_segments", True)),
+            "subtitles": bool(detect_c.get("subtitles", True)),
+            "cover_ocr": bool(detect_c.get("cover_ocr", True)),
+        }
         self.library = library or load_violation_library(library_path)
         self.global_allow = self._compile_allow(self.library.get("global_allow", []))
         self.categories = []
@@ -156,6 +192,8 @@ class ViolationDetector:
 
     def scan_segments(self, segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """扫描 ASR 台词段，命中附带时间戳与来源文件。"""
+        if not self.channels.get("asr_segments", True):
+            return []   # 通道关闭（violation_words.detect.asr_segments=false）
         hits = []
         for seg in segments:
             text = seg.get("text", "") or ""
@@ -171,6 +209,8 @@ class ViolationDetector:
 
     def scan_subtitle_events(self, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """扫描字幕事件列表（assembler 产出的 sub_events 结构）。"""
+        if not self.channels.get("subtitles", True):
+            return []   # 通道关闭（violation_words.detect.subtitles=false）
         hits = []
         for ev in events:
             for h in self.scan_text(ev.get("text", "") or ""):
@@ -200,7 +240,9 @@ class ViolationDetector:
         return hits
 
     def scan_ocr_boxes(self, boxes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """扫描 OCR 文本框（画面级检测）。boxes: [{text, box:[x0,y0,x1,y1]}]"""
+        """扫描 OCR 文字框（画面可见文字 → 打码通道）。"""
+        if not self.channels.get("cover_ocr", True):
+            return []   # 通道关闭（violation_words.detect.cover_ocr=false）
         hits = []
         for b in boxes:
             for h in self.scan_text(b.get("text", "") or ""):

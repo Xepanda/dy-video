@@ -1,6 +1,6 @@
 {
   "project_id": "sample_silk_knitwear_01",
-  "raw_video_path": "C:\\Users\\ePanda\\Desktop\\project\\raw",
+  "raw_video_path": "data/raw_samples/silk_knitwear_sample",
   "brand": {
     "title_en": "MIXCITY",
     "subtitle_cn": "深圳高端女装"
@@ -9,7 +9,7 @@
     "title_line1": "桑蚕丝羊绒羊毛",
     "title_line2": "渐变针织衫",
     "item_images": [
-      "D:/Projects/dy-live-ecommerce-editor/data/raw_samples/sample_product_card.png"
+      "data/raw_samples/sample_product_card.png"
     ]
   },
   "options": {

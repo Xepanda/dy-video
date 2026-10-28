@@ -534,15 +534,17 @@ requirements:
 
   - id: R-X05
     source: "[AUDIT] split_effect 的 radius/border_color/border_width/vertical_center"
-    title: 分屏段四个几何键实为贴图段消费（键归属错位）
+    title: 贴图段四个几何键归位并接线（原错放在 split_effect 段，为死键）
     level: INFO
-    status: unimplemented
-    constraint_keys: ["split_effect.radius", "split_effect.border_color",
-                      "split_effect.border_width", "split_effect.vertical_center"]
+    status: implemented
+    constraint_keys: ["sticker.radius", "sticker.border_color",
+                      "sticker.border_width", "sticker.vertical_center"]
     qc_assertions: []
-    code_symbols: []
-    allow_dead: true
-    note: cover_renderer 读的是 sticker_c[...]，分屏渲染路径不读这四个键。
+    code_symbols: ["MixCityCoverRenderer"]
+    note: >-
+      2026-10-28 修复：四键从 split_effect 段迁回 sticker 段，cover_renderer 的
+      sticker_c[...] 消费路径可静态解析（radius/border_color/border_width/
+      vertical_center）；split_effect 段不再保留重复键。
 
   - id: R-X06
     source: "[AUDIT] text 段颜色类键（gradient/fill/stroke）"
@@ -607,3 +609,47 @@ requirements:
     code_symbols: []
     allow_dead: true
     note: 实际由 ffmpeg -ar 48000 参数控制，改 yaml 不生效。
+
+
+  - id: R-X11
+    source: "[AUDIT] product_image_adapter 段配置键（间接消费）"
+    title: 商品图封面适配器配置键经 _deep_merge 间接消费（AST 审计不可见）
+    level: INFO
+    status: implemented
+    constraint_keys: ["product_image_adapter.canvas_size",
+                      "product_image_adapter.margin_px",
+                      "product_image_adapter.scale_mode",
+                      "product_image_adapter.max_subject_ratio",
+                      "product_image_adapter.edge_style",
+                      "product_image_adapter.corner_radius",
+                      "product_image_adapter.feather_px",
+                      "product_image_adapter.blend_ratio",
+                      "product_image_adapter.dehalo",
+                      "product_image_adapter.dehalo_blur_ratio",
+                      "product_image_adapter.shadow.enabled",
+                      "product_image_adapter.shadow.blur",
+                      "product_image_adapter.shadow.offset_x",
+                      "product_image_adapter.shadow.offset_y",
+                      "product_image_adapter.shadow.alpha",
+                      "product_image_adapter.shadow.color",
+                      "product_image_adapter.background.type",
+                      "product_image_adapter.background.color",
+                      "product_image_adapter.background.gradient",
+                      "product_image_adapter.background.extend_method",
+                      "product_image_adapter.background.extend_scale",
+                      "product_image_adapter.background.extend_blur",
+                      "product_image_adapter.background.darken",
+                      "product_image_adapter.background.saturate",
+                      "product_image_adapter.collage.subject_ratio",
+                      "product_image_adapter.collage.feather_px",
+                      "product_image_adapter.collage.rotate_deg"]
+    qc_assertions: []
+    code_symbols: ["ProductImageAdapter"]
+    allow_dead: true
+    note: >-
+      ProductImageAdapter 以 DEFAULTS < constraints < MODE_DEFAULTS < 用户 config
+      四层 _deep_merge 合并到 self.cfg，读取点 self.cfg[...] 无法被
+      audit_requirements 的 AST 解析归属到 product_image_adapter 段
+      （self.cfg 命归为约束根，键路径差一段），故登记为 allow_dead。
+      功能覆盖由 tests/test_product_image_adapter.py（10 项：四模式形态差异、
+      留白、画布尺寸、羽化剖面、防 halo、白底去除）保证，改这些键会改变输出。
