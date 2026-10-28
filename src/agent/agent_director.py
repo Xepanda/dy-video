@@ -193,6 +193,69 @@ class AgentDirector:
                 f"未找到任何可用的源视频素材（raw_video_path={self.spec.get('raw_video_path')}）")
         return paths
 
+    def _assign_magnifiers(self, plan: Dict[str, Any]) -> None:
+        """为面料/工艺类分镜分配放大镜圆圈锚点（2026-10-27 反馈驱动）。
+
+        规则（硬约束，确定化）：
+          - 仅面料类（category=fabric）且未推镜（zoom<=1.0）的分镜可获得；
+          - 每条成片最多 magnifier_effect.max_per_video 个；
+          - 锚点 = 肩部中心与胯部中心的中点（胸腹区域，天然避让面部）；
+          - Pose 不可用时退化为约束里的兜底位置。
+        """
+        import cv2
+        magn_c = (self.constraints.get("magnifier_effect", {}) or {})
+        if not magn_c.get("enabled", True):
+            return
+        from src.tools.detect_face import _load_pose_landmarks
+        max_n = int(magn_c.get("max_per_video", 2) or 2)
+        r = int(magn_c.get("radius", 130) or 130)
+        z = float(magn_c.get("zoom", 1.8) or 1.8)
+        hold = float(magn_c.get("hold_ratio", 0.80) or 0.80)
+        delay = float(magn_c.get("delay_ratio", 0.12) or 0.12)
+        assigned = 0
+        for c in plan.get("clips", []):
+            if assigned >= max_n:
+                break
+            if c.get("category") != "fabric":
+                continue
+            if float(c.get("zoom", 1.0) or 1.0) > 1.0:
+                continue
+            if c.get("effect") == "split":
+                continue
+            src = c.get("source_file") or self.raw_video
+            cx = cy = None
+            try:
+                cap = cv2.VideoCapture(src)
+                cap.set(cv2.CAP_PROP_POS_MSEC, (float(c.get("st", 0)) + 0.8) * 1000)
+                ret, frame = cap.read()
+                cap.release()
+                if ret and frame is not None:
+                    lm = _load_pose_landmarks(frame)
+                    if lm is not None:
+                        ls, rs, lh, rh = lm[11], lm[12], lm[23], lm[24]
+                        h, w = frame.shape[:2]
+                        nx = ((ls.x + rs.x) / 2 + (lh.x + rh.x) / 2) / 2
+                        ny = ((ls.y + rs.y) / 2 + (lh.y + rh.y) / 2) / 2
+                        x_off = (w - 1080) / 2.0 if w > 1080 else 0.0
+                        cx = int((nx * w - x_off) * (1080.0 / w))
+                        cy = int(ny * h)
+            except Exception as e:
+                print(f"  [MAGNIFIER] {c['id']} Pose 解析失败，用兜底位置: {e}")
+            if cx is None:
+                cx = 1080 - int(magn_c.get("margin_x", 60)) - r
+                cy = int(1920 * float(magn_c.get("anchor_y_ratio", 0.42)))
+            cx = max(r + 8, min(1080 - r - 8, int(cx)))
+            cy = max(r + 100, min(1920 - r - 260, int(cy)))
+            dur = float(c.get("dur", 0))
+            c["magnifier"] = {
+                "enabled": True, "cx": cx, "cy": cy, "r": r, "zoom": z,
+                "t_in": round(dur * delay, 3),
+                "t_out": round(dur * (delay + hold), 3),
+            }
+            assigned += 1
+            print(f"  [MAGNIFIER] {c['id']} 放大镜锚点 ({cx},{cy}) "
+                  f"r={r} z={z} 时段 {c['magnifier']['t_in']}~{c['magnifier']['t_out']}s")
+
     def run_director_workflow(
         self,
         chosen_cover_id: Optional[str] = None,
@@ -307,6 +370,51 @@ class AgentDirector:
         )
 
         # -------------------------------------------------------------
+        # Phase 1.5: 素材-契约一致性预检 + 对话脚本（2026-10-27 反馈驱动）
+        # -------------------------------------------------------------
+        consistency_report = None
+        dialogue_stats = None
+        verified_cache = os.path.join(self.work_dir, "whisper_segments_verified.json")
+        if not os.path.exists(verified_cache):
+            verified_cache = os.path.join(self.work_dir, "whisper_segments.json")
+        if os.path.exists(verified_cache):
+            with open(verified_cache, "r", encoding="utf-8") as f:
+                all_segments = json.load(f)
+            # 1.5a 一致性预检（防止素材与契约商品错配）
+            try:
+                from src.tools.check_spec_material_consistency import (
+                    check_spec_material_consistency)
+                cc_c = self.constraints.get("consistency_check", {}) or {}
+                if cc_c.get("enabled", True):
+                    consistency_report = check_spec_material_consistency(
+                        self.spec, all_segments, constraints=self.constraints)
+                    print(f"\n>>> [PHASE 1.5] 素材-契约一致性预检: "
+                          f"{'PASS' if consistency_report['passed'] else 'BLOCK'}"
+                          f"（{consistency_report['summary']['n_warnings']} 条 WARN）")
+                    for w in consistency_report.get("warnings", []):
+                        print(f"  [一致性 WARN] {w}")
+                    cc_path = os.path.join(self.output_dir,
+                                           str(cc_c.get("report_path",
+                                                        "consistency_report.json")))
+                    with open(cc_path, "w", encoding="utf-8") as f:
+                        json.dump(consistency_report, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                print(f"  [WARN] 一致性预检失败（不阻断）: {e}")
+            # 1.5b 完整对话脚本（ASR 驱动剩剩的唯一依据）
+            try:
+                from src.tools.build_dialogue_script import build_dialogue_script
+                script = build_dialogue_script(all_segments, self.spec)
+                dialogue_stats = script.get("stats")
+                with open(os.path.join(self.work_dir, "dialogue_script.json"),
+                          "w", encoding="utf-8") as f:
+                    json.dump(script, f, ensure_ascii=False, indent=2)
+                print(f"  [对话脚本] {dialogue_stats['n_utterances']} 个完整语句"
+                      f"（完整率 {dialogue_stats['complete_ratio']:.0%}）"
+                      f" | {dialogue_stats['n_violation_utterances']} 个语句含违规词")
+            except Exception as e:
+                print(f"  [WARN] 对话脚本生成失败（不阻断）: {e}")
+
+        # -------------------------------------------------------------
         # Phase 2: Agent 决策干预
         # -------------------------------------------------------------
         print("\n>>> [PHASE 2] Agent 启动决策与审美干预...")
@@ -399,30 +507,43 @@ class AgentDirector:
                   f"({c['dur']:.2f}s) zoom={c['zoom']} | {c['desc']}")
 
         # 决策 2.3: Hook 卡避让人脸顶（B10 + B12：避让结果过网关校验）
+        # 2026-10-27：主播在黄金 3 秒内可能前倾/晃动，单帧采样会压脸
+        # （实测 t=1.875s 人脸顶比首帧高 20px）。改为前 2.5s 多帧采样，
+        # 取最高人脸顶（最小 y）+ 额外 10px 缓冲，保证整段活跃期不压脸。
         try:
             import cv2
             from src.tools.detect_face import FaceAnalyzer, _load_pose_landmarks
             # 多源：Hook 卡避让需在首个分镜所属的素材文件上取人脸顶
             hook_src = plan["clips"][0].get("source_file") or self.raw_video
-            cap = cv2.VideoCapture(hook_src)
-            cap.set(cv2.CAP_PROP_POS_MSEC, plan["clips"][0]["st"] * 1000)
-            ret, hook_frame = cap.read()
-            cap.release()
-            if ret and hook_frame is not None:
-                pose_lm = _load_pose_landmarks(hook_frame)
-                if pose_lm is not None:
-                    face_m = FaceAnalyzer().analyze(hook_frame, pose_landmarks=pose_lm)
-                    if face_m:
-                        # Hook 卡底边距人脸顶 30px（卡高取 constraints 的全局统一值）
-                        hc_c = self.gateway.constraints.get("hook_card", {}) or {}
-                        card_h = int(hc_c.get("height", 168) or 168)
-                        gap = int(hc_c.get("face_top_gap_px", 30) or 30)
-                        y_min = int(hc_c.get("y_min", 150) or 150)
-                        card_y = int(max(y_min, face_m["face_top_y"] * 1920 - card_h - gap))
-                        plan.setdefault("hook_card", {})["y"] = card_y
-                        plan["hook_card"]["face_top_y"] = face_m["face_top_y"]
-                        print(f"  [Hook 卡避让] 人脸顶 y={face_m['face_top_y']:.3f} → "
-                              f"Hook 卡 y={card_y}")
+            hook_st = float(plan["clips"][0].get("st", 0))
+            face_tops = []
+            for dt in (0.1, 0.5, 0.9, 1.3, 1.7, 2.1, 2.4):
+                cap = cv2.VideoCapture(hook_src)
+                cap.set(cv2.CAP_PROP_POS_MSEC, (hook_st + dt) * 1000)
+                ret, hook_frame = cap.read()
+                cap.release()
+                if ret and hook_frame is not None:
+                    pose_lm = _load_pose_landmarks(hook_frame)
+                    if pose_lm is not None:
+                        face_m = FaceAnalyzer().analyze(
+                            hook_frame, pose_landmarks=pose_lm)
+                        if face_m and face_m.get("face_detected"):
+                            face_tops.append(float(face_m["face_top_y"]))
+            if face_tops:
+                face_top = min(face_tops)   # 最高人脸顶（最小归一化 y）
+                # Hook 卡底边距人脸顶 30px（卡高取 constraints 的全局统一值）
+                hc_c = self.gateway.constraints.get("hook_card", {}) or {}
+                card_h = int(hc_c.get("height", 168) or 168)
+                gap = int(hc_c.get("face_top_gap_px", 30) or 30)
+                y_min = int(hc_c.get("y_min", 150) or 150)
+                # 额外 10px 缓冲：覆盖采样间隙的人脸位移与检测误差
+                card_y = int(max(y_min, face_top * 1920 - card_h - gap - 10))
+                plan.setdefault("hook_card", {})["y"] = card_y
+                plan["hook_card"]["face_top_y"] = face_top
+                print(f"  [Hook 卡避让] {len(face_tops)} 帧采样最高人脸顶 "
+                      f"y={face_top:.3f} → Hook 卡 y={card_y}"
+                      f"（卡底 {card_y + card_h}，间距 "
+                      f"{face_top * 1920 - card_y - card_h:.0f}px）")
         except Exception as e:
             print(f"  [Hook 卡避让] 计算失败（用默认 y=280）: {e}")
 
@@ -440,6 +561,28 @@ class AgentDirector:
                 "hook_card_avoidance", True,
                 ["Hook 卡位置满足不压脸约束（B10）"],
                 plan.get("hook_card", {}))
+
+        # 决策 2.4: 放大镜锚点分配（2026-10-27 反馈驱动：放大镜圆圈细节展示）
+        try:
+            self._assign_magnifiers(plan)
+        except Exception as e:
+            print(f"  [MAGNIFIER] 锚点分配失败（不阻断，成片将无放大镜）: {e}")
+
+        # 决策 2.5: 违规词三通道处理准备（2026-10-27 反馈驱动）
+        try:
+            verified_cache = os.path.join(self.work_dir,
+                                          "whisper_segments_verified.json")
+            if not os.path.exists(verified_cache):
+                verified_cache = os.path.join(self.work_dir, "whisper_segments.json")
+            if os.path.exists(verified_cache):
+                with open(verified_cache, "r", encoding="utf-8") as f:
+                    all_segments = json.load(f)
+                from src.tools.apply_violation_handling import (
+                    prepare_violation_handling)
+                prepare_violation_handling(plan, all_segments, self.work_dir,
+                                           self.constraints)
+        except Exception as e:
+            print(f"  [VIOLATION] 三通道处理准备失败（不阻断）: {e}")
 
         plan_path = os.path.join(self.work_dir, "plan.json")
         with open(plan_path, "w", encoding="utf-8") as f:
@@ -513,6 +656,9 @@ class AgentDirector:
             "qc_passed": passed,
             "qc_warnings": auditor.report.get("warnings", []),
             "total_duration": actual_dur,
+            # 2026-10-27 新增：一致性预检 / 对话脚本 / 违规处理登记
+            "consistency_check": consistency_report,
+            "dialogue_script_stats": dialogue_stats,
             "final_deliverables": {
                 "video": out_mp4,
                 "cover": final_cover_path,

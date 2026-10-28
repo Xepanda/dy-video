@@ -2,10 +2,23 @@
 # 依据《会议纪要》+ 2026-10-20 客户决策编制；每个 metric key 在 constraints_map.md 登记纪要原文。
 # 规则：阈值只改本文件，不改代码；本文件版本进入缓存键与 QC 报告。
 
-version: 1.3
-updated: "2026-10-25"
+version: 1.6
+updated: "2026-10-28"
 
 # ============ 变更记录 ============
+# v1.4 (2026-10-27) 工作流重构（反馈驱动）：
+#   - 封面全幅底图：normalize_subject_framing 黑画布放置改为
+#     max(构图scale, 填充scale) 全幅覆盖，顶部黑边根因消除；
+#     封面渲染新增顶部/底部渐变遮罩（scrim）保证文字可读性。
+#   - 新增 transition_effect 段：切片间视频 xfade + 音频 acrossfade 转场。
+#   - 新增 magnifier_effect 段：放大镜圆圈细节展示特效。
+#   - 新增 violation_words 段：抖音极限词库接入 + 三通道处理配置
+#     （字幕屏蔽 / 语音消音 / 视频打码）。
+#   - 新增 overlay_face_safety 段：叠加层（贴纸/Hook卡/字幕/特效）不得
+#     遮挡模特面部的量化审核。
+#   - 新增 consistency_check 段：素材-契约一致性预检（ASR 关键词覆盖
+#     vs 规范关键词），防止挂羊头卖狗肉式素材错配。
+#   - 新增 fade_effect 段：全片头尾淡入淡出。
 # v1.1 (2026-10-21) 泛化验收修正：
 #   - 双肩深度差由硬门禁(0.055)改为软罚分 + 极端侧身硬上限(0.45)。
 #     依据：6 号素材实测主播重心切换/侧身展示时 dz 中位数 0.26，原硬门禁误杀全部候选；
@@ -134,12 +147,44 @@ text:
 # ============ 封面贴图约束（C11~C14）============
 sticker:
   size: 280                       # C11 正方形边长
+  # 2026-10-28 自然过渡贴图（反馈：右侧商品图不得生硬）
+  use_adapter_edges: true         # 启用羽化/渐变融合/去晕边缘处理
+  sticker_feather_px: 10          # 贴图外边缘淡化宽度（反馈收敛：只要边缘柔和一些）
+  sticker_dehalo: true            # 贴图去晕（深色商品图边缘的脏边清除）
+  # 2026-10-28 贴图样式（反馈演进：白底是商品图自身背景，不能抠掉）：
+  #   card    —— 保留商品图原样背景，仅圆角 + 外边缘柔和淡化 + 投影（当前默认）；
+  #   cutout  —— 去白底（剪影描边+剪影投影的贴纸形态，商品图无自身背景时用）。
+  sticker_style: card
+  cutout:
+    white_thresh: 205             # 近白判定：亮度阈值
+    sat_thresh: 42                # 近白判定：饱和度上限（max-min）
+    feather_sigma: 1.8            #  alpha 羽化高斯 sigma（280px 贴图约 4px 轻度过渡带；
+                                 # 2026-10-28 反馈：淡化太夸张，只要边缘轻淡）
+    erode_px: 1                   # 去底前 alpha 腐蚀（去商品边缘光晕）
+    corner_radius: 0              # 圆角半径（0 = 沿用 sticker.radius）
+    # 2026-10-28 反馈"商品贴图要贴上去"：去底商品需明确读作贴在封面的贴纸
+    outline:                      # 剪影描边（die-cut 贴纸语言，消除"漂浮感"）
+      enabled: true
+      width: 3                    # 描边宽度 px
+      color: "#FFFFFF"            # 描边色（浅色；深色商品用白描边最清晰）
+    shadow:                       # 剪影投影（跟随商品轮廓，非矩形卡）
+      enabled: true
+      offset_y: 8                 # 投影下移 px
+      blur: 7                     # 投影模糊半径 px
+      alpha_scale: 0.42           # 投影浓度 0~1
+      color: "#1A0D07"
   margin_a: 32                    # C12 靠左/靠右距离 a
   gap_a: 32                       # C13 两图间距 a
   side: right                     # C12 left | right
   # 2026-10-24 需求变更：原先并排（horizontal）→ 改为**靠右对齐、从上到下垂直堆叠**。
   # vertical 时两张贴图整体垂直居中（vertical_center），左内容区（人物）不受影响。
   layout: vertical                # vertical（上下堆叠，靠右对齐）| horizontal（两张并排）
+  # 2026-10-28 归位：以下四键历史被错放在 split_effect 段（死键，贴图实际读代码
+  # DEFAULTS），现迁回本段生效。
+  radius: 20                      # C14 贴图圆角半径
+  border_color: "#E2E8F0"         # C14 贴图描边色
+  border_width: 0                 # 2026-10-28 反馈：浅色描边即"白边"，默认关闭（0=无描边）
+  vertical_center: 960            # C13 两图组合块中心 y
 
 # ============ 视频顶部平台标识条（2026-10-24 新增）============
 # 视频画面最上方的平台/店铺账号标识区（抖音生态的"账号角标"位置）。
@@ -211,9 +256,6 @@ split_effect:
   label_bg_color: "#FFE9A8"
   label_padding: 14
   label_gap: 24                   # 标签距分割线的水平距离
-  radius: 20                      # C14 圆角半径
-  border_color: "#E2E8F0"         # C14 淡灰描边
-  border_width: 2
   vertical_center: 960            # C13 组合块中心 y
 
 # ============ 视频成片约束（V1~V6, V8）============
@@ -282,3 +324,145 @@ subtitle_banned_tokens:
 blacklist:
   inventory: []      # 空 = 使用代码内置默认
   changover: []      # 空 = 使用代码内置默认
+
+
+# ============ 切片间转场（2026-10-27 新增，反馈驱动）============
+# 解决切片间语言与语音过渡不自然：视频 xfade 叠化 + 音频 acrossfade 交叉淡化。
+# 配合 build_plan 的句子边界对齐（cut 点吸附标点），保证语言完整、听感连续。
+transition_effect:
+  enabled: true
+  type: fade                    # fade（叠化）| none（硬切，旧行为）
+  duration_sec: 0.25            # 转场时长（秒）；总时长按 N-1 个转场扣减
+  audio_crossfade: true         # 音频同步交叉淡化（acrossfade）
+
+# ============ 放大镜圆圈细节展示（2026-10-27 新增，反馈驱动）============
+# 面料/做工分镜的人像 torso 区域叠加圆形放大镜：镜内显示 zoom 倍率的内容，
+# 主画面保持完整构图。锚点由 agent_director 用 Pose 关键点计算并写入 plan。
+magnifier_effect:
+  enabled: true
+  zoom: 1.8                     # 镜内放大倍率（1.5~2.2）
+  radius: 130                   # 圆圈半径（px）
+  ring_width: 8                 # 金属环宽（px）
+  ring_color: "#E8A91E"         # 金色环（与封面商品名呼应）
+  glass_alpha: 0                # 镜面底色不透明度（0=纯净放大内容）
+  margin_x: 60                  # 锚点失效时的兜底位置：距右边缘
+  anchor_y_ratio: 0.42          # 锚点失效时的兜底位置：画幅高度比例
+  fade_in_sec: 0.35             # 出现/消失淡变
+  hold_ratio: 0.80              # 停留占分镜时长比例
+  delay_ratio: 0.12             # 分镜内延迟启动比例
+  max_per_video: 2              # 每条成片最多放大镜数量（避免特效过载）
+  require_face_clear: true      # 圆圈不得覆盖面部（与 overlay_face_safety 联动）
+
+# ============ 全片头尾淡入淡出（2026-10-27 新增）============
+fade_effect:
+  enabled: true
+  fade_in_sec: 0.3              # 片头黑场淡入
+  fade_out_sec: 0.3             # 片尾淡出
+
+# ============ 违规词库与处理（2026-10-27 新增，反馈驱动）============
+# 词库来源：飞书《违规整合》（抖音电商学习中心极限词清单），
+# 本地镜像 contracts/violation_words.yaml（可用 manage_violation_words.py 导入更新）。
+# 三通道处理（决策）：字幕屏蔽 + 语音消音 + 视频打码，确保零残留。
+violation_words:
+  library_path: "contracts/violation_words.yaml"
+  detect:
+    asr_segments: true          # ASR 台词全量扫描（语音消音依据）
+    subtitles: true             # 成片字幕扫描（字幕屏蔽依据）
+    cover_ocr: true             # 封面/画面文字 OCR 扫描（视频打码依据）
+    scan_frames: 6              # 视频打码通道的抽帧数（每分镜）
+  handling:
+    subtitle_mask: true         # 通道 1：字幕命中词替换为 ***
+    audio_mute: true            # 通道 2：命中时段语音消音（80ms 淡入出避免爆音）
+    video_mosaic: true          # 通道 3：画面可见命中词区域打码（boxblur）
+    mosaic_pad_px: 24           # 打码区域外扩像素
+    mute_fade_ms: 80            # 消音淡变时长（ms）
+  enforce_level: BLOCK          # BLOCK=成片字幕/语音检出即拦截；WARN=仅记录
+
+# ============ 叠加层人脸安全审核（2026-10-27 新增，反馈驱动）============
+# 贴纸/Hook卡/字幕带/放大镜等叠加元素不得遮挡模特面部（尤其是眼睛区域）。
+# 审核在 QC 阶段对成片抽帧 + 叠加元素 meta 做几何交叠判定。
+overlay_face_safety:
+  enabled: true
+  margin_px: 30                 # 叠加元素 bbox 与人脸 bbox 的最小间距
+  sample_per_clip: 2            # 每个分镜抽帧数（叠加元素活跃时段内）
+  enforce_level: BLOCK          # 压脸即拦截（反馈明确要求）
+
+# ============ 素材-契约一致性预检（2026-10-27 新增，反馈驱动）============
+# 2026-10-26 教训：素材实拍为马甲而契约为针织衫，导致成片口播与封面商品不符
+# （抖音"虚假宣传-商品信息不一致"违规）。预检在 Phase 1.5 执行：
+#   ASR 关键词覆盖率 = 规范关键词在主播台词中的命中情况；
+#   商品名词覆盖率 = 契约商品名核心词在台词中的命中情况。
+consistency_check:
+  enabled: true
+  keyword_coverage_warn: 0.34   # 规范关键词覆盖率低于此值记 WARN
+  product_word_warn: 0.5        # 商品名核心词覆盖率低于此值记 WARN
+  garment_match_warn: 0.15      # 衣着一致性低于此值记 WARN（与 garment_match.histogram_min 对齐）
+  enforce_level: WARN           # 默认 WARN（不拦截）；确认错配时可升 BLOCK
+  report_path: "consistency_report.json"
+
+
+# ============ 成片 ASR 复检门禁（2026-10-27 新增，闭环"物理咬合原声"承诺）============
+# 背景：原工作流对素材 ASR 有三重校验（asr_review_gate / asr_agent_verifier /
+# consistency_check），但对**拼接后完整视频**没有任何 ASR 复检——QC 的字词检查
+# 只是 ASS 文件级文本检查，无法验证：①字幕与成片原声是否一致 ②语音消音是否
+# 真的生效 ③xfade/acrossfade 转场是否损坏语音 ④价格/违规词是否在音频通道残留。
+# 本段配置 verify_final_video_asr 工具 + QC 的 _audit_final_video_asr 断言。
+final_asr_verify:
+  enabled: true
+  model_size: small              # 复检模型（与转写同规模，保证可比性）
+  # V1 字幕-原声一致性（difflib 全局相似度）
+  subtitle_match_block: 0.50     # < 此值 BLOCK（字幕与原声严重不符）
+  subtitle_match_warn: 0.70      # < 此值 WARN
+  # V4 识别密度（句/秒，防组装吞音）
+  density_min: 0.06
+  # V5 消音执行核查：消音窗口内最大音量超过此值 → BLOCK（词仍可听见）
+  mute_max_volume_db: -30.0
+  # V2/V3 语音通道价格/违规词：检出即 BLOCK（enforce_level 控制）
+  enforce_level: BLOCK
+
+
+# ============ 商品图封面适配器（2026-10-28 新增，可复用方案）============
+# 问题：商品图（尤其带深色边缘的实拍缩略图）直接作封面/封面大图时边缘生硬
+# （"贴纸感"）。方案：背景延展 / 边缘羽化 / 渐变融合 / 阴影 / 圆角，全参数可配。
+# 模块：src/graphics/product_image_adapter.py（核心）
+#       src/tools/adapt_product_cover.py（CLI）
+#       src/tools/verify_cover_adaptation.py（效果验证）
+# 模式：card（圆角卡片+阴影，兼容旧贴图）| blend（柔边融入纯色/渐变背景，推荐）
+#       extend（商品图色彩延展为全幅背景+主体柔边居中）| collage（大图重羽化拼贴）
+product_image_adapter:
+  mode: blend                    # card | blend | extend | collage
+  canvas_size: [1080, 1920]      # 默认输出画布
+  # 尺寸与留白
+  margin_px: 96                  # 商品图四周留白
+  scale_mode: fit                # fit | fill | stretch
+  max_subject_ratio: 0.72        # 商品图主体占画布短边比例上限
+  # 边缘样式
+  edge_style: gradient           # gradient（渐变融合）| hard | rounded
+  corner_radius: 28              # 圆角半径 px（0=直角）
+  feather_px: 48                 # 边缘羽化宽度 px
+  blend_ratio: 1.0               # 渐变融合强度 0~1
+  dehalo: true                   # 边缘去晕（深色商品图贴浅背景的脏边清除）
+  dehalo_blur_ratio: 0.5         # 去晕模糊半径 = feather_px × 此比例
+  # 阴影
+  shadow:
+    enabled: true
+    blur: 24
+    offset_x: 0
+    offset_y: 10
+    alpha: 90
+    color: "#1A0D07"
+  # 背景
+  background:
+    type: gradient               # color | gradient | extend
+    color: "#F5EFE8"
+    gradient: ["#F5EFE8", "#E8D9C8"]
+    extend_method: mirror        # mirror | replicate
+    extend_scale: 1.25           # 延展放大系数
+    extend_blur: 60              # 延展背景模糊半径 px
+    darken: 0.12                 # 延展背景压暗（文字可读性）
+    saturate: 1.05
+  # collage 模式
+  collage:
+    subject_ratio: 0.88
+    feather_px: 90
+    rotate_deg: 0.0

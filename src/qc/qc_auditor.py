@@ -215,6 +215,19 @@ class QcAuditor:
                          metric_key="subtitle_banned_tokens",
                          measured=bad_found, threshold=[])
 
+        # ---- 违规词零残留（2026-10-27 反馈驱动）----
+        vw_c = self.constraints.get("violation_words", {}) or {}
+        if (vw_c.get("detect", {}) or {}).get("subtitles", True):
+            from src.tools.detect_violation import audit_ass_file
+            vres = audit_ass_file(ass_path)
+            v_enforce = str(vw_c.get("enforce_level", "BLOCK")).upper()
+            self._assert(vres["clean"], "字幕违规词零残留（违规词库）",
+                         f"字幕检出 {vres['total_hits']} 处违规词"
+                         + (f": {', '.join(h['word'] for h in vres['hits'][:5])}"
+                            if vres["hits"] else ""),
+                         level=v_enforce, metric_key="violation_words.enforce_level",
+                         measured=vres["total_hits"], threshold=0)
+
         # ---- B10 封面渲染几何复测 ----
         if cover_meta_path and os.path.exists(cover_meta_path):
             self._audit_cover_geometry(cover_meta_path)
@@ -244,6 +257,10 @@ class QcAuditor:
 
         # ---- 视频叠加元素复测（2026-10-24：平台标识条/挂角贴纸/放大特效/镜像遮挡）----
         self._audit_overlays(video_path, overlay_meta_path, self.constraints)
+        # 叠加层人脸安全审核（2026-10-27 反馈驱动）
+        self._audit_overlay_face_safety(video_path, overlay_meta_path)
+        # 成片 ASR 复检门禁（2026-10-27：闭环"物理咬合原声"承诺）
+        self._audit_final_video_asr(video_path, ass_path)
 
         # ---- 输出报告 ----
         if report_output_path:
@@ -508,6 +525,40 @@ class QcAuditor:
             self._assert(True, "镜像防反文字遮挡", "未启用镜像或无需遮挡",
                          level="WARN", metric_key="video.mirror_occlusion")
 
+        # —— 5) 转场复测（2026-10-27）——
+        trans_c = constraints.get("transition_effect", {}) or {}
+        trans_meta = meta.get("transition", {}) or {}
+        if trans_c.get("enabled", True):
+            applied = bool(trans_meta.get("applied"))
+            n_clips = int(trans_meta.get("n_clips", 0) or 0)
+            self._assert(applied or n_clips < 2, "切片转场复测",
+                         f"转场已应用（{trans_meta.get('type')} "
+                         f"{trans_meta.get('duration_sec')}s，{n_clips} 切片）"
+                         if applied else "未应用转场（切片数 "
+                                        f"{n_clips} < 2 时允许硬切）",
+                         level="WARN", metric_key="transition_effect",
+                         measured=applied, threshold=True)
+        else:
+            self._assert(True, "切片转场复测", "约束未启用，跳过",
+                         level="WARN", metric_key="transition_effect")
+
+        # —— 6) 放大镟复测（2026-10-27）——
+        magn_c = constraints.get("magnifier_effect", {}) or {}
+        mevents = meta.get("magnifier_events", []) or []
+        if magn_c.get("enabled", True):
+            z_max = float(magn_c.get("zoom", 1.8) or 1.8)
+            bad = [f"{e.get('clip_id')} 倍率 {e.get('zoom')} 超出 {z_max}"
+                   for e in mevents if float(e.get("zoom", 0) or 0) > z_max + 1e-6]
+            self._assert(not bad, "放大镟特效复测",
+                         f"{len(mevents)} 个放大镟，参数合规"
+                         if not bad else "; ".join(bad[:3]),
+                         level="WARN" if not bad else "BLOCK",
+                         metric_key="magnifier_effect",
+                         measured=len(mevents), threshold=len(mevents))
+        else:
+            self._assert(True, "放大镟特效复测", "约束未启用，跳过",
+                         level="WARN", metric_key="magnifier_effect")
+
     def _probe_top_band(self, video_path: str, band_h: int) -> int:
         """探测成片顶部条带的高亮像素数（标识条图标/文字的痕迹）。
 
@@ -535,6 +586,100 @@ class QcAuditor:
             return best
         except Exception:
             return None
+
+    def _audit_overlay_face_safety(self, video_path: str,
+                                   overlay_meta_path: str) -> None:
+        """叠加层人脸安全审核（2026-10-27：反馈驱动）。
+
+        反馈原文："贴图、标题、字幕、特效、动画是否影响到模特主体
+        （尤其是面部）"。姑置 check_overlay_face_safety 工具：
+        在成片上按叠加元素活跃时段抽帧 + 人脸 bbox 几何交叠判定。
+        """
+        ofs_c = self.constraints.get("overlay_face_safety", {}) or {}
+        if not ofs_c.get("enabled", True):
+            self._assert(True, "叠加层人脸安全", "约束未启用，跳过",
+                         level="WARN", metric_key="overlay_face_safety")
+            return
+        if not overlay_meta_path or not os.path.exists(overlay_meta_path):
+            self._assert(True, "叠加层人脸安全",
+                         "未提供叠加元素清单，跳过",
+                         level="WARN", metric_key="overlay_face_safety")
+            return
+        try:
+            from src.tools.check_overlay_face_safety import (
+                check_overlay_face_safety)
+            res = check_overlay_face_safety(
+                video_path, overlay_meta_path, constraints=self.constraints)
+        except Exception as e:
+            self._assert(True, "叠加层人脸安全",
+                         f"审核执行异常，跳过（不阻断）: {str(e)[:100]}",
+                         level="WARN", metric_key="overlay_face_safety")
+            return
+        enforce = str(res.get("enforce_level", "BLOCK")).upper()
+        s = res.get("summary", {})
+        blocks = [c for c in res.get("checks", []) if c.get("status") == "BLOCK"]
+        detail = (f"{s.get('n_elements', 0)} 个叠加元素：PASS {s.get('n_pass', 0)} / "
+                  f"WARN {s.get('n_warn', 0)} / BLOCK {s.get('n_block', 0)} / "
+                  f"SKIP {s.get('n_skip', 0)}（安全间距 "
+                  f"{ofs_c.get('margin_px', 30)}px）")
+        self._assert(not blocks, "叠加层人脸安全",
+                     detail if not blocks else
+                     detail + " | 压脸: " + "; ".join(
+                         f"{c['kind']}{c.get('clip_id') or ''}" for c in blocks[:4]),
+                     level=enforce, metric_key="overlay_face_safety",
+                     measured=s.get("n_block", 0), threshold=0)
+
+    def _audit_final_video_asr(self, video_path: str,
+                               ass_path: str) -> None:
+        """成片 ASR 复检门禁（2026-10-27 新增，补缺口）。
+
+        背景：原工作流对素材 ASR 有三重校验（asr_review_gate /
+        asr_agent_verifier / consistency_check），但对拼接后完整视频
+        无任何 ASR 复检——断言都是 ASS 文件级文本检查。
+        本方法对成片音频重新转录，验证：
+        字幕与原声一致性 / 语音违规词零残留 / 语音价格零残留 /
+        识别密度健全性 / 消音执行根本生效。
+        转录环境故障时降级 WARN（不阻断交付）。
+        """
+        fas_c = self.constraints.get("final_asr_verify", {}) or {}
+        if not fas_c.get("enabled", True):
+            self._assert(True, "成片 ASR 复检", "约束未启用，跳过",
+                         level="WARN", metric_key="final_asr_verify")
+            return
+        try:
+            from src.tools.verify_final_video_asr import (
+                verify_final_video_asr)
+            # work_dir 从 ass 路径推导（subtitles.ass 位于 work_dir）
+            work_dir = os.path.dirname(os.path.abspath(ass_path)) if ass_path else None
+            res = verify_final_video_asr(
+                video_path, ass_path=ass_path, work_dir=work_dir,
+                constraints=self.constraints)
+        except Exception as e:
+            self._assert(True, "成片 ASR 复检",
+                         f"复检执行异常，降级 WARN（不阻断）: {str(e)[:120]}",
+                         level="WARN", metric_key="final_asr_verify")
+            return
+        if res.get("skipped"):
+            self._assert(True, "成片 ASR 复检",
+                         (res.get("warnings") or ["跳过"])[0],
+                         level="WARN", metric_key="final_asr_verify")
+            return
+        for c in res.get("checks", []):
+            status = c.get("status")
+            if status == "PASS":
+                self._assert(True, f"成片ASR复检-{c['id']} {c['name']}",
+                             c["detail"], metric_key="final_asr_verify",
+                             measured=c.get("measured"), threshold=c.get("threshold"))
+            elif status == "WARN":
+                self._assert(False, f"成片ASR复检-{c['id']} {c['name']}",
+                             c["detail"], level="WARN",
+                             metric_key="final_asr_verify",
+                             measured=c.get("measured"), threshold=c.get("threshold"))
+            else:  # BLOCK
+                self._assert(False, f"成片ASR复检-{c['id']} {c['name']}",
+                             c["detail"], level="BLOCK",
+                             metric_key="final_asr_verify",
+                             measured=c.get("measured"), threshold=c.get("threshold"))
 
     def _audit_cover_geometry(self, cover_meta_path: str) -> None:
         """封面渲染几何复测：元素坐标与 meta 一致性 + 安全区。"""

@@ -23,7 +23,7 @@ import json
 import math
 from typing import List, Dict, Any, Optional, Tuple
 
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 
 OUT_W = 1080
 OUT_H = 1920
@@ -89,6 +89,37 @@ def _load_constraints(path: str = None) -> Dict[str, Any]:
             return yaml.safe_load(f) or {}
     except Exception:
         return {}
+
+
+def apply_readability_scrims(canvas: Image.Image,
+                            top_h: int = 430,
+                            bottom_start_ratio: float = 0.70) -> Image.Image:
+    """在完整底图上添加顶部/底部渐变遮罩（2026-10-27 反馈驱动）。
+
+    背景：全幅底图新流程下，品牌文字与商品名直接叠在直播画面上，
+    若底图背景复杂（吊衣架/人身/灯光）会降低文字可读性。
+    方案：用渐变遮罩（scrim）而非硬黑边——顶部由深色渐变至透明，
+    底部由透明渐变至深色，文字区域有阴影而画面中间保持纯净，
+    视觉上文字与图片自然融为一体。
+    """
+    w, h = canvas.size
+    scrim = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    s_draw = ImageDraw.Draw(scrim)
+    # 顶部：(24, 14, 9, 120) → 透明（遮盖品牌文字区）
+    top_h = min(top_h, h)
+    for y in range(top_h):
+        a = int(120 * (1.0 - y / max(1, top_h)) ** 1.3)
+        if a <= 0:
+            continue
+        s_draw.line([(0, y), (w, y)], fill=(24, 14, 9, a))
+    # 底部：透明 → (24, 14, 9, 165)（遮盖商品名区）
+    y0 = int(h * bottom_start_ratio)
+    span = max(1, h - y0)
+    for y in range(y0, h):
+        t = (y - y0) / span
+        a = int(165 * t ** 1.2)
+        s_draw.line([(0, y), (w, y)], fill=(24, 14, 9, a))
+    return Image.alpha_composite(canvas, scrim)
 
 
 def draw_rounded_rectangle_with_shadow(
@@ -328,24 +359,151 @@ class MixCityCoverRenderer:
                 for i in range(num_cards):
                     card_boxes.append((gx0, gy0 + i * (card_size + gap_a)))
 
+        # 自然过渡贴图（2026-10-28：反馈——右侧商品图不得生硬“贴贴”感）
+        # 复用 product_image_adapter 的边缘处理链：
+        # 缩放+键化 → 去晕（dehalo）→ 圆角+羽毛 alpha → 向背景渐变融合。
+        # 阴影/描边/meta 保持原样（QC 几何复测依赖 meta）。
+        use_adapter_edges = bool(self.sticker_c.get("use_adapter_edges", True))
+        # 贴图样式（2026-10-28 反馈：去除商品图四周白边）：
+        #   cutout —— 去白底 + 圆角 + 羽化，商品主体直接融入直播画面（默认）；
+        #   card    —— 保留白底卡片形态，仅做柔边处理（上一版行为）。
+        sticker_style = str(self.sticker_c.get("sticker_style", "cutout"))
+        if sticker_style not in ("cutout", "card"):
+            sticker_style = "cutout"
+        cutout_c = self.sticker_c.get("cutout", {}) or {}
+        sticker_adapter = None
+        if use_adapter_edges or sticker_style == "cutout":
+            from src.graphics.product_image_adapter import ProductImageAdapter
+            sticker_adapter = ProductImageAdapter({
+                "mode": "card",
+                "feather_px": float(self.sticker_c.get("sticker_feather_px", 14) or 14),
+                "corner_radius": float(self.sticker_c.get("radius", 20)),
+                "blend_ratio": 1.0,
+                "dehalo": bool(self.sticker_c.get("sticker_dehalo", True)),
+                "shadow": {"enabled": False},   # 阴影由下方传统阴影绘制（保持视觉一致）
+                "border": {"width": 0},
+            })
+
         for idx, (img_path, (cx, cy)) in enumerate(zip(item_images[:num_cards], card_boxes)):
             card_box = (cx, cy, cx + card_size, cy + card_size)
+            prod_img = Image.open(img_path).convert("RGBA")
+
+            if sticker_style == "cutout" and sticker_adapter is not None:
+                # 去白底路径（2026-10-28 反馈：去除商品图四周白边，
+                # 圆角 + 柔和羽化，主体清晰完整）：
+                #   放大+锐化 → 去白底（flood fill，主体连通域保护）→
+                #   圆角掩码（自身 2px 羽化）× matte alpha → 合成到直播画面
+                prod = sticker_adapter._resize_to(prod_img,
+                                                  (card_size, card_size))
+                cut, matte_meta = ProductImageAdapter.remove_white_background(
+                    prod,
+                    white_thresh=int(cutout_c.get("white_thresh", 205) or 205),
+                    sat_thresh=int(cutout_c.get("sat_thresh", 42) or 42),
+                    feather_sigma=float(cutout_c.get("feather_sigma", 4.0) or 4.0),
+                    erode_px=int(cutout_c.get("erode_px", 1) or 0),
+                )
+                radius_c = (int(cutout_c.get("corner_radius", 0) or 0)
+                            or int(self.sticker_c["radius"]))
+                corner = Image.new("L", (card_size, card_size), 0)
+                cm_draw = ImageDraw.Draw(corner)
+                cm_draw.rounded_rectangle([0, 0, card_size, card_size],
+                                          radius=radius_c, fill=255)
+                corner = corner.filter(ImageFilter.GaussianBlur(2))
+                cut.putalpha(ImageChops.multiply(cut.split()[3], corner))
+
+                # —— 贴纸描边（2026-10-28 反馈"商品贴图要贴上去"）——
+                # 去底商品直接溶在背景里会读作"漂浮"而非"贴上"。
+                # 沿剪影外扩一圈浅色描边（die-cut 贴纸的经典语言），
+                # 让贴图明确读作贴在封面表面的元素。
+                outline_c = cutout_c.get("outline", {}) or {}
+                outline_applied = False
+                if outline_c.get("enabled", True):
+                    ow = max(1, int(outline_c.get("width", 3) or 3))
+                    o_rgb = _hex_to_rgb(outline_c.get("color", "#FFFFFF"))
+                    a_src = cut.split()[3]
+                    dilated = a_src.filter(ImageFilter.MaxFilter(2 * ow + 1))
+                    ring = ImageChops.subtract(dilated, a_src)
+                    ring_layer = Image.new("RGBA", (card_size, card_size),
+                                           o_rgb + (255,))
+                    ring_layer.putalpha(ring)
+                    overlay.alpha_composite(ring_layer, (cx, cy))
+                    outline_applied = True
+
+                # —— 剪影投影（跟随毛衣轮廓，而非矩形卡）——
+                # 投影是"贴上去"最核心的视觉线索：拾起表面、悬浮于画面之上。
+                sh_c = cutout_c.get("shadow", {}) or {}
+                shadow_applied = False
+                if sh_c.get("enabled", True):
+                    off_y = int(sh_c.get("offset_y", 8) or 8)
+                    blur = float(sh_c.get("blur", 7) or 7)
+                    alpha_k = float(sh_c.get("alpha_scale", 0.42) or 0.42)
+                    a_shift = Image.new("L", (card_size, card_size), 0)
+                    a_shift.paste(cut.split()[3], (0, off_y))
+                    a_blur = a_shift.filter(ImageFilter.GaussianBlur(blur))
+                    a_sh = a_blur.point(lambda v: int(v * alpha_k))
+                    sh_img = Image.new(
+                        "RGBA", (card_size, card_size),
+                        _hex_to_rgb(sh_c.get("color", "#1A0D07")) + (255,))
+                    sh_img.putalpha(a_sh)
+                    overlay.alpha_composite(sh_img, (cx, cy))
+                    shadow_applied = True
+
+                overlay.alpha_composite(cut, (cx, cy))
+                meta["elements"][f"sticker_{idx+1}"] = {
+                    "box": list(card_box), "side": side, "layout": layout,
+                    "margin_a": margin_a, "size": card_size,
+                    "style": "cutout",
+                    "corner_radius": radius_c,
+                    "outline": {"applied": outline_applied,
+                                "width": int((cutout_c.get("outline", {}) or {}).get("width", 3) or 3)},
+                    "silhouette_shadow": {"applied": shadow_applied,
+                                          "offset_y": int((cutout_c.get("shadow", {}) or {}).get("offset_y", 8) or 8)},
+                    "matte": {
+                        "bg_removed_ratio": matte_meta["bg_removed_ratio"],
+                        "subject_retention": matte_meta["subject_retention"],
+                        "subject_coverage": matte_meta["subject_coverage"],
+                        "feather_sigma": matte_meta["feather_sigma"],
+                    },
+                }
+                continue
+
+            # card / 旧路径：矩形投影 + 内容
             draw_rounded_rectangle_with_shadow(
                 overlay, card_box, radius=int(self.sticker_c["radius"]),
                 shadow_offset=(0, 6), shadow_blur=12, shadow_alpha=80)
-            prod_img = Image.open(img_path).convert("RGBA")
-            prod_img = prod_img.resize((card_size, card_size), Image.LANCZOS)
-            mask = Image.new("L", (card_size, card_size), 0)
-            m_draw = ImageDraw.Draw(mask)
-            m_draw.rounded_rectangle([0, 0, card_size, card_size],
-                                     radius=int(self.sticker_c["radius"]), fill=255)
-            overlay.paste(prod_img, (cx, cy), mask=mask)
-            c_draw = ImageDraw.Draw(overlay)
-            border_rgb = _hex_to_rgb(self.sticker_c["border_color"])
-            c_draw.rounded_rectangle(
-                [cx, cy, cx + card_size, cy + card_size],
-                radius=int(self.sticker_c["radius"]),
-                outline=border_rgb + (255,), width=int(self.sticker_c["border_width"]))
+            if sticker_adapter is not None:
+                # 自然过渡路径：以当前合成预览为背景取色（渐变融合才准）
+                preview = Image.alpha_composite(base, overlay)
+                sticker_layer = sticker_adapter.render_foreground(
+                    prod_img, card_box, preview, place_at=(cx, cy))
+                overlay.alpha_composite(sticker_layer, (0, 0))
+                # 描边（2026-10-28 反馈：浅色描边即"白边"，border_width=0 时关闭）
+                if int(self.sticker_c.get("border_width", 0) or 0) > 0:
+                    c_draw = ImageDraw.Draw(overlay)
+                    border_rgb = _hex_to_rgb(self.sticker_c["border_color"])
+                    inset = max(1, int(self.sticker_c["border_width"]) // 2 + 2)
+                    c_draw.rounded_rectangle(
+                        [cx + inset, cy + inset,
+                         cx + card_size - 1 - inset, cy + card_size - 1 - inset],
+                        radius=max(0, int(self.sticker_c["radius"]) - inset),
+                        outline=border_rgb + (255,),
+                        width=int(self.sticker_c["border_width"]))
+            else:
+                # 旧行为：硬圆角掩码直接贴（use_adapter_edges=false 时退化）
+                prod_img = prod_img.resize((card_size, card_size), Image.LANCZOS)
+                mask = Image.new("L", (card_size, card_size), 0)
+                m_draw = ImageDraw.Draw(mask)
+                m_draw.rounded_rectangle([0, 0, card_size, card_size],
+                                         radius=int(self.sticker_c["radius"]), fill=255)
+                overlay.paste(prod_img, (cx, cy), mask=mask)
+                if int(self.sticker_c.get("border_width", 0) or 0) > 0:
+                    c_draw = ImageDraw.Draw(overlay)
+                    border_rgb = _hex_to_rgb(self.sticker_c["border_color"])
+                    c_draw.rounded_rectangle(
+                        [cx, cy, cx + card_size, cy + card_size],
+                        radius=int(self.sticker_c["radius"]),
+                        outline=border_rgb + (255,),
+                        width=int(self.sticker_c["border_width"]))
             meta["elements"][f"sticker_{idx+1}"] = {
                 "box": list(card_box), "side": side, "layout": layout,
                 "margin_a": margin_a, "size": card_size,
@@ -384,6 +542,11 @@ class MixCityCoverRenderer:
             "gradient": ["#%02X%02X%02X" % self.gradient_top[:3],
                          "#%02X%02X%02X" % self.gradient_bottom[:3]],
         }
+
+        # -------------------------------------------------------------
+        # 3.5 可读性渐变遮罩（2026-10-27：全幅底图下保证文字可读）
+        # -------------------------------------------------------------
+        base = apply_readability_scrims(base)
 
         # -------------------------------------------------------------
         # 4. 合成输出

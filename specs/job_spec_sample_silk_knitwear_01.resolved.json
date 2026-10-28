@@ -1,0 +1,37 @@
+{
+  "project_id": "sample_silk_knitwear_01",
+  "raw_video_path": "C:\\Users\\ePanda\\Desktop\\project\\raw\\mmexport1793029231508.mp4",
+  "brand": {
+    "title_en": "MIXCITY",
+    "subtitle_cn": "深圳高端女装"
+  },
+  "product": {
+    "title_line1": "桑蚕丝羊绒羊毛",
+    "title_line2": "渐变针织衫",
+    "item_images": [
+      "data/raw_samples/sample_product_card.png"
+    ]
+  },
+  "options": {
+    "duration_range": "45-65",
+    "split_strategy": "force_off",
+    "highlight_keywords": [
+      "桑蚕丝",
+      "羊绒",
+      "羊毛",
+      "显瘦",
+      "针织衫",
+      "闭眼入",
+      "降温"
+    ],
+    "hook_card_text": "桑蚕丝羊绒羊毛 · 渐变针织衫",
+    "cta_text": "戳左下方小黄车看渐变针织衫"
+  },
+  "raw_video_paths": [
+    "C:\\Users\\ePanda\\Desktop\\project\\raw\\mmexport1793029231508.mp4",
+    "C:\\Users\\ePanda\\Desktop\\project\\raw\\mmexport1793029233713.mp4",
+    "C:\\Users\\ePanda\\Desktop\\project\\raw\\mmexport1793029235350.mp4",
+    "C:\\Users\\ePanda\\Desktop\\project\\raw\\mmexport1793029242192.mp4",
+    "C:\\Users\\ePanda\\Desktop\\project\\raw\\mmexport1793029244000.mp4"
+  ]
+}

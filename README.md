@@ -40,6 +40,13 @@
 | **LLM 字幕审核** | `src/core/asr_agent_verifier.py`（LLM 分支） | OpenAI 兼容 LLM 上层复核：严格 JSON 契约 + 时间戳绝对守恒 + 零价格护栏 + 两引擎 diff 全量审计 + 不可用自动降级 | **B15**：环境变量 LLM_BASE_URL/LLM_API_KEY/LLM_MODEL 配置 |
 | **OpenChatCut 桥接** | `python src/tools/chatcut_bridge.py` | plan.json ↔ OpenChatCut 风格多轨时间线双向转换；人工精修（trim/删除/重排）回注后可重新组装 | **B14**：`--plan x.json --out timeline.json` 导出；`--timeline t.json --plan-out p.json` 回注 |
 | **回归测试体系** | `python scripts/run_regression.py` | 三层回归：单元测试（5 套）→ 素材端到端（fixtures 5 条）→ 指标区间锁定比对；`--update-baselines` 显式更新基线 | **B16**：CI 全绿才允许合入；阈值变更必须附回归结果 |
+| **违规词检测** | `python src/tools/detect_violation.py --ass subtitles.ass` | 抖音极限词库（`contracts/violation_words.yaml`，飞书《违规整合》镜像）全量检测：ASR 台词 / 成片字幕 / 画面 OCR 三类输入 | **反馈 2026-10-27**：词库数据驱动，增删词条不改代码 |
+| **违规词三通道处理** | `python src/tools/apply_violation_handling.py --plan plan.json --segments ... ` | 命中词三通道彻底处理：字幕屏蔽（`***`）+ 语音消音（区间 volume 表达式）+ 视频打码（OCR 定位像素化）；产出 `violation_handling.json` | **反馈 2026-10-27**：QC 对成片字幕零残留 BLOCK 断言 |
+| **完整对话脚本** | `python src/tools/build_dialogue_script.py --spec job_spec.json --segments ...` | ASR 段合并为完整语句（utterance），标注句末完整标记/漏斗类目/违规命中，作为剪辑唯一剧本 | **反馈 2026-10-27**：句子边界吸附 + acrossfade 转场配套 |
+| **一致性预检** | `python src/tools/check_spec_material_consistency.py --spec job_spec.json --segments ...` | 素材-契约一致性：关键词覆盖率/商品名词覆盖率/衣着一致性/违规词扫描，防"挂羊头卖狗肉" | **反馈 2026-10-27**：2026-10-26 马甲/针织衫错配教训的产物 |
+| **叠加层人脸安全** | `python src/tools/check_overlay_face_safety.py --video final.mp4 --overlay-meta ...` | 贴纸/Hook 卡/字幕带/放大镜等叠加元素与模特面部的几何交叠审核（压脸 BLOCK） | **反馈 2026-10-27**：特效不得影响模特主体（尤其是面部） |
+| **成片 ASR 复检** | `python src/tools/verify_final_video_asr.py --video final.mp4 --ass subtitles.ass --work-dir ...` | 对拼接后完整视频重新转录，五项检查：V1 字幕-原声一致性 / V2 语音违规词零残留 / V3 语音价格零残留 / V4 识别密度健全性 / V5 消音执行核查（核心区实测静音） | **2026-10-27 闭环**：素材 ASR 三重校验 + 成片 ASR 复检，双向闭环"物理咬合原声"承诺 |
+| **商品图封面适配** | `python src/tools/adapt_product_cover.py --image product.png --out cover.jpg --mode extend` | 商品图直接作封面的自然过渡：背景延展（镜像/replicate）/ 边缘羽化（距离变换）/ 渐变融合（去晕）/ 阴影 / 圆角，四模式（card/blend/extend/collage）× 任意尺寸背景 × 强度可配 | **2026-10-28**：`verify_cover_adaptation.py` 六项量化验证（羽化剖面/无硬边界/防 halo/阴影/留白）；`remove_white_background` 白底去除（flood fill 连通域保护主体）已集成为封面右侧贴图默认样式（`sticker.sticker_style: cutout`） |
 
 ---
 
@@ -92,6 +99,10 @@ dy-live-ecommerce-editor/
 ---
 
 ## 🚀 Agent 协同剪辑操作流程 (Workflow)
+
+> **2026-10-27 工作流重构**（反馈驱动）：封面全幅底图、ASR 驱动完整对话剪辑、
+> 转场/放大镜特效集成、违规词三通道处理、全阶段审核机制。
+> 完整阶段宪法见 [`workflows/standard_pipeline_v2.md`](workflows/standard_pipeline_v2.md)。
 
 ### 0. 准备素材与商品信息 (生成任务契约)
 剪辑前，用户需提供原始直播录像与商品信息以建立契约上下文。

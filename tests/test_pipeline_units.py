@@ -153,7 +153,14 @@ class TestFramingNormalization(unittest.TestCase):
         self.assertIn("post_scale_sharpness", meta)
         self.assertTrue(meta["knees_visible"])
         self.assertTrue(meta["ankles_visible"])
-        self.assertLessEqual(meta["achieved_height_ratio"], 0.65)
+        # 2026-10-27 全幅底图：身高上限改为 person_height_max(0.80)，
+        # 且画布顶部/底部不得有黑边（背景必须覆盖整个画布）
+        self.assertTrue(meta.get("full_bleed"))
+        self.assertLessEqual(meta["achieved_height_ratio"], 0.80 + 0.02)
+        top_band = norm_canvas[:60, :, :]
+        bot_band = norm_canvas[-60:, :, :]
+        self.assertGreater(int(top_band.max()), 40, "顶部存在黑边（全幅失败）")
+        self.assertGreater(int(bot_band.max()), 40, "底部存在黑边（全幅失败）")
         self.assertFalse(meta["width_constraint_active"])
         self.assertGreater(meta["achieved_width_ratio"], 0.25)
         self.assertEqual(meta["center_x_px"], 540)

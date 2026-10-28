@@ -249,6 +249,35 @@ def build_blocks(segments: List[Dict[str, Any]],
     return blocks, rejected
 
 
+# ---------------------------------------------------------------- 句子边界对齐（2026-10-27 反馈驱动）
+
+SENT_END_CHARS = "。！？!?；;…"
+SNAP_TOLERANCE_SEC = 2.0
+
+
+def _ends_with_sentence_punct(text: str) -> bool:
+    t = (text or "").rstrip()
+    return bool(t) and t[-1] in SENT_END_CHARS
+
+
+def _snap_end_to_sentence(segs: List[Dict[str, Any]], hard_end: float,
+                          tolerance: float = SNAP_TOLERANCE_SEC) -> float:
+    """把硬裁剪结束点吸附到最近的句子边界（段末标点），解决"对话从半句砍断"。
+
+    只在 [hard_end - tolerance, hard_end + 0.2] 窗口内寻找候选（宁短勿长，
+    保证成片总时长不低于 45s 下限）；找不到合格标点则保留原硬切点。
+    """
+    best = None
+    for s in segs:
+        if not _ends_with_sentence_punct(s.get("text", "")):
+            continue
+        t = float(s.get("end", 0.0))
+        if hard_end - tolerance <= t <= hard_end + 0.2:
+            if best is None or t > best:
+                best = t
+    return best if best is not None else hard_end
+
+
 def _trim_block_to_duration(block: Dict[str, Any], target: float,
                             prefer_keywords: List[str] = None) -> Dict[str, Any]:
     """将 block 修剪到 target 时长。优先段边界对齐；无法对齐时硬时间裁剪兜底。
@@ -287,10 +316,11 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
             kept = segs[i:j]
             rest = segs[j:]
             # 目标时长硬约束：窗口可能因单段过长而超出 target（如 32s 长句）→ 硬裁剪
+            # （2026-10-27：裁剪点吸附句末标点，避免从半句砍断）
             win_st = kept[0].get("start", block["start"])
             win_en = kept[-1].get("end", win_st + target)
             if win_en - win_st > target + 0.05:
-                win_en = round(win_st + target, 3)
+                win_en = _snap_end_to_sentence(kept, win_st + target)
                 kept = [s for s in kept if s.get("start", 0) < win_en]
             trimmed = {
                 "start": win_st,
@@ -332,8 +362,9 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
         rest = segs[len(kept):]
     else:
         # 策略 2：段边界无法满足（单段超长）→ 硬时间裁剪到 target
+        # （2026-10-27：裁剪点吸附句末标点，保持对话完整）
         use_hard_cut = True
-        hard_end = block["start"] + target
+        hard_end = _snap_end_to_sentence(segs, block["start"] + target)
         kept = [s for s in segs if s.get("start", 0) < hard_end]
         rest = [s for s in segs if s.get("start", 0) >= hard_end]
 
@@ -356,8 +387,9 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
         trimmed = _mk(kept)
         # 兜底（2026-10-21）：单段略超目标时（如 12.5s 段裁到 12.02s）段对齐无法
         # 缩短，会导致"修剪无进展→整块被丢弃→总时长跌破下限"。此处改用硬时间裁剪。
+        # （2026-10-27：同样吸附句末标点）
         if trimmed["dur"] - target > 0.05:
-            hard_end = block["start"] + target
+            hard_end = _snap_end_to_sentence(segs, block["start"] + target)
             kept = [s for s in segs if s.get("start", 0) < hard_end]
             rest = [s for s in segs if s.get("start", 0) >= hard_end]
             trimmed = _mk(kept, force_end=hard_end)
@@ -415,6 +447,41 @@ def _build_sticker_texts(clips: List[Dict[str, Any]],
 
 
 # ---------------------------------------------------------------- 主入口
+
+def _derive_hook_text(spec_data: Dict[str, Any]) -> str:
+    """Hook 标题卡文案派生（2026-10-26：消除爆款款硬编码，零硬编码泛化）。
+
+    优先级：spec.options.hook_card_text 显式指定
+          → 商品名两行拼接（title_line1 · title_line2）。
+    720×168 卡片 / 40px 字号下 16 字可完整展示，故截断到 16 字。
+    """
+    opts = spec_data.get("options", {}) or {}
+    explicit = str(opts.get("hook_card_text") or "").strip()
+    if explicit:
+        return explicit[:16]
+    product = spec_data.get("product", {}) or {}
+    l1 = str(product.get("title_line1") or "").strip()
+    l2 = str(product.get("title_line2") or "").strip()
+    if l1 and l2:
+        return f"{l1} · {l2}"[:16]
+    if l1 or l2:
+        return (l1 or l2)[:16]
+    return "今晚必看爆款"
+
+
+def _derive_cta_text(spec_data: Dict[str, Any]) -> str:
+    """片尾 CTA 文案派生（2026-10-26）：优先 spec.options.cta_text；
+    否则按商品名生成行动召唤。480×100 徽章 / 28px 字号下 14 字内。"""
+    opts = spec_data.get("options", {}) or {}
+    explicit = str(opts.get("cta_text") or "").strip()
+    if explicit:
+        return explicit[:14]
+    product = spec_data.get("product", {}) or {}
+    name = str(product.get("title_line2") or product.get("title_line1") or "").strip()
+    if name:
+        return f"戳左下方小黄车看{name}"[:14]
+    return "戳左下方小黄车查看上身搭配"
+
 
 def build_plan(
     raw_video_path: str,
@@ -682,8 +749,10 @@ def build_plan(
         "total_expected_duration": total,
         "clips": clips,
         "brand": spec_data.get("brand", {}) or {},
-        "hook_card": {"text": "极简松弛感 · 显瘦显气质", "dur": 2.5, "y": 280},
-        "cta": {"text": "戳左下方小黄车查看上身搭配", "dur": 2.5},
+        # Hook 卡 / CTA 文案一律由任务契约派生（2026-10-26：修复此前硬编码
+        # 为卫衣款文案的问题，保证任意商品的成片文案准确对应其 job_spec）
+        "hook_card": {"text": _derive_hook_text(spec_data), "dur": 2.5, "y": 280},
+        "cta": {"text": _derive_cta_text(spec_data), "dur": 2.5},
         "boom": {"volume": 0.45, "file": "boom.wav"},
         "subtitles": {"keywords": options.get("highlight_keywords", [])},
         "selection_meta": meta,
