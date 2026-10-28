@@ -1,0 +1,158 @@
+# 工作流 v2 迭代总结（2026-10-26 ~ 2026-10-28）
+
+> 本文档系统整理「抖音带货直播切片自动化剪辑系统」本轮迭代的全部反馈、改动、共识与待办，
+> 作为 PR 附件与后续执行的事实基准。SOP 宪法见 `workflows/standard_pipeline_v2.md`。
+
+---
+
+## 一、会话背景
+
+- **起点任务**：解析 `job_spec.json`（MIXCITY · 桑蚕丝羊绒羊毛渐变针织衫，5 段直播素材共 821.9s），
+  生成 45~65s 黄金带货成片。首轮交付 62.67s 成片，QC 全绿。
+- **随后用户提出 6 点系统性反馈**（封面黑边 / ASR 驱动剪辑 / 特效集成 / 违规词处理 /
+  流程标准化 / 工具缺口反思）→ 触发工作流 v2 重构。
+- **追问答链**：ASR 校验链路审计 → 商品图封面适配方案 → 贴图形态四轮澄清迭代
+  （右侧贴图 → 去底 → 贴纸感 → 淡化收敛 → 回归 card 形态）。
+- **约束契约演进**：v1.3 → v1.4（转场/放大镜/违规词/人脸安全/一致性预检/淡入淡出）
+  → v1.5（成片 ASR 复检）→ v1.6（商品图适配器 + 贴图样式体系）。
+
+---
+
+## 二、已确认改动（按主题）
+
+### A. 封面渲染（`src/graphics/cover_renderer.py` / `src/tools/extract_cover_candidates.py`）
+
+| # | 改动 | 说明 |
+| :--- | :--- | :--- |
+| A1 | 黑边根因修复 | 构图缩放与填充缩放取 `max()`，垂直位置钳制到充分覆盖区间 `[new_h−OUT_H, 0]`，从几何上根除「顶部黑边 + 整体下移」 |
+| A2 | 渐变遮罩（scrim） | 顶部/底部深褐渐隐保证文字可读性，替代硬黑边；画面中部保持纯净 |
+| A3 | 贴图样式体系 | `sticker_style: card`（默认：保留商品图自身背景 + 圆角 + 外边缘柔和淡化 + 矩形投影）/ `cutout`（去底贴纸形态）/ 旧硬边直贴 |
+| A4 | 贴纸感处理（cutout 专用） | 剪影描边（MaxFilter 膨胀 alpha 得外扩环）+ 剪影投影（alpha 下移 + 高斯模糊，跟随商品轮廓） |
+| A5 | 描边可关闭 | `border_width: 0` 时完全不画（PIL width=0 行为不确定，条件跳过）；浅灰描边即用户所说「白边」 |
+| A6 | 历史死键归位 | `radius/border_color/border_width/_center` 四键曾被错放在 `split_effect` 段（git 历史证明为既有错位，split_effect 不消费 = 死键），已迁回 `sticker` 段生效 |
+
+### B. ASR 驱动剪辑（`src/tools/build_dialogue_script.py` / `src/tools/build_plan.py` / `src/core/video_assembler.py`）
+
+| # | 改动 | 说明 |
+| :--- | :--- | :--- |
+| B1 | 完整对话脚本 | ASR 段合并为 utterance 级完整语句（句末完整标记 + 类目 + 违规命中），作为剪辑唯一剧本 |
+| B2 | 句子边界对齐 | 三处硬裁剪点全部吸附句末标点（宁短勿长），解决「从半句砍断」 |
+| B3 | 转场链 | 切片间 xfade 视频叠化 + acrossfade 音频交叉淡化（0.25s），时间轴/字幕/贴纸时序同步折算 |
+| B4 | 文案契约派生 | Hook 卡 / CTA 文案从 `job_spec.json` 商品名派生（720×168 卡片 40px 字号 16 字内 / 480 徽章 28px 字号 14 字内），零硬编码 |
+
+### C. 剪辑特效（`src/graphics/video_overlays.py` / `src/agent/agent_director.py` / `src/core/video_assembler.py`）
+
+| # | 改动 | 说明 |
+| :--- | :--- | :--- |
+| C1 | 放大镜圆圈 | 圆形 alpha 掩码 + alphamerge + 金属环，镜内 1.8x 细节展示；锚点 = Pose 肩胯中点（天然避让面部），每条成片 ≤2 个 |
+| C2 | 头尾淡入淡出 | 全片 0.3s 淡入 / 0.3s 淡出 |
+| C3 | 镜像标准化 | hflip 纳入条件决策 + OCR 遮挡反向文字 |
+
+### D. 违规词处理（`contracts/violation_words.yaml` / `src/tools/detect_violation.py` / `src/tools/apply_violation_handling.py`）
+
+| # | 改动 | 说明 |
+| :--- | :--- | :--- |
+| D1 | 违规词库 | 飞书《违规整合》全量镜像为本地 YAML（8 大类极限词：最X/一X/权威资质/首家国/级极/虚假夸张/强营销/医疗功效） |
+| D2 | 检测器 | ASR 台词 / 字幕 / 封面 OCR 全量扫描；14 组真/假用例验证；真实素材回归检出 11 处 |
+| D3 | 三通道彻底处理 | 字幕屏蔽（`***`）+ 语音消音（区间 volume 表达式，80ms 淡变防爆音）+ 视频打码（OCR 定位像素化） |
+| D4 | QC 零残留 | 成片字幕违规词零残留 BLOCK 断言；消音执行核查（核心区 ≤−30dB） |
+
+### E. 阶段审核机制（新增 4 个审核工具 + QC 5 组新断言）
+
+| # | 改动 | 说明 |
+| :--- | :--- | :--- |
+| E1 | 素材-契约一致性预检 | `check_spec_material_consistency.py`：关键词/商品名词/衣着覆盖率 vs 契约；防「挂羊头卖狗肉」素材错配 |
+| E2 | 叠加层人脸安全 | `check_overlay_face_safety.py`：贴纸/Hook 卡/字幕带/放大镜与模特面部几何交叠，压脸 BLOCK |
+| E3 | 成片 ASR 复检 | `verify_final_video_asr.py`：对成片音轨重新转录，V1 字幕-原声一致性 / V2 语音违规词 / V3 语音价格 / V4 识别密度 / V5 消音执行核查 |
+| E4 | QC 断言扩容 | 新增违规零残留 / 人脸安全 / 转场复测 / 放大镜复测 / ASR 复检 5 组，共 30 项断言 |
+
+### F. 商品图封面适配（可复用方案，`src/graphics/product_image_adapter.py`）
+
+| # | 改动 | 说明 |
+| :--- | :--- | :--- |
+| F1 | 四模式适配 | card / blend / extend / collage，MODE_DEFAULTS 驱动形态（优先级 DEFAULTS < constraints < MODE_DEFAULTS < 用户 config） |
+| F2 | 五类自然过渡 | 背景延展（镜像/复制）/ 边缘羽化（EDT 软 alpha）/ 渐变融合（去晕）/ 阴影 / 圆角描边，全参数可配 |
+| F3 | 白底去除（可选能力） | `remove_white_background`：flood fill 连通域语义，仅移除边界连通近白像素，主体内部浅色区绝对保留 |
+| F4 | 效果验证器 | `verify_cover_adaptation.py` 六项量化检查（尺寸/羽化剖面/无硬边界/防 halo/阴影/留白）+ 反向测试 |
+
+### G. 流程与文档
+
+| # | 改动 | 说明 |
+| :--- | :--- | :--- |
+| G1 | SOP 宪法 | `workflows/standard_pipeline_v2.md`：S0~S6 全阶段，每阶段输入/输出/审核机制/回退行为 |
+| G2 | 规范驱动入口 | `scripts/generate_from_job_spec.py`：目录扫描素材 → ffprobe 校验 → 文案派生 → 落盘可执行 spec → 调度 AgentDirector |
+| G3 | 内容结构文档生成器 | `scripts/build_content_structure_doc.py`：从流水线产物自动生成《直播内容结构说明书》 |
+| G4 | README 工具清单 | 登记全部新增工具与触发条件 |
+
+---
+
+## 三、达成的共识（设计决策，后续执行的判定基准）
+
+1. **贴图形态（终版）**：商品图的白底是**商品图自身的背景，不可抠除**。默认形态为 card：
+   原样保留图片 + 圆角 20px + 外边缘 10px 柔和淡化 + 矩形投影 + 无描边。
+   cutout（去底贴纸形态）保留为可选，仅用于商品图无自身背景的场景。
+2. **文案零硬编码**：Hook 卡 / CTA / 贴纸文案一律从任务契约商品信息派生；测试锁定派生一致性。
+3. **违规词零容忍**：三通道处理（字幕屏蔽 + 语音消音 + 视频打码），QC 对成片字幕/语音零残留 BLOCK 断言。
+4. **成片 ASR 复检闭环**：素材 ASR 三重校验（审核门禁 / 语境纠错 / 一致性预检）+ 成片 ASR 五项复检，
+   闭环「物理咬合原声」承诺。
+5. **特效不得压脸**：贴纸 / Hook 卡 / 字幕带 / 放大镜等叠加元素与模特面部间距 <30px 记 WARN，压脸 BLOCK。
+6. **素材-契约一致性预检**：默认 WARN 级（不拦截交付），但必须量化告警；确认错配可升 BLOCK。
+7. **每阶段独立审核门禁**：BLOCK 失败即拦截交付；环境故障降级 WARN 并显式记录，不静默跳过。
+8. **门禁有效性须反向验证**：毒化输入测试证明断言非摆设（毒化转录 / 毒化消音窗口均被正确拦截）。
+
+---
+
+## 四、待办事项
+
+| 优先级 | 事项 | 说明 / 下一步 |
+| :--- | :--- | :--- |
+| **P0 高** | 素材-契约错配未解决 | 5 段录像实际为黑色马甲（主播台词「马甲」×30），契约为渐变针织衫：关键词覆盖率 14%、商品名词覆盖率 0%、衣着一致性 0.1371（WARN）。**二选一**：① 将正确的针织衫直播录像放入 `raw_video_path` 指向目录后重跑 `scripts/generate_from_job_spec.py`（约 11 分钟全自动）；② 确认素材无误则修正 `job_spec.json` 商品信息后重跑 |
+| **P1 中** | 工具缺口 8 项未补 | 飞书词库在线同步 / Whisper 词级时间戳 / 口型驱动字幕对齐 / 智能转场选择 / CLIP 封面优选 / 成片抽帧审核台 / 爆款因子回归 / 标题 A-B 测试（方案与优先级见 SOP 第 9 节） |
+| **P1 中** | 正式成片待重跑 | 当前 `output/` 成片为 v2 管线产物（61.89s，ALL PASS），但封面贴图形态在成片生成后又迭代了 4 轮（封面为独立交付物，不影响成片本身）；素材修正后需全量重跑 |
+| **P2 低** | 飞书词库同步机制 | 当前为一次性镜像，后续可增加定期抓取脚本（SOP 第 9 节方案 A） |
+
+---
+
+## 五、验证状态（提交时基线）
+
+- **单元测试**：29/29 通过（含新增白底去除测试、贴图适配 9 项、框架既有 19 项）
+- **QC 门禁**：30 项断言；真实成片 61.89s 全绿（BLOCK 100% 通过）
+- **滤镜冒烟测试**：xfade/acrossfade 时长数学验证、放大镜 alphamerge 链、消音表达式、像素化打码 5/5 通过
+- **反向测试**：成片 ASR 复检 V1/V2/V3/V5 对毒化输入全部正确 BLOCK；封面适配 V3 对硬边正确 BLOCK（跳变 180.2）
+- **封面 QC 子集**：ALL PASS（2 个 WARN 为既有素材错配，与代码改动无关）
+
+---
+
+## 六、本轮迭代中实测发现并修复的缺陷（经验沉淀，已入 SOP）
+
+1. 放大镜复合路径 `-t` 位置错误（被下一个 `-i` 吞掉）→ 成片 206s；修复为输入侧 + 输出侧双保险
+2. 人脸安全检查工具硬编码 Hook 卡 y=280（实际动态值 195）→ 改为从 overlay meta 读取
+3. Hook 卡避让单帧采样 → 主播前倾压脸；改前 2.5s 七帧采样取最高人脸顶 + 10px 缓冲
+4. V5 消音核查整窗测量误报（80ms 淡变边播放的是合规相邻语音）→ 只测窗口核心区
+5. V3 融合检查把商品图自身内部边缘（alpha=1 区）误判为融合缺陷 → 只测半透明融合区
+6. EDT 距离变换只看数组内部 → 矩形顶边行 alpha≈1 羽化失效；修复为掩码外加 1px False 边框
+7. mode 参数与视觉参数解耦 → 三模式产出 md5 相同；修复为 MODE_DEFAULTS 驱动层
+8. numpy 广播崩溃 → 边缘延展改 PIL crop+flip+resize
+9. 历史死键：贴图四键错放 split_effect 段，改配置无效；已归位（教训：改配置前先验证消费方）
+
+---
+
+## 七、CI 修复记录（2026-10-28 晚，PR #8 首次 CI 失败）
+
+PR #8 首次 CI 在「单元测试层」失败（2/14 文件），根因三类，已全部修复：
+
+| # | 失败用例 | 根因 | 修复 |
+| :--- | :--- | :--- | :--- |
+| 1 | `test_path_resolver.case_spec_no_absolute_paths` | 入库 spec 含机器专属绝对路径：`job_spec.json` 指向 `C:\Users\ePanda\Desktop\project\raw`，`specs/*.resolved.json` 含 6 条绝对素材路径 | 素材入库 `data/raw_samples/silk_knitwear_sample/`（mp4 已 gitignore），spec 改相对路径；运行时 resolved spec 删除并 gitignore |
+| 2 | `test_requirements_audit.case_evidence_anchors_resolve` | R-X05 证据锚点指向 `split_effect.radius/border_color/border_width`，四键已归位到 sticker 段 | R-X05 改为 implemented + 锚点更新为 `sticker.*`（四键经 sticker_c[...] 静态可解析） |
+| 3 | `test_requirements_audit.case_dead_keys_match_baseline` | 新增键未接线/未登记：`magnifier_effect.{glass_alpha,require_face_clear}`、`violation_words.{library_path,detect.asr_segments,detect.cover_ocr,handling.mute_fade_ms}`、`product_image_adapter.*`（27） | 除 `glass_alpha`（删除，未实现的空键）外全部接线：缩放镜人脸门禁 / 词库路径与通道开关 / 消音淡变时长；`product_image_adapter.*` 因 `_deep_merge` 间接消费无法被 AST 识别，按 R-X11 登记 allow_dead（10 项单测做功能覆盖） |
+
+**过程教训**（已入 SOP §11 第 18~20 条）：
+- 本地 `pytest tests/` 不等于 CI：CI 入口是 `scripts/run_regression.py --quick`（14 个文件），
+  路径审计与需求审计两个重型测试只有该入口会跑；
+- 配置键接线状态必须用 `python -u src/tools/audit_requirements.py --only-dead` 自查；
+- 入库 spec 一律相对路径，运行时产物（resolved spec / 缓存）不入库。
+
+**修复后验证**：`run_regression.py --quick` 14/14 通过；死键 48 个与基线完全一致；
+需求证据锚点 44/44 可解析；违规检测器真实素材回归 11 处命中（与修复前一致）、
+通道开关/库路径接线生效。

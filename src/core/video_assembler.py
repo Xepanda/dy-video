@@ -17,13 +17,14 @@ import os
 import sys
 import json
 import subprocess
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 from PIL import Image, ImageDraw, ImageFont
 from src.graphics.sfx_generator import generate_sub_bass_boom
 from src.graphics.ass_subtitles import generate_ass_subtitles
 from src.graphics.video_overlays import (
     generate_platform_bar, generate_stage_sticker,
     generate_occlusion_patch, generate_split_labels,
+    generate_magnifier_mask, generate_magnifier_ring,
 )
 
 
@@ -181,6 +182,68 @@ class VideoAssembler:
         self.occlusion_log: Dict[str, Any] = {}
         self.mirror_abandoned: set = set()
         os.makedirs(self.clips_dir, exist_ok=True)
+        # 违规词三通道处理参数（apply_violation_handling 产出；缺失则直通）
+        self.violation_handling = self._load_violation_handling()
+        self.violation_report: Dict[str, Any] = {"applied": {}}
+        # 放大镜素材缓存（clip_id -> (mask_png, ring_png, ring_size)）
+        self._magnifier_assets: Dict[str, Any] = {}
+
+    def _load_violation_handling(self) -> Dict[str, Any]:
+        hp = os.path.join(self.work_dir, "violation_handling.json")
+        if os.path.exists(hp):
+            try:
+                with open(hp, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                s = data.get("summary", {})
+                print(f"[VIOLATION] 已加载三通道处理参数: ASR命中 {s.get('n_asr_hits', 0)} 处 | "
+                      f"消音分镜 {s.get('n_clips_with_mute', 0)} | "
+                      f"打码分镜 {s.get('n_clips_with_mosaic', 0)}")
+                return data
+            except Exception as e:
+                print(f"[WARN] violation_handling.json 加载失败（跳过违规处理）: {e}")
+        return {"clips": {}, "summary": {}}
+
+    # ------------------------------------------------ 2026-10-27 新增：违规处理辅助
+
+    @staticmethod
+    def _mute_filter(a: float, b: float, fade: float = 0.08) -> str:
+        """生成单区间语音消音 volume 表达式（80ms 淡入出防爆音）。"""
+        a, b, f = float(a), float(b), float(fade)
+        expr = (
+            f"if(between(t,{a:.3f},{a + f:.3f}),(t-{a:.3f})/{f:.3f},"
+            f"if(between(t,{b - f:.3f},{b:.3f}),({b:.3f}-t)/{f:.3f},"
+            f"if(between(t,{a + f:.3f},{b - f:.3f}),0,1)))"
+        )
+        return f"volume=volume='{expr}':eval=frame"
+
+    def _get_magnifier_assets(self, clip: Dict[str, Any],
+                              magn_c: Dict[str, Any]) -> Optional[Tuple[str, str, int]]:
+        """生成（或复用）放大镜掩码 + 金属环 PNG。"""
+        cid = clip["id"]
+        if cid in self._magnifier_assets:
+            return self._magnifier_assets[cid]
+        m = clip.get("magnifier") or {}
+        if not m.get("enabled"):
+            return None
+        r = int(m.get("r", magn_c.get("radius", 130)) or 130)
+        cx = int(m.get("cx", OUT_W - int(magn_c.get("margin_x", 60)) - r))
+        cy = int(m.get("cy", int(OUT_H * float(magn_c.get("anchor_y_ratio", 0.42)))))
+        cx = max(r + 8, min(OUT_W - r - 8, cx))
+        cy = max(r + 100, min(OUT_H - r - 260, cy))   # 避让顶部标识条与底部字幕区
+        mask_png = os.path.join(self.work_dir, f"{cid}_magnifier_mask.png")
+        ring_png = os.path.join(self.work_dir, f"{cid}_magnifier_ring.png")
+        try:
+            generate_magnifier_mask(mask_png, OUT_W, OUT_H, cx, cy, r)
+            ring_png, ring_size = generate_magnifier_ring(
+                ring_png, r,
+                ring_width=int(magn_c.get("ring_width", 8) or 8),
+                ring_color=str(magn_c.get("ring_color", "#E8A91E")))
+        except Exception as e:
+            print(f"[WARN] 放大镜素材生成失败 {cid}（跳过放大镜）: {e}")
+            return None
+        assets = (mask_png, ring_png, ring_size)
+        self._magnifier_assets[cid] = assets
+        return assets
 
     # ------------------------------------------------ 2026-10-24 新增：特效辅助
 
@@ -421,14 +484,163 @@ class VideoAssembler:
             print(f"[LOUDNORM] 测量异常（{e}），降级单遍动态模式")
             return {}
 
-    def render_clips(self, plan: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    def _extract_clip(self, c: Dict[str, Any], src: str,
+                      out_clip: str) -> None:
+        """抽取单个分镜：主滤镜链 + 放大镜 + 违规消音 + 违规打码。
+
+        简单路径（无放大镜/打码）：-vf 主链 + -af 消音链（旧行为兼容）。
+        复合路径：-filter_complex（掩码 alphamerge + 像素化 overlay）。
+        """
+        dur = float(c.get("dur", 0))
+        magn_c = self.constraints.get("magnifier_effect", {}) or {}
+        handling = ((self.violation_handling.get("clips", {}) or {})
+                    .get(c["id"], {}) or {})
+        mute_ranges = handling.get("audio_mute", []) or []
+        mosaic_regions = handling.get("video_mosaic", []) or []
+
+        magnifier_on = bool(magn_c.get("enabled", True)) and bool(
+            (c.get("magnifier") or {}).get("enabled"))
+        assets = self._get_magnifier_assets(c, magn_c) if magnifier_on else None
+        if magnifier_on and assets is None:
+            magnifier_on = False
+
+        # —— 音频链：消音表达式（相对分镜本地时间）——
+        # 2026-10-28 接线 violation_words.handling.mute_fade_ms（此前硬编码 0.08）：
+        # 淡变时长从约束读取，改配置即生效（默认 80ms，防爆音）。
+        vw_h = (self.constraints.get("violation_words", {}) or {}).get(
+            "handling", {}) or {}
+        mute_fade = float(vw_h.get("mute_fade_ms", 80) or 80) / 1000.0
+        af_chain = ["asetpts=PTS-STARTPTS"]
+        for (a, b) in mute_ranges:
+            af_chain.append(self._mute_filter(a, b, fade=mute_fade))
+
+        # —— 简单路径 -—
+        if not magnifier_on and not mosaic_regions:
+            vf = build_clip_filter(c, self.constraints.get("zoom_effect", {}) or {})
+            run_cmd([
+                "ffmpeg", "-y",
+                "-ss", f"{c['st']:.3f}",
+                "-i", src,
+                "-t", f"{dur:.3f}",
+                "-avoid_negative_ts", "make_zero",
+                "-vf", vf,
+                "-af", ",".join(af_chain),
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+                out_clip
+            ], desc=f"切片抽取 {c['id']} ({dur}s, st={c['st']:.2f}s)")
+            self.violation_report["applied"][c["id"]] = {
+                "audio_mute_ranges": mute_ranges, "mosaic_regions": 0,
+                "magnifier": False,
+            }
+            return
+
+        # —— 复合路径：filter_complex -—
+        main_vf = build_clip_filter(c, self.constraints.get("zoom_effect", {}) or {})
+        fc: List[str] = [f"[0:v]{main_vf}[base]"]
+        cur = "base"
+        idx = 0
+
+        # 违规打码（像素化）：crop → scale 缩小 → scale 放大(neighbor) → overlay 回原位
+        for reg in mosaic_regions:
+            idx += 1
+            x0, y0, x1, y1 = [int(v) for v in reg["box"][:4]]
+            w, h = max(8, x1 - x0), max(8, y1 - y0)
+            t0, t1 = float(reg["t0"]), float(reg["t1"])
+            fc.append(f"[{cur}]split=2[mo{idx}a][mo{idx}b]")
+            fc.append(
+                f"[mo{idx}b]crop=w={w}:h={h}:x={x0}:y={y0},"
+                f"scale=18:18,scale={w}:{h}:flags=neighbor[mbl{idx}]")
+            fc.append(
+                f"[mo{idx}a][mbl{idx}]overlay={x0}:{y0}"
+                f":enable='between(t,{t0:.3f},{t1:.3f})'[mo{idx}o]")
+            cur = f"mo{idx}o"
+
+        # 放大镜圆圈
+        magnifier_applied = False
+        if magnifier_on and assets:
+            mask_png, ring_png, ring_size = assets
+            m = c["magnifier"]
+            r = int(m.get("r", magn_c.get("radius", 130)) or 130)
+            cx = int(m.get("cx", 0))
+            cy = int(m.get("cy", 0))
+            cx = max(r + 8, min(OUT_W - r - 8, cx))
+            cy = max(r + 100, min(OUT_H - r - 260, cy))
+            z = float(m.get("zoom", magn_c.get("zoom", 1.8)) or 1.8)
+            t_in = float(m.get("t_in", 0.3))
+            t_out = float(m.get("t_out", max(t_in + 0.5, dur - 0.3)))
+            fade = float(magn_c.get("fade_in_sec", 0.35) or 0.35)
+            ax = cx / float(OUT_W)
+            ay = cy / float(OUT_H)
+            in_mask, in_ring = 1, 2   # 输入序号：0=源视频，1=掩码，2=金属环
+            fc.append(f"[{cur}]split=2[mgA][mgB]")
+            fc.append(
+                f"[mgB]crop=w='iw/{z:.3f}':h='ih/{z:.3f}'"
+                f":x='(iw-iw/{z:.3f})*{ax:.5f}':y='(ih-ih/{z:.3f})*{ay:.5f}',"
+                f"scale={OUT_W}:{OUT_H}:flags=lanczos[mgz]")
+            fc.append("[mgz]format=rgba[mgzr]")
+            fc.append(
+                f"[{in_mask}:v]format=rgba,"
+                f"fade=t=in:st={t_in:.3f}:d={fade:.3f}:alpha=1,"
+                f"fade=t=out:st={max(t_in, t_out - fade):.3f}:d={fade:.3f}:alpha=1[mgmask]")
+            fc.append("[mgzr][mgmask]alphamerge[mgm]")
+            fc.append(
+                f"[mgA][mgm]overlay=0:0"
+                f":enable='between(t,{t_in:.3f},{t_out:.3f})'[mgA2]")
+            fc.append(
+                f"[{in_ring}:v]format=rgba,"
+                f"fade=t=in:st={t_in:.3f}:d={fade:.3f}:alpha=1,"
+                f"fade=t=out:st={max(t_in, t_out - fade):.3f}:d={fade:.3f}:alpha=1[mgring]")
+            ring_x = max(0, cx - ring_size // 2)
+            ring_y = max(0, cy - ring_size // 2)
+            fc.append(
+                f"[mgA2][mgring]overlay={ring_x}:{ring_y}"
+                f":enable='between(t,{t_in:.3f},{t_out:.3f})'[mgout]")
+            cur = "mgout"
+            magnifier_applied = True
+
+        fc.append(f"[0:a]{','.join(af_chain)}[aout]")
+        # ⚠️ -t 位置：输入侧 -ss/-t 必须在 -i 之前（默认属于该输入）；
+        # 输出侧 -t 放在所有输入之后。若把输出侧 -t 写在下一个 -i 之前，
+        # 它会被当作那个输入的选项（已实测：对本切片无效，对掩码 PNG 生效）。
+        cmd = ["ffmpeg", "-y",
+               "-ss", f"{c['st']:.3f}", "-t", f"{dur:.3f}",
+               "-i", src,
+               "-avoid_negative_ts", "make_zero"]
+        if magnifier_applied:
+            cmd += ["-loop", "1", "-framerate", str(FPS),
+                    "-t", f"{dur:.3f}", "-i", mask_png,
+                    "-loop", "1", "-framerate", str(FPS),
+                    "-t", f"{dur:.3f}", "-i", ring_png]
+        cmd += ["-filter_complex", ";".join(fc),
+                "-map", "[mgout]" if magnifier_applied else f"[{cur}]",
+                "-map", "[aout]",
+                "-t", f"{dur:.3f}",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+                out_clip]
+        run_cmd(cmd, desc=f"复合特效抽取 {c['id']} "
+                          f"(放大镜={magnifier_applied}, 打码={len(mosaic_regions)})")
+        self.violation_report["applied"][c["id"]] = {
+            "audio_mute_ranges": mute_ranges,
+            "mosaic_regions": len(mosaic_regions),
+            "magnifier": magnifier_applied,
+        }
+
+    def render_clips(self, plan: Dict[str, Any],
+                     transition_sec: float = 0.0) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
         """批量提取并切片视频镜头（物理音画强锁，杜绝历史缓存串音串画）
 
         多源支持（2026-10-21）：clip.source_file 存在时按该素材文件切片，
         缺省回退 plan.raw_video_path（单源行为不变）。
         字幕映射同样按源过滤，避免跨源时间轴错位。
+
+        transition_sec（2026-10-27）：切片间转场时长。时间轴与字幕事件按
+        「每个后续分镜提前 transition_sec」折算，与 xfade/acrossfade 链对齐。
         """
         default_src = os.path.abspath(plan["raw_video_path"])
+        trans = max(0.0, float(transition_sec or 0.0))
 
         # 1. 彻底清空切片目录，杜绝缓存 ID 碰撞导致的内容错位
         for f in os.listdir(self.clips_dir):
@@ -450,8 +662,8 @@ class VideoAssembler:
         sub_events = []
         accumulated_start = 0.0
 
-        for c in plan["clips"]:
-            # —— 多源：每个分镜按其来源文件切片 ——
+        for ci, c in enumerate(plan["clips"]):
+            # —— 多源：每个分镜按其来源文件切片 -—
             src = os.path.abspath(c.get("source_file") or default_src)
             if not os.path.exists(src):
                 raise FileNotFoundError(f"分镜 {c['id']} 的源素材不存在: {src}")
@@ -516,33 +728,20 @@ class VideoAssembler:
                     except OSError:
                         pass
             else:
-                zoom_c = self.constraints.get("zoom_effect", {}) or {}
-                vf = build_clip_filter(c, zoom_c)
-                af = "asetpts=PTS-STARTPTS"
-                # 物理强锁：-ss 放在 -i 之前秒级Seek + -t 放在 -i 之后 + -avoid_negative_ts make_zero
-                run_cmd([
-                    "ffmpeg", "-y",
-                    "-ss", f"{c['st']:.3f}",
-                    "-i", src,
-                    "-t", f"{c['dur']:.3f}",
-                    "-avoid_negative_ts", "make_zero",
-                    "-vf", vf,
-                    "-af", af,
-                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
-                    "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
-                    out_clip
-                ], desc=f"切片抽取 {c['id']} ({c['dur']}s, st={c['st']:.2f}s)")
+                self._extract_clip(c, src, out_clip)
 
                 # —— 镜像分镜：遮挡反向的背景文字（SKILL 2.1，2026-10-24）——
                 # 镜像后招牌/LOGO 文字会反向，必须用贴纸精确覆盖，
                 # 否则比不做镜像更违和。这里用 OCR 检测文字框定位遮挡区域。
                 if c.get("effect") == "hflip":
                     self._apply_mirror_occlusion(c, out_clip)
-            
+
             # 回测实际物理时长
             actual_dur = ffprobe_get_duration(out_clip)
+            # 转场折算：第 i 个分镜（i>=1）在成片中提前 i*trans 秒
+            eff_start = max(0.0, accumulated_start - ci * trans)
             timeline[c["id"]] = {
-                "start": round(accumulated_start, 3),
+                "start": round(eff_start, 3),
                 "dur": round(actual_dur, 3),
                 "desc": c.get("desc", "")
             }
@@ -559,8 +758,8 @@ class VideoAssembler:
                     rel_end = min(c["dur"], s["end"] - c["st"])
                     if rel_end > rel_st:
                         sub_events.append({
-                            "t_start": round(accumulated_start + rel_st, 3),
-                            "t_end": round(accumulated_start + rel_end, 3),
+                            "t_start": round(eff_start + rel_st, 3),
+                            "t_end": round(eff_start + rel_end, 3),
                             "text": s["text"]
                         })
 
@@ -570,8 +769,11 @@ class VideoAssembler:
         tl_path = os.path.join(self.work_dir, "timeline.json")
         with open(tl_path, "w", encoding="utf-8") as f:
             json.dump(timeline, f, ensure_ascii=False, indent=2)
-            
-        print(f"[ASSEMBLER] 切片抽取完毕，实际总物理时长: {accumulated_start:.2f}s, 映射字幕事件: {len(sub_events)}条")
+
+        print(f"[ASSEMBLER] 切片抽取完毕，硬拼接总长 {accumulated_start:.2f}s"
+              + (f"（转场折算后约 {accumulated_start - (len(plan['clips']) - 1) * trans:.2f}s）"
+                 if trans and len(plan["clips"]) > 1 else "")
+              + f", 映射字幕事件: {len(sub_events)}条")
         return timeline, sub_events
 
     def assemble_final_video(
@@ -579,27 +781,56 @@ class VideoAssembler:
         plan: Dict[str, Any],
         output_mp4_path: str
     ) -> Tuple[str, float]:
-        """总装：切片拼接 + 毫秒级发光字幕 + 黄金Hook卡片 + 片尾CTA贴片 + Boom 重音混流"""
-        timeline, sub_events = self.render_clips(plan)
-        
-        # 1. 生成 concat 列表
-        concat_txt = os.path.join(self.work_dir, "concat_list.txt")
-        with open(concat_txt, "w", encoding="utf-8") as f:
-            for c in plan["clips"]:
-                clip_path = os.path.join(self.clips_dir, f"{c['id']}.mp4").replace(os.sep, "/")
-                f.write(f"file '{clip_path}'\n")
+        """总装：切片转场拼接 + 毫秒级发光字幕 + 黄金Hook卡片 + 片尾CTA贴片 + Boom 重音混流
 
-        # 2. 生成对应时间的变色字幕
+        2026-10-27 重构（反馈驱动）：
+          - 转场：切片间 xfade 视频叠化 + acrossfade 音频交叉淡化（transition_effect）；
+          - 违规字幕屏蔽：ASS 生成前对命中词替换为 ***（violation_words 通道 1）；
+          - 头尾淡入淡出（fade_effect）；
+          - 放大镜/消音/打码在 render_clips 阶段按分镜执行（通道 2/3）。
+        """
+        # —— 转场配置 -—
+        trans_c = self.constraints.get("transition_effect", {}) or {}
+        trans_on = (bool(trans_c.get("enabled", True))
+                    and str(trans_c.get("type", "fade")) != "none")
+        trans_d = float(trans_c.get("duration_sec", 0.25) or 0.25) if trans_on else 0.0
+        audio_xfade = bool(trans_c.get("audio_crossfade", True)) if trans_on else False
+        fade_c = self.constraints.get("fade_effect", {}) or {}
+        fade_in = float(fade_c.get("fade_in_sec", 0.3) or 0.0) if fade_c.get("enabled", True) else 0.0
+        fade_out = float(fade_c.get("fade_out_sec", 0.3) or 0.0) if fade_c.get("enabled", True) else 0.0
+
+        n_clips = len(plan["clips"])
+        timeline, sub_events = self.render_clips(plan, transition_sec=trans_d)
+
+        # —— 违规词通道 1：字幕屏蔽 -—
+        vw_c = self.constraints.get("violation_words", {}) or {}
+        handling_c = vw_c.get("handling", {}) or {}
+        masked_words: List[str] = []
+        if handling_c.get("subtitle_mask", True):
+            from src.tools.detect_violation import ViolationDetector
+            det = ViolationDetector()
+            masked_events = []
+            for ev in sub_events:
+                text, hits = det.mask_text(ev.get("text", "") or "")
+                if hits:
+                    masked_words.extend(h["word"] for h in hits)
+                masked_events.append({**ev, "text": text})
+            sub_events = masked_events
+            if masked_words:
+                print(f"[VIOLATION] 字幕屏蔽 {len(masked_words)} 处: "
+                      f"{', '.join(sorted(set(masked_words))[:8])}")
+
+        # 1. 生成对应时间的变色字幕
         ass_path = os.path.join(self.work_dir, "subtitles.ass")
         keywords = plan.get("subtitles", {}).get("keywords", [])
         generate_ass_subtitles(sub_events, ass_path, keywords=keywords)
 
-        # 3. 合成 Boom 冲击音
+        # 2. 合成 Boom 冲击音
         boom_wav = os.path.join(self.work_dir, "boom.wav")
         generate_sub_bass_boom(boom_wav, duration=1.2)
 
-        # 4. 生成 Hook 卡片与 CTA 贴片
-        hook_text = plan.get("hook_card", {}).get("text", "极简松弛感 · 显瘦显气质")
+        # 3. 生成 Hook 卡片与 CTA 贴片
+        hook_text = plan.get("hook_card", {}).get("text", "今晚必看爆款")
         hook_y = int(plan.get("hook_card", {}).get("y", 280))  # 动态避让人脸顶（B10）
         hook_png = os.path.join(self.work_dir, "hook_card.png")
         hook_c = self.constraints.get("hook_card", {}) or {}
@@ -611,7 +842,7 @@ class VideoAssembler:
         cta_png = os.path.join(self.work_dir, "cta_badge.png")
         generate_cta_badge(cta_text, cta_png)
 
-        # 4.5 顶部平台标识条（2026-10-24 新增，常驻水印区）
+        # 3.5 顶部平台标识条（2026-10-24 新增，常驻水印区）
         bar_c = self.constraints.get("platform_bar", {}) or {}
         bar_png = ""
         shop_name = ""
@@ -626,21 +857,17 @@ class VideoAssembler:
                 try:
                     generate_platform_bar(bar_png, bar_c, shop_name=shop_name,
                                           account=account)
-                    print(f"[ASSEMBLER] 顶部平台标识条: 店铺「{shop_name}」 账号「{account}」")
+                    print(f"[ASSEMBLER] 顶部平台标识条: 店铺《{shop_name}》 账号《{account}》")
                 except Exception as e:
                     print(f"[WARN] 平台标识条生成失败（不阻断）: {e}")
                     bar_png = ""
 
-        # 4.6 挂角利益点贴纸（2026-10-24 新增，按分镜时序出现/消失）
-        #     贴纸时机由分镜在**成片时间轴**上的位置决定：
-        #       出现 = 分镜起点 + delay_ratio×分镜时长
-        #       消失 = 出现 + hold_ratio×分镜时长
-        #     淡入/淡出用 fade 滤镜实现，避免"啪"地闪现。
+        # 3.6 挂角利益点贴纸（按分镟时序出现/消失）
         sticker_c = self.constraints.get("video_sticker", {}) or {}
         sticker_pngs: List[Tuple[str, float, float]] = []   # (png, t_in, t_out)
         if sticker_c.get("enabled", True):
-            fade_in = float(sticker_c.get("fade_in_sec", 0.35) or 0.35)
-            fade_out = float(sticker_c.get("fade_out_sec", 0.35) or 0.35)
+            fade_in_s = float(sticker_c.get("fade_in_sec", 0.35) or 0.35)
+            fade_out_s = float(sticker_c.get("fade_out_sec", 0.35) or 0.35)
             hold_ratio = float(sticker_c.get("hold_ratio", 0.72) or 0.72)
             delay_ratio = float(sticker_c.get("delay_ratio", 0.10) or 0.10)
             for c in plan["clips"]:
@@ -654,9 +881,8 @@ class VideoAssembler:
                     continue
                 t_in = t0 + dur * delay_ratio
                 t_out = t0 + dur * (delay_ratio + hold_ratio)
-                # 保证淡入淡出不越界
                 t_out = min(t_out, t0 + dur - 0.05)
-                if t_out - t_in < fade_in + fade_out + 0.1:
+                if t_out - t_in < fade_in_s + fade_out_s + 0.1:
                     continue
                 png = os.path.join(self.work_dir, f"{c['id']}_sticker.png")
                 try:
@@ -668,32 +894,24 @@ class VideoAssembler:
             if sticker_pngs:
                 print(f"[ASSEMBLER] 挂角利益点贴纸: {len(sticker_pngs)} 个（带淡入淡出时序）")
 
-        # 计算总时长
+        # 计算总时长（转场折减）
         last_clip = plan["clips"][-1]
         total_dur = timeline[last_clip["id"]]["start"] + timeline[last_clip["id"]]["dur"]
-        
-        # 5. 音频响度两遍归一化预测量（V4）
-        #    单遍动态 loudnorm 不保证 TP（实测 hoodie 素材 TP=-0.4 > -0.5 上限被 QC 拦截）；
-        #    先对混合音频做一遍测量，正式总装用 linear 模式 + alimiter 兜底。
+
+        # 4. 韵序预测（保留 concat demuxer 测量，转场对响度影响可忽）
+        concat_txt = os.path.join(self.work_dir, "concat_list.txt")
+        with open(concat_txt, "w", encoding="utf-8") as f:
+            for c in plan["clips"]:
+                clip_path = os.path.join(self.clips_dir, f"{c['id']}.mp4").replace(os.sep, "/")
+                f.write(f"file '{clip_path}'\n")
         measured = self._measure_loudness(concat_txt, boom_wav, total_dur)
 
-        # 6. FFmpeg 滤镜复合网络编排 (字幕 + Hook卡片 + CTA贴片 + 音频混流 + 响度归一化)
-        # 响度归一（EBU R128）：−14 LUFS 综合响度 + True Peak ≤ −0.5 dBTP（V4）
-        ass_rel = os.path.basename(ass_path)
-        hook_rel = os.path.basename(hook_png)
-        cta_rel = os.path.basename(cta_png)
-
+        # 5. FFmpeg 输入与滤镜网络编排
         loudnorm_params = "I=-14:TP=-0.5:LRA=11"
-        # alimiter 上限由 constraints 的真峰值目标推导：
-        # alimiter 限制的是**采样峰**，真峰值（帧间峰）还会高出 0.3~0.6 dB，
-        # 故留 0.9 dB 余量（实测 demo：limit=0.92 时 TP 仍到 -0.4 > -0.5 上限）
         audio_c = self.constraints.get("audio", {}) or {}
         tp_max = float(audio_c.get("true_peak_max_dbtp", -0.5))
         limiter_limit = round(10 ** ((tp_max - 0.9) / 20.0), 3)
         if measured:
-            # 两遍归一化：先判断 linear 模式是否可行（所需增益不冲高真峰值），
-            # 可行则用 linear（纯增益、音质最好）；不可行（安静素材需大增益）
-            # 则用动态模式（压缩动态范围同时满足响度与 TP 双目标）。
             try:
                 gain_needed = -14.0 - float(measured["input_i"])
                 tp_after_gain = float(measured["input_tp"]) + gain_needed
@@ -710,96 +928,127 @@ class VideoAssembler:
             loudnorm_params += ":linear=true" if linear_safe else ":linear=false"
             print(f"[LOUDNORM] 模式选择: {'linear（纯增益）' if linear_safe else 'dynamic（动态压缩，安静素材）'}"
                   f"（需增益 {gain_needed:.1f}dB, 增益后 TP 预估 {tp_after_gain:.1f}dBTP）")
-        # —— 视频画面叠加链（2026-10-24 扩展）——
-        # 顺序：字幕 → 挂角贴纸(时序淡入淡出) → 顶部平台标识条 → Hook卡片 → CTA
-        # 说明：
-        #   · 挂角贴纸在字幕之下、标识条之上，避免与底部字幕打架；
-        #   · 顶部标识条是常驻水印区，铺在最上层不被任何特效遮挡；
-        #   · 贴纸淡入淡出用 fade 滤镜（对 PNG 序列做时间轴淡变），
-        #     配合 overlay 的 enable 区间实现"出现→停留→消失"的完整时序。
-        extra_inputs: List[str] = []
-        fc: List[str] = []
-        # 输入序号：0=concat视频 1=boom音频，PNG 叠加层从 2 开始顺序排布
-        # （extra_inputs 的追加顺序必须与 in_idx 严格一致，否则 ffmpeg 报
-        #  "Invalid file index N in filtergraph description"）
-        in_idx = 1
 
-        # 4.6 挂角贴纸（每个分镜一个，按成片时间轴排布）
-        cur_label = "vsub"
+        # 输入：0..n-1 切片，n=Boom，之后 PNG 叠加层
+        inputs: List[str] = []
+        for c in plan["clips"]:
+            clip_path = os.path.join(self.clips_dir, f"{c['id']}.mp4").replace(os.sep, "/")
+            inputs += ["-i", clip_path]
+        boom_idx = n_clips
+        inputs += ["-i", boom_wav]
+
+        fc: List[str] = []
+        # —— 5.1 转场链（xfade / acrossfade）——
+        use_trans = trans_on and n_clips >= 2
+        if use_trans:
+            c0, c1 = plan["clips"][0]["id"], plan["clips"][1]["id"]
+            fc.append(f"[0:v][1:v]xfade=transition=fade:duration={trans_d:.3f}"
+                      f":offset={timeline[c1]['start']:.3f}[vx1]")
+            if audio_xfade:
+                fc.append(f"[0:a][1:a]acrossfade=d={trans_d:.3f}:c1=tri:c2=tri[ax1]")
+            else:
+                fc.append(f"[0:a][1:a]concat=n=2:v=0:a=1[ax1]")
+            for i in range(2, n_clips):
+                cid = plan["clips"][i]["id"]
+                fc.append(f"[vx{i - 1}][{i}:v]xfade=transition=fade:duration={trans_d:.3f}"
+                          f":offset={timeline[cid]['start']:.3f}[vx{i}]")
+                if audio_xfade:
+                    fc.append(f"[ax{i - 1}][{i}:a]acrossfade=d={trans_d:.3f}:c1=tri:c2=tri[ax{i}]")
+                else:
+                    fc.append(f"[ax{i - 1}][{i}:a]concat=n=2:v=0:a=1[ax{i}]")
+            cur_v, cur_a = f"vx{n_clips - 1}", f"ax{n_clips - 1}"
+            print(f"[ASSEMBLER] 转场链: {n_clips} 切片 xfade/acrossfade "
+                  f"{trans_d:.2f}s（音频交叉淡化={'on' if audio_xfade else 'off'}）")
+        else:
+            fc.append("[0:v]null[vbase]")
+            fc.append("[0:a]null[abase]")
+            cur_v, cur_a = "vbase", "abase"
+
+        # —— 5.2 字幕烷馇 -—
+        ass_rel = os.path.basename(ass_path)
+        fc.append(f"[{cur_v}]subtitles={ass_rel}[vsub]")
+        cur_v = "vsub"
+
+        # —— 5.3 叠加层（贴纸 → 标识条 → Hook卡 → CTA）——
+        in_idx = boom_idx
         sticker_size = int(sticker_c.get("size", 220) or 220)
         sticker_mx = int(sticker_c.get("margin_x", 40) or 40)
         sticker_my = int(sticker_c.get("margin_y", 300) or 300)
         sticker_side = sticker_c.get("side", "right")
-        fade_in = float(sticker_c.get("fade_in_sec", 0.35) or 0.35)
-        fade_out = float(sticker_c.get("fade_out_sec", 0.35) or 0.35)
+        fade_in_s = float(sticker_c.get("fade_in_sec", 0.35) or 0.35)
+        fade_out_s = float(sticker_c.get("fade_out_sec", 0.35) or 0.35)
         for (png, t_in, t_out) in sticker_pngs:
             in_idx += 1
             rel = os.path.basename(png)
-            # ⚠️ 必须用 `-loop 1 -t <总时长>` 把静态 PNG 变成**连续流**：
-            #    单帧 PNG 的时间戳恒为 0，fade 的 st=9.85 会让它永远保持透明，
-            #    贴纸根本不会出现在画面上（实测踩到）。
-            extra_inputs += ["-loop", "1", "-framerate", str(FPS),
-                             "-t", f"{total_dur:.2f}", "-i", rel]
-            # 贴纸自身做淡入淡出（fade 对连续流按时间轴淡变）
+            inputs += ["-loop", "1", "-framerate", str(FPS),
+                       "-t", f"{total_dur:.2f}", "-i", rel]
             fc.append(
                 f"[{in_idx}:v]format=rgba,"
-                f"fade=t=in:st={t_in:.3f}:d={fade_in:.3f}:alpha=1,"
-                f"fade=t=out:st={max(t_in, t_out - fade_out):.3f}:d={fade_out:.3f}:alpha=1"
-                f"[stk{ in_idx }]"
+                f"fade=t=in:st={t_in:.3f}:d={fade_in_s:.3f}:alpha=1,"
+                f"fade=t=out:st={max(t_in, t_out - fade_out_s):.3f}:d={fade_out_s:.3f}:alpha=1"
+                f"[stk{in_idx}]"
             )
             sx = (OUT_W - sticker_size - sticker_mx) if sticker_side == "right" else sticker_mx
             nxt = f"vstk{in_idx}"
             fc.append(
-                f"[{cur_label}][stk{in_idx}]overlay={sx}:{sticker_my}"
+                f"[{cur_v}][stk{in_idx}]overlay={sx}:{sticker_my}"
                 f":enable='between(t,{t_in:.3f},{t_out:.3f})':alpha=premultiplied[{nxt}]"
             )
-            cur_label = nxt
+            cur_v = nxt
 
-        # 4.5 顶部平台标识条（常驻）——同样用连续流，保证覆盖整片时长
         if bar_png:
             in_idx += 1
             rel = os.path.basename(bar_png)
-            extra_inputs += ["-loop", "1", "-framerate", str(FPS),
-                             "-t", f"{total_dur:.2f}", "-i", rel]
+            inputs += ["-loop", "1", "-framerate", str(FPS),
+                       "-t", f"{total_dur:.2f}", "-i", rel]
             fc.append(f"[{in_idx}:v]format=rgba[bar{in_idx}]")
             nxt = f"vbar{in_idx}"
-            fc.append(f"[{cur_label}][bar{in_idx}]overlay=0:0:alpha=premultiplied[{nxt}]")
-            cur_label = nxt
+            fc.append(f"[{cur_v}][bar{in_idx}]overlay=0:0:alpha=premultiplied[{nxt}]")
+            cur_v = nxt
 
         # Hook 卡片（0~2.5s）
         in_idx += 1
         hook_in = in_idx
-        extra_inputs += ["-i", hook_rel]
-        fc.append(f"[{cur_label}][{hook_in}:v]overlay=(W-w)/2:{hook_y}"
+        hook_rel = os.path.basename(hook_png)
+        inputs += ["-i", hook_rel]
+        fc.append(f"[{cur_v}][{hook_in}:v]overlay=(W-w)/2:{hook_y}"
                   f":enable='between(t,0,2.5)':alpha=premultiplied[vhook]")
-        cur_label = "vhook"
+        cur_v = "vhook"
 
         # CTA 贴片（末 2.5s）
         in_idx += 1
         cta_in = in_idx
-        extra_inputs += ["-i", cta_rel]
-        fc.append(f"[{cur_label}][{cta_in}:v]overlay=40:1440"
-                  f":enable='gte(t,{max(0.0, total_dur - 2.5):.2f})':alpha=premultiplied[vout]")
+        cta_rel = os.path.basename(cta_png)
+        inputs += ["-i", cta_rel]
+        fc.append(f"[{cur_v}][{cta_in}:v]overlay=40:1440"
+                  f":enable='gte(t,{max(0.0, total_dur - 2.5):.2f})':alpha=premultiplied[vcta]")
+        cur_v = "vcta"
 
-        fc.insert(0, f"[0:v]subtitles={ass_rel}[vsub]")
+        # —— 5.4 全片头尾淡入淡出 -—
+        if fade_in > 0 or fade_out > 0:
+            fades = []
+            if fade_in > 0:
+                fades.append(f"fade=t=in:st=0:d={fade_in:.3f}")
+            if fade_out > 0:
+                fades.append(f"fade=t=out:st={max(0.0, total_dur - fade_out):.3f}:d={fade_out:.3f}")
+            fc.append(f"[{cur_v}]{','.join(fades)}[vfinal]")
+            cur_v = "vfinal"
+
+        # —— 5.5 音频混流 + 响度归一化 -—
         fc += [
-            f"[1:a]volume=0.45[boom_hit]",
-            f"[0:a][boom_hit]amix=inputs=2:duration=first:weights='1.0 1.0'[amix]",
+            f"[{boom_idx}:a]volume=0.45[boom_hit]",
+            f"[{cur_a}][boom_hit]amix=inputs=2:duration=first:weights='1.0 1.0'[amix]",
             f"[amix]loudnorm={loudnorm_params}[aloud]",
-            # alimiter 兜底：动态模式罕见过冲时硬限幅（采样峰，留 0.9dB 帧间峰余量）
             f"[aloud]alimiter=limit={limiter_limit}:level=false[alim]",
-            f"[alim]afade=t=out:st={max(0.0, total_dur - 0.25):.2f}:d=0.25[aout]"
+            f"[alim]afade=t=out:st={max(0.0, total_dur - 0.25):.2f}:d=0.25[aout]",
         ]
 
         os.makedirs(os.path.dirname(os.path.abspath(output_mp4_path)), exist_ok=True)
-
         run_cmd([
             "ffmpeg", "-y",
-            "-f", "concat", "-safe", "0", "-i", concat_txt,
-            "-i", boom_wav,
-        ] + extra_inputs + [
+        ] + inputs + [
             "-filter_complex", ";".join(fc),
-            "-map", "[vout]", "-map", "[aout]",
+            "-map", f"[{cur_v}]", "-map", "[aout]",
             "-t", f"{total_dur:.2f}",
             "-c:v", "libx264", "-preset", "medium", "-crf", "17", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
@@ -807,8 +1056,25 @@ class VideoAssembler:
             output_mp4_path
         ], cwd=self.work_dir, desc=f"最终总装导出 ({total_dur:.1f}s)")
 
-        # 叠加元素清单（2026-10-24）：供 QC 独立复测"该有的特效有没有真的加上"
+        # —— 5.6 叠加元素清单（QC 复测依据） -—
         zoom_c_meta = self.constraints.get("zoom_effect", {}) or {}
+        magn_c_meta = self.constraints.get("magnifier_effect", {}) or {}
+        magnifier_events = []
+        for c in plan["clips"]:
+            m = c.get("magnifier") or {}
+            if not m.get("enabled"):
+                continue
+            r = int(m.get("r", magn_c_meta.get("radius", 130)) or 130)
+            cx = max(r + 8, min(OUT_W - r - 8, int(m.get("cx", 0))))
+            cy = max(r + 100, min(OUT_H - r - 260, int(m.get("cy", 0))))
+            magnifier_events.append({
+                "clip_id": c["id"],
+                "cx": cx, "cy": cy, "r": r,
+                "zoom": float(m.get("zoom", magn_c_meta.get("zoom", 1.8)) or 1.8),
+                "t_in": float(m.get("t_in", 0.3)),
+                "t_out": float(m.get("t_out", 0.0)),
+                "box": [cx - r, cy - r, cx + r, cy + r],
+            })
         overlay_meta = {
             "platform_bar": {
                 "applied": bool(bar_png),
@@ -817,14 +1083,29 @@ class VideoAssembler:
                 "shop_name": shop_name if bar_png else "",
                 "account": account if bar_png else "",
             } if bar_png else {"applied": False},
+            "hook_card": {
+                "applied": True,
+                "x": (OUT_W - int(hook_c.get("width", 720) or 720)) // 2,
+                "y": hook_y,
+                "w": int(hook_c.get("width", 720) or 720),
+                "h": int(hook_c.get("height", 168) or 168),
+                "t_in": 0.0, "t_out": 2.5,
+                "text": hook_text,
+            },
+            "cta_badge": {
+                "applied": True,
+                "x": 40, "y": 1440, "w": 480, "h": 100,
+                "t_in": max(0.0, total_dur - 2.5), "t_out": total_dur,
+                "text": cta_text,
+            },
             "sticker_events": [
                 {
                     "clip_id": os.path.basename(png).replace("_sticker.png", ""),
                     "png": os.path.basename(png),
                     "t_in": round(t_in, 3),
                     "t_out": round(t_out, 3),
-                    "fade_in_sec": fade_in,
-                    "fade_out_sec": fade_out,
+                    "fade_in_sec": fade_in_s,
+                    "fade_out_sec": fade_out_s,
                     "size": sticker_size,
                     "side": sticker_side,
                     "x": (OUT_W - sticker_size - sticker_mx) if sticker_side == "right" else sticker_mx,
@@ -843,10 +1124,28 @@ class VideoAssembler:
                 }
                 for c in plan["clips"] if float(c.get("zoom", 1.0) or 1.0) > 1.0
             ],
+            # 2026-10-27 新增：放大镟 / 转场 / 淡入淡出 / 违规处理
+            "magnifier_events": magnifier_events,
+            "transition": {
+                "applied": use_trans,
+                "type": "fade" if use_trans else "none",
+                "duration_sec": round(trans_d, 3) if use_trans else 0.0,
+                "audio_crossfade": audio_xfade if use_trans else False,
+                "n_clips": n_clips,
+            },
+            "fade": {
+                "applied": bool(fade_in > 0 or fade_out > 0),
+                "fade_in_sec": round(fade_in, 3),
+                "fade_out_sec": round(fade_out, 3),
+            },
+            "violation_handling": {
+                "subtitle_masked_words": sorted(set(masked_words)),
+                "n_subtitle_masked": len(masked_words),
+                "applied": self.violation_report.get("applied", {}),
+            },
             "mirror_clips": [c["id"] for c in plan["clips"]
                              if c.get("effect") == "hflip"
                              and c["id"] not in self.mirror_abandoned],
-            # 2026-10-25：因 min_occlusion_ratio 门禁被放弃镜像的分镜
             "mirror_abandoned": sorted(self.mirror_abandoned),
             "occlusion_applied": {
                 cid: v.get("applied", False)
@@ -861,6 +1160,17 @@ class VideoAssembler:
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(overlay_meta, f, ensure_ascii=False, indent=2)
         print(f"[ASSEMBLER] 叠加元素清单已落盘: {meta_path}")
+
+        # 违规处理执行报告（QC 审计依据）
+        vreport = {
+            "subtitle_masked_words": sorted(set(masked_words)),
+            "n_subtitle_masked": len(masked_words),
+            "applied": self.violation_report.get("applied", {}),
+            "handling_summary": (self.violation_handling.get("summary", {}) or {}),
+        }
+        vreport_path = os.path.join(self.work_dir, "violation_handling_report.json")
+        with open(vreport_path, "w", encoding="utf-8") as f:
+            json.dump(vreport, f, ensure_ascii=False, indent=2)
 
         print(f"[ASSEMBLER] 成片导出成功: {output_mp4_path} ({total_dur:.2f}s)")
         return output_mp4_path, total_dur

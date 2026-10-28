@@ -156,19 +156,32 @@ def normalize_subject_framing(
     else:
         scale = min(scale_w, scale_h)
 
-    new_w = int(w * scale)
-    new_h = int(h * scale)
+    # ---- 全幅底图（2026-10-27 反馈驱动）----
+    # 根因修复：旧实现用全黑画布找放缩放后的整帧，左右边缘有镜像填充
+    # 但顶部边缘没有填充 → 品牌文字（y=125~290）落在黑色带上，且人像被
+    # 下压到脚底 78% 位置，整体呉现「下移」观感。
+    # 修复：背景缩放系数取 max(构图scale, 填充scale)，填充scale 保证
+    # 缩放后的整帧至少覆盖整个画布；垂直位置钹为切到充分覆盖区间
+    # [new_h-OUT_H, 0]，从整体上沉根【顶部黑边】。
+    fill_scale = max(OUT_W / float(w), OUT_H / float(h))
+    bg_scale = max(scale, fill_scale)
+
+    new_w = int(w * bg_scale)
+    new_h = int(h * bg_scale)
     resized = cv2.resize(frame_bgr, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
 
-    res_head_top_y = head_top_norm * h * scale
-    res_center_x = center_x * scale
-    res_person_h = person_h * scale
+    res_head_top_y = head_top_norm * h * bg_scale
+    res_center_x = center_x * bg_scale
+    res_person_h = person_h * bg_scale
 
     # 水平：人体中心锁定 x = 540（1:6:1 → 左右各 135px）
     x_offset = int(OUT_W * 0.5 - res_center_x)
-    # 垂直：脚底贴 feet_target（名称区上方），头顶不低于品牌区底部
+    # 垂直：脚底贴 feet_target（名称区上方），头顶不低于品牌区底部；
+    # 再切换到充分覆盖区间【new_h-OUT_H, 0】（全幅硬约束，优先于脚底目标）
     y_offset = int(feet_target_ratio * OUT_H - res_person_h)
     y_offset = max(y_offset, int(head_floor_ratio * OUT_H))
+    y_offset = max(y_offset, new_h - OUT_H)   # 下界：画布底边必须被帧覆盖
+    y_offset = min(y_offset, 0)                # 上界：画布顶边必须被帧覆盖
 
     canvas = np.zeros((OUT_H, OUT_W, 3), dtype=np.uint8)
 
@@ -217,6 +230,9 @@ def normalize_subject_framing(
 
     framing_meta = {
         "scale": round(scale, 3),
+        "bg_scale": round(bg_scale, 3),
+        "full_bleed": bool(bg_scale >= fill_scale),
+        "y_offset_px": int(y_offset),
         "framing_policy": policy,
         "person_width_px_src": round(person_w, 1),
         "achieved_width_px": round(achieved_width, 1),

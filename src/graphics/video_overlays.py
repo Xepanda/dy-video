@@ -252,3 +252,52 @@ def generate_split_labels(
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     img.save(out_path, "PNG")
     return out_path
+
+
+# ---------------------------------------------------------------- 放大镜圆圈（2026-10-27 反馈驱动）
+
+def generate_magnifier_mask(out_path: str, w: int, h: int,
+                            cx: int, cy: int, r: int) -> str:
+    """生成全幅圆形 alpha 掩码（黑底白圈，圈外全透明）。
+
+    与 zoompan 推镜区别：本掩码使放大内容只在圈内显示，
+    主画面保持完整构图（真正的「放大镟」）。
+    """
+    img = Image.new("L", (int(w), int(h)), 0)
+    d = ImageDraw.Draw(img)
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=255)
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    img.save(out_path, "PNG")
+    return out_path
+
+
+def generate_magnifier_ring(out_path: str, r: int, ring_width: int = 8,
+                            ring_color: str = "#E8A91E") -> Tuple[str, int]:
+    """生成放大镟金属环 PNG（透明底 + 圈环 + 右下手柄）。
+
+    返回 (png 路径, PNG 边长)；边长 = 2r + 2*pad，超出圈体的部分用于
+    环与手柄，超出部分全透明（overlay 时不影响画面）。
+    """
+    rgb = tuple(int(ring_color.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+    pad = int(ring_width * 3 + 44)
+    size = 2 * r + 2 * pad
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    c = size // 2
+    # 主金环（外）
+    d.ellipse([c - r - ring_width, c - r - ring_width,
+               c + r + ring_width, c + r + ring_width],
+              outline=rgb + (255,), width=ring_width)
+    # 内部细亮线（片层教感）
+    d.ellipse([c - r - 3, c - r - 3, c + r + 3, c + r + 3],
+              outline=(255, 240, 200, 150), width=2)
+    # 右下 45° 手柄
+    h0x, h0y = c + int(r * 0.70), c + int(r * 0.70)
+    h1x, h1y = c + r + pad - 10, c + r + pad - 10
+    d.line([h0x, h0y, h1x, h1y], fill=rgb + (255,), width=ring_width + 8)
+    d.ellipse([h1x - (ring_width + 8) // 2, h1y - (ring_width + 8) // 2,
+               h1x + (ring_width + 8) // 2, h1y + (ring_width + 8) // 2],
+              fill=rgb + (255,))
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    img.save(out_path, "PNG")
+    return out_path, size
