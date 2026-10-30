@@ -46,24 +46,27 @@ def _load_constraints(path: str = None) -> Dict[str, Any]:
 
 # ---------------------------------------------------------------- 关键词表
 
-# 关键词表（2026-10-21 按 4 条新素材真实 ASR 语料扩充：
-# 原表过窄导致 4/4 素材出现"类别 X 无合规候选"——Hook 类目几乎没有命中词）
+# 关键词表（2026-10-21 按 4 条新素材真实 ASR 语料扩充；2026-10-29 扩充针织/小香风/显瘦/做工语料）
 HOOK_KEYWORDS = ["更漂亮", "独一无二", "绝了", "比下去", "最好看", "最显瘦", "天花板",
                  "爆炸", "超级", "巨好看", "闭眼入", "王炸", "封神", "实物还要",
                  "无敌", "太美", "巨美", "太好看", "好看到", "好好看", "惊艳", "心动",
                  "喜欢", "爱了", "种草", "试穿", "上身效果", "新款", "姐妹们", "真香",
-                 "气质", "高级感", "好看", "美", "真好看", "绝了", "强烈推荐", "首选"]
+                 "气质", "高级感", "好看", "美", "真好看", "绝了", "强烈推荐", "首选",
+                 "小香风", "小香", "打样", "对比", "盘火", "省项链", "省一条项链", "出彩", "绝配", "立领"]
 FABRIC_KEYWORDS = ["面料", "做工", "材质", "棉", "羊毛", "蚕丝", "绒", "针织", "纱",
                    "进口", "手感", "软糯", "亲肤", "透气", "钩花", "镂空", "走线", "细节",
                    "工艺", "纱线", "克重", "支数", "蓬松", "织法", "填充", "织纹", "肌理",
-                   "双面", "拼接", "复合"]
+                   "双面", "拼接", "复合", "菠萝针", "针法", "织得很密", "双层", "一体成型",
+                   "门襟", "领口", "领子", "口袋", "毛衣", "开衫", "小香", "纯山羊绒"]
 FIT_KEYWORDS = ["显瘦", "瘦没了", "修身", "版型", "款型", "上身", "遮肉", "小肚子", "身材",
                 "不挑人", "纸片人", "纸片", "搭裙子", "搭配裙", "显高", "比例", "收腰",
-                "遮胯", "胖瘦", "显比例", "肩宽", "胯宽", "包裹"]
+                "遮胯", "胖瘦", "显比例", "肩宽", "胯宽", "包裹", "骨架", "骨架小", "盖住", "缺点",
+                "上半身", "下半身"]
 STYLING_KEYWORDS = ["搭配", "穿搭", "裤子", "裤腿", "格子裤", "编织裤", "西裤", "卫裤",
                     "老钱", "松弛", "休闲", "裙子", "大衣", "外套", "叠穿", "风格",
                     "胃裤", "衬衫", "背心", "半裙", "长裙", "短裙", "皮衣", "长裤", "短裤",
-                    "牛仔", "靴", "鞋子", "包", "帽子", "围巾", "配饰", "气质感"]
+                    "牛仔", "靴", "鞋子", "包", "帽子", "围巾", "配饰", "气质感", "百搭",
+                    "搭白色", "黑色的"]
 
 # 库存/促销/换款离场黑名单（正则，无时间窗；由旧 demo 黑名单泛化而来）
 # 2026-10-21 泛化验收修正：删除/收紧会误杀"穿搭/面料/版型"内容词的模式——
@@ -131,12 +134,19 @@ def _is_idle_chatter(text: str) -> bool:
     return False
 
 
-def _classify(text: str) -> List[str]:
+def _classify(text: str, prod_ctx: Dict[str, Any] = None) -> List[str]:
     """返回文本命中的漏斗类别列表（可多命中）。"""
     cats = []
-    if any(k in text for k in HOOK_KEYWORDS):
+    is_pure_pants = False
+    if prod_ctx and prod_ctx.get("is_top") and not prod_ctx.get("is_bottom"):
+        mentions_pants = len(re.findall(r"裤", text))
+        has_top_kw = any(w in text for w in ("毛衣", "开衫", "针织", "衣服", "上衣", "大衣", "外套", "小香", "上身", "搭", "穿搭"))
+        if mentions_pants >= 2 and not has_top_kw:
+            is_pure_pants = True
+
+    if not is_pure_pants and any(k in text for k in HOOK_KEYWORDS):
         cats.append("hook")
-    if any(k in text for k in FABRIC_KEYWORDS):
+    if not is_pure_pants and any(k in text for k in FABRIC_KEYWORDS):
         cats.append("fabric")
     if any(k in text for k in FIT_KEYWORDS):
         cats.append("fit")
@@ -167,19 +177,37 @@ def is_blacklisted(text: str, use_price: bool = True,
 
 # ---------------------------------------------------------------- 块构建
 
-def _segment_score(seg: Dict[str, Any], category: str) -> float:
-    """段在指定类别下的得分：关键词命中数 × 时长权重。"""
+def _segment_score(seg: Dict[str, Any], category: str, prod_ctx: Dict[str, Any] = None) -> float:
+    """段在指定类别下的得分：关键词命中数 × 时长权重 + 目标商品契合加权。"""
     kw_map = {
         "hook": HOOK_KEYWORDS, "fabric": FABRIC_KEYWORDS,
         "fit": FIT_KEYWORDS, "styling": STYLING_KEYWORDS,
     }
-    hits = sum(1 for k in kw_map[category] if k in seg.get("text", ""))
+    text = seg.get("text", "")
+    hits = sum(1 for k in kw_map[category] if k in text)
     dur = seg.get("duration", 0.0)
-    return hits * 2.0 + min(dur, 8.0) * 0.5
+    score = hits * 2.0 + min(dur, 8.0) * 0.5
+
+    if prod_ctx:
+        core_words = prod_ctx.get("core_words") or []
+        prod_hits = sum(1 for w in core_words if w in text)
+        score += prod_hits * 3.5
+
+        # 品类防错配惩罚：如果契约主推上衣/毛衣，而该块主要是卖裤子且不提上装
+        if prod_ctx.get("is_top") and not prod_ctx.get("is_bottom"):
+            mentions_pants = len(re.findall(r"裤", text))
+            has_top_kw = any(w in text for w in ("毛衣", "开衫", "针织", "衣服", "上衣", "大衣", "外套", "小香", "上身", "搭", "穿搭"))
+            if mentions_pants >= 2 and not has_top_kw:
+                if category in ("hook", "fabric"):
+                    score -= 50.0
+                else:
+                    score -= 15.0
+    return max(0.0, score)
 
 
 def build_blocks(segments: List[Dict[str, Any]],
-                 constraints: Dict[str, Any] = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+                 constraints: Dict[str, Any] = None,
+                 prod_ctx: Dict[str, Any] = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """过滤 + 合并连续段为 block。返回 (blocks, rejected)。
 
     多源支持（2026-10-21）：segments 携带 source_file 时按源分组处理，
@@ -241,12 +269,13 @@ def build_blocks(segments: List[Dict[str, Any]],
         b["dur"] = round(b["end"] - b["start"], 2)
         cats = set()
         for s in b["segments"]:
-            cats.update(_classify(s.get("text", "")))
+            cats.update(_classify(s.get("text", ""), prod_ctx=prod_ctx))
         b["categories"] = sorted(cats)
-        b["scores"] = {c: round(_segment_score({"text": text_all, "duration": b["dur"]}, c), 2)
+        b["scores"] = {c: round(_segment_score({"text": text_all, "duration": b["dur"]}, c, prod_ctx=prod_ctx), 2)
                        for c in ("hook", "fabric", "fit", "styling")}
     blocks = [b for b in blocks if not b.get("_drop")]
     return blocks, rejected
+
 
 
 # ---------------------------------------------------------------- 句子边界对齐（2026-10-27 反馈驱动）
@@ -448,12 +477,45 @@ def _build_sticker_texts(clips: List[Dict[str, Any]],
 
 # ---------------------------------------------------------------- 主入口
 
+def _extract_product_context(spec_data: Dict[str, Any]) -> Dict[str, Any]:
+    """从 spec 提取目标商品词汇与品类属性（用于跨源选段时精准锚定目标商品）。"""
+    spec = spec_data or {}
+    product = spec.get("product", {}) or {}
+    options = spec.get("options", {}) or {}
+    l1 = str(product.get("title_line1") or "").strip()
+    l2 = str(product.get("title_line2") or "").strip()
+    full_title = f"{l1} {l2}".strip()
+
+    core_words = []
+    for kw in ("毛衣", "开衫", "针织衫", "针织", "羊毛", "羊绒", "小香风", "小香",
+               "羽绒服", "卫衣", "大衣", "外套", "风衣", "马甲", "衬衫", "T恤",
+               "西裤", "裤子", "半裙", "长裙", "连衣裙"):
+        if kw in full_title and kw not in core_words:
+            core_words.append(kw)
+    for kw in (options.get("highlight_keywords") or []):
+        if kw and kw not in core_words:
+            core_words.append(kw)
+    if "黑色" in full_title and "黑色" not in core_words:
+        core_words.append("黑色")
+
+    is_top = any(w in full_title for w in ("毛衣", "开衫", "针织", "上衣", "大衣", "外套", "羽绒服", "马甲", "卫衣", "衬衫", "T恤"))
+    is_bottom = any(w in full_title for w in ("裤", "裙"))
+
+    return {
+        "core_words": core_words,
+        "is_top": is_top,
+        "is_bottom": is_bottom,
+        "title_line1": l1,
+        "title_line2": l2,
+    }
+
+
 def _derive_hook_text(spec_data: Dict[str, Any]) -> str:
     """Hook 标题卡文案派生（2026-10-26：消除爆款款硬编码，零硬编码泛化）。
 
     优先级：spec.options.hook_card_text 显式指定
           → 商品名两行拼接（title_line1 · title_line2）。
-    720×168 卡片 / 40px 字号下 16 字可完整展示，故截断到 16 字。
+    720×168 卡片 / 40px 字号下 16 字可完整展示。超长时避免单字斩断。
     """
     opts = spec_data.get("options", {}) or {}
     explicit = str(opts.get("hook_card_text") or "").strip()
@@ -463,9 +525,15 @@ def _derive_hook_text(spec_data: Dict[str, Any]) -> str:
     l1 = str(product.get("title_line1") or "").strip()
     l2 = str(product.get("title_line2") or "").strip()
     if l1 and l2:
-        return f"{l1} · {l2}"[:16]
+        combined = f"{l1} · {l2}"
+        if len(combined) <= 16:
+            return combined
+        if len(l1) <= 16:
+            return l1
+        return l1[:16]
     if l1 or l2:
-        return (l1 or l2)[:16]
+        cand = l1 or l2
+        return cand[:16]
     return "今晚必看爆款"
 
 
@@ -477,9 +545,17 @@ def _derive_cta_text(spec_data: Dict[str, Any]) -> str:
     if explicit:
         return explicit[:14]
     product = spec_data.get("product", {}) or {}
-    name = str(product.get("title_line2") or product.get("title_line1") or "").strip()
+    l1 = str(product.get("title_line1") or "").strip()
+    l2 = str(product.get("title_line2") or "").strip()
+    name = l2 or l1
     if name:
-        return f"戳左下方小黄车看{name}"[:14]
+        cand = f"戳左下方小黄车看{name}"
+        if len(cand) <= 14:
+            return cand
+        for kw in ("毛衣", "开衫", "针织衫", "大衣", "外套", "羽绒服", "卫衣", "裤子", "半裙"):
+            if kw in name or kw in l1:
+                return f"戳左下方小黄车看{kw}"
+        return cand[:14]
     return "戳左下方小黄车查看上身搭配"
 
 
@@ -522,7 +598,8 @@ def build_plan(
     DURATION_SAFETY_MARGIN_SEC = 0.5
     dur_max = max(dur_min + 1.0, dur_max - DURATION_SAFETY_MARGIN_SEC)
 
-    blocks, rejected = build_blocks(segments, constraints)
+    prod_ctx = _extract_product_context(spec_data)
+    blocks, rejected = build_blocks(segments, constraints, prod_ctx=prod_ctx)
 
     meta = {"funnel": {}, "rejected_count": len(rejected),
             "candidate_blocks": len(blocks), "notes": []}
