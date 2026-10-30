@@ -31,6 +31,8 @@ import cv2
 import numpy as np
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, PROJECT_ROOT)
+from src.core.path_resolver import cv2_imread
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -98,7 +100,7 @@ def _score_histogram(frame_bgr: np.ndarray, roi: Tuple[int, int, int, int],
     torso = frame_bgr[y0:y1, x0:x1]
     if torso.size == 0:
         return 0.0, {"error": "empty torso roi"}
-    product = cv2.imread(product_path)
+    product = cv2_imread(product_path)
     if product is None:
         return 0.0, {"error": f"unreadable product image: {product_path}"}
 
@@ -140,7 +142,10 @@ def _score_clip(frame_bgr: np.ndarray, roi: Tuple[int, int, int, int],
 
     x0, y0, x1, y1 = roi
     torso = cv2.cvtColor(frame_bgr[y0:y1, x0:x1], cv2.COLOR_BGR2RGB)
-    product = cv2.cvtColor(cv2.imread(product_path), cv2.COLOR_BGR2RGB)
+    prod_raw = cv2_imread(product_path)
+    if prod_raw is None:
+        return 0.0, {"engine": "clip", "error": f"无法读取商品图: {product_path}"}
+    product = cv2.cvtColor(prod_raw, cv2.COLOR_BGR2RGB)
 
     with torch.no_grad():
         t_tensor = preprocess(Image.fromarray(torso)).unsqueeze(0)
@@ -232,7 +237,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--constraints", default="contracts/constraints.yaml")
     args = parser.parse_args(argv)
 
-    frame = cv2.imread(args.frame)
+    frame = cv2_imread(args.frame)
     if frame is None:
         print(f"[GARMENT][ERROR] 无法读取帧: {args.frame}")
         return 2

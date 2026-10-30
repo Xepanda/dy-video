@@ -196,12 +196,17 @@ def verify_final_video_asr(
 
     final_text = "".join((s.get("text") or "") for s in (segs or []))
 
-    # ---- V2 语音违规词零残留 ----
+    # ---- V2 语音违规词（2026-10-30 用户策略：声音保留，仅记录）----
+    # 现状：违禁词只从字幕删除，音频照常播放。开启消音时才要求语音零残留。
     from src.tools.detect_violation import ViolationDetector
-    v_hits = ViolationDetector().scan_text(final_text)
-    _add("V2", "语音违规词零残留",
-         "PASS" if not v_hits else "BLOCK",
+    v_hits = ViolationDetector(constraints=constraints).scan_text(final_text)
+    _mute_on = bool(((constraints or {}).get("violation_words", {}) or {})
+                    .get("handling", {}).get("audio_mute", False))
+    _add("V2", "语音违规词（声音保留策略）",
+         "PASS" if not v_hits else ("BLOCK" if _mute_on else "WARN"),
          f"成片原声检出 {len(v_hits)} 处违规词"
+         + ("（消音已开启，应彻底清除）" if _mute_on
+            else "（按策略保留声音，仅记录）")
          + (f": {', '.join(h['word'] for h in v_hits[:5])}" if v_hits else ""),
          measured=len(v_hits), threshold=0)
 
@@ -255,9 +260,24 @@ def verify_final_video_asr(
                 timeline = json.load(f)
         max_db = float(cfg.get("mute_max_volume_db", -30.0) or -30.0)
         # ⚠️ 消音表达式两端有 80ms 淡变（防爆音），淡变区播放的是
-        # **u5408规的相邻语音**（不是违规词本身）。因此核查必须回避淡变边、
+        # **合规的相邻语音**（不是违规词本身）。因此核查必须回避淡变边、
         # 只测窗口核心区（否则正常语音淡出会被误判为违规残留）。
-        RAMP_MARGIN = 0.15   # > 80ms 淡变 + 侧量余量
+        RAMP_MARGIN = 0.15   # > 80ms 淡变 + 测量余量
+
+        # 跨分镜转场保护：acrossfade 区域相邻分镜声音会交叉淡化，核查时需避开邻段叠音区
+        trans_cfg = constraints.get("transition_effect", {}) or {}
+        trans_d = float(trans_cfg.get("duration_sec", 0.25) or 0.25) if trans_cfg.get("enabled", True) else 0.0
+        sorted_tl = sorted(
+            [(cid, float(info.get("start", 0.0)), float(info.get("dur", 0.0)))
+             for cid, info in timeline.items()],
+            key=lambda x: x[1]
+        )
+        clip_bounds = {}
+        for idx, (cid, c_st, c_dur) in enumerate(sorted_tl):
+            eff_st = c_st + (trans_d if idx > 0 else 0.0)
+            next_st = sorted_tl[idx + 1][1] if idx + 1 < len(sorted_tl) else total_dur
+            clip_bounds[cid] = (eff_st, next_st)
+
         audible = []
         n_windows = 0
         for cid, cdata in (handling.get("clips", {}) or {}).items():
@@ -265,9 +285,10 @@ def verify_final_video_asr(
             if not ranges:
                 continue
             clip_start = float((timeline.get(cid) or {}).get("start", 0.0))
+            eff_st, eff_end = clip_bounds.get(cid, (clip_start, total_dur))
             for (a0, a1) in ranges:
-                t0 = clip_start + float(a0)
-                t1 = clip_start + float(a1)
+                t0 = max(clip_start + float(a0), eff_st)
+                t1 = min(clip_start + float(a1), eff_end)
                 if t1 <= t0 or t0 >= total_dur:
                     continue
                 t1 = min(t1, total_dur)

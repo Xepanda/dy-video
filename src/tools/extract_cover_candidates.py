@@ -44,6 +44,7 @@ from src.tools.detect_face import FaceAnalyzer
 from src.tools.detect_garment_match import (
     garment_match_score, check_constraints as garment_check)
 from src.tools.detect_ocr import check_background_text
+from src.core.path_resolver import cv2_imwrite
 
 POSE_MODEL_PATH = os.path.join(PROJECT_ROOT, "data", "pose_landmarker_lite.task")
 OUT_W, OUT_H = 1080, 1920
@@ -525,7 +526,7 @@ def extract_cover_candidates(
         cand_id = f"cand_{i+1:02d}"
         img_name = f"{cand_id}_t{item['timestamp']:.1f}s.jpg"
         img_path = os.path.join(output_dir, img_name)
-        cv2.imwrite(img_path, item["norm_frame"])
+        cv2_imwrite(img_path, item["norm_frame"])
 
         cand_data = {
             "id": cand_id,

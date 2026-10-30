@@ -207,13 +207,20 @@ class VideoAssembler:
 
     @staticmethod
     def _mute_filter(a: float, b: float, fade: float = 0.08) -> str:
-        """生成单区间语音消音 volume 表达式（80ms 淡入出防爆音）。"""
+        """生成单区间语音消音 volume 表达式（默认 80ms 淡入淡出防爆音）。"""
         a, b, f = float(a), float(b), float(fade)
-        expr = (
-            f"if(between(t,{a:.3f},{a + f:.3f}),(t-{a:.3f})/{f:.3f},"
-            f"if(between(t,{b - f:.3f},{b:.3f}),({b:.3f}-t)/{f:.3f},"
-            f"if(between(t,{a + f:.3f},{b - f:.3f}),0,1)))"
-        )
+        if b <= a:
+            return "volume=1"
+        if b - a < 2 * f:
+            f = (b - a) / 2.0
+        if f <= 0.001:
+            expr = f"if(between(t,{a:.3f},{b:.3f}),0,1)"
+        else:
+            expr = (
+                f"if(between(t,{a:.3f},{a + f:.3f}),({a + f:.3f}-t)/{f:.3f},"
+                f"if(between(t,{b - f:.3f},{b:.3f}),(t-{b - f:.3f})/{f:.3f},"
+                f"if(between(t,{a + f:.3f},{b - f:.3f}),0,1)))"
+            )
         return f"volume=volume='{expr}':eval=frame"
 
     def _get_magnifier_assets(self, clip: Dict[str, Any],
@@ -802,23 +809,31 @@ class VideoAssembler:
         n_clips = len(plan["clips"])
         timeline, sub_events = self.render_clips(plan, transition_sec=trans_d)
 
-        # —— 违规词通道 1：字幕屏蔽 -—
+        # —— 违规词：字幕删词（2026-10-30 用户要求）——
+        # 只从字幕文本里删掉违禁词（不显示即可），声音继续、画面不打码。
+        # 删哪些词由 Agent 一轮复核的决策清单决定（violation_handling.json）。
         vw_c = self.constraints.get("violation_words", {}) or {}
         handling_c = vw_c.get("handling", {}) or {}
+        subtitle_action = str(handling_c.get("subtitle_action", "delete") or "delete")
+        delete_words = [w for w in
+                        (self.violation_handling.get("subtitle_delete_words") or [])
+                        if w]
         masked_words: List[str] = []
-        if handling_c.get("subtitle_mask", True):
-            from src.tools.detect_violation import ViolationDetector
-            det = ViolationDetector()
-            masked_events = []
+        if handling_c.get("subtitle_mask", True) and delete_words:
+            from src.tools.detect_violation import mask_text_action
+            cleaned_events = []
             for ev in sub_events:
-                text, hits = det.mask_text(ev.get("text", "") or "")
+                new_text, hits = mask_text_action(
+                    ev.get("text", "") or "", delete_words,
+                    action=subtitle_action)
                 if hits:
-                    masked_words.extend(h["word"] for h in hits)
-                masked_events.append({**ev, "text": text})
-            sub_events = masked_events
+                    masked_words.extend(hits)
+                cleaned_events.append({**ev, "text": new_text})
+            sub_events = cleaned_events
             if masked_words:
-                print(f"[VIOLATION] 字幕屏蔽 {len(masked_words)} 处: "
-                      f"{', '.join(sorted(set(masked_words))[:8])}")
+                print(f"[VIOLATION] 字幕删词 {len(masked_words)} 处: "
+                      f"{', '.join(sorted(set(masked_words))[:8])}"
+                      f"（动作 {subtitle_action}，不消音/不打码）")
 
         # 1. 生成对应时间的变色字幕
         ass_path = os.path.join(self.work_dir, "subtitles.ass")

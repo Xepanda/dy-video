@@ -318,6 +318,61 @@ python scripts/run_regression.py
     `allow_dead` 登记（附原因）。注意审计只看 AST 消费链——经 `_deep_merge`
     间接消费的键不可见（见 R-X11 商品图适配器条目），需登记并靠单测覆盖。
 
+---
+
+## 12. 字形归一与违规处置策略（2026-10-30，反馈驱动）
+
+### 12.1 繁体 → 简体（确定性，不可省）
+
+- **根因**：faster-whisper 的 zh 词表含港台繁体，`language="zh"` 只限定语种、
+  不约束字形，"褲/個/類/麼/嗎/覺"概率性输出；`initial_prompt` 因吞音回归已默认关闭。
+- **主防线**：`src/tools/normalize_zh_script.py` —— OpenCC `t2s` 词组级转换
+  （"頭髮→头发"），**只改 text、时间戳绝对守恒、幂等**，商品术语转换后校验。
+- **接入点**：`AsrContextVerifier.verify_and_correct` 入口（门禁之前）；
+  `agent_director` Phase 1.5 对缓存命中做幂等归一并写回，产出
+  `script_normalization_report.json`。
+- **门禁**：`asr_review.traditional_block` → A11（含繁体即 BLOCK）；
+  QC「字幕无繁体字」BLOCK（对 `Dialogue:` 行做 t2s 回环比对）。
+- **教训**：不要在纠错词典里堆硬编码简繁对（历史仅 8 条，覆盖不足）；
+  字形问题用转换器解决，语境问题才用 Agent。
+
+### 12.2 违规词处置（用户策略：只删字幕，声音继续，不打码）
+
+| 项 | 策略 |
+| :--- | :--- |
+| 字幕 | **删除命中词**（`subtitle_action: delete`），不显示即可；不做 `***`、不打码 |
+| 声音 | **保留**（`audio_mute: false`）——成片 ASR 复检 V2 因此降级 WARN（仅记录） |
+| 画面 | **不打码**（`video_mosaic: false`） |
+| 判定 | **由 agent 工具复核**：流水线产出 `violation_review_request.json`，agent 审阅后回写 `violation_decisions.json`（流水线不内置 LLM、不依赖 API Key）； |
+| | agent 未回写时仅兜底「医疗功效/虚假绝对承诺 + 强宣传语境」正则，其余宽松放行 |
+| 审计 | `violation_handling.json` 的 `decisions`（每条含 action/basis/reason） |
+| | QC 断言：判定完整性 BLOCK + 判定清单零残留 BLOCK；字幕无繁体 BLOCK |
+
+**判定从宽原则**：尺码（最大码/最高码）、序数时间（第一眼/第一次）、口语、
+否定、转述、非排他表述一律放行；只有语义确实构成虚假宣传或医疗功效才删词。
+
+**禁止**：恢复"词库全量命中即消音+打码"的旧行为——实测 11 处命中里多数是正常话术。
+
+### 12.3 架构原则：流水线不内置 LLM 调用（2026-10-30 确立）
+
+**原则**：语义判断（纠错、合规）是 agent 的职责；流水线只做确定性处理 + 出题/收卷。
+
+| 环节 | 请求文件（流水线产出） | 回写文件（agent 完成） | 未回写时 |
+| :--- | :--- | :--- | :--- |
+| ASR 错词修正 | `asr_correction_review_request.json` | `asr_correction_decisions.json` | 本地确定性引擎 |
+| 违规词判定 | `violation_review_request.json` | `violation_decisions.json` | 医疗/虚假承诺 + 强宣传正则兜底 |
+| 繁体字形 | —（无需判断） | — | OpenCC t2s 确定性转换 |
+
+**硬性约束**：
+1. `src/` 与 `scripts/` 不得读取 `LLM_API_KEY`/`OPENAI_API_KEY`，不得请求 `/chat/completions`；
+   自查：`grep -rn "LLM_API_KEY\|chat/completions" src/ scripts/ --include="*.py"` 应无代码命中；
+2. 回写文件缺失/非法/护栏拦截 → 必须降级到确定性路径，不得中断流程；
+3. agent 回写内容同样受护栏约束（时间戳守恒 / 零价格 / 长度比 / index 边界）；
+4. 判定口径写入请求文件（`instructions` / `policy` / `response_schema`），保证可复现与可审计。
+
+**理由**：运行流水线的 agent 本身具备判断力，无需在流水线内再配置一套模型与密钥；
+这样也消除了"配置 Key → 行为漂移"的不确定性，CI 与本地结果一致。
+
 ### 11.5 需求判断基准（贴图类反馈）
 
 18. 「去除白边」类反馈有两种语义，先确认再动处理链：

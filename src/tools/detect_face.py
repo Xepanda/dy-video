@@ -43,6 +43,10 @@ from typing import Dict, Any, Optional, Tuple, List
 
 import cv2
 import numpy as np
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, PROJECT_ROOT)
+from src.core.path_resolver import cv2_imread
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
@@ -271,7 +275,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="不使用姿态引导 ROI（仅全帧检测）")
     args = parser.parse_args(argv)
 
-    frame = cv2.imread(args.image)
+    frame = cv2_imread(args.image)
     if frame is None:
         print(f"[FACE][ERROR] 无法读取图片: {args.image}")
         return 2

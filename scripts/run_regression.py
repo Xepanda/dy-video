@@ -39,7 +39,7 @@ UNIT_TESTS = [
     "tests/test_improvements.py",
     "tests/test_pipeline_units.py",
     "tests/test_ocr_purity.py",
-    "tests/test_llm_verifier.py",
+    "tests/test_agent_correction_review.py",
     "tests/test_chatcut_bridge.py",
     "tests/test_blacklist_precision.py",
     "tests/test_multi_source.py",
@@ -50,6 +50,8 @@ UNIT_TESTS = [
     "tests/test_video_effects.py",
     "tests/test_requirements_audit.py",
     "tests/test_dead_constraint_wiring.py",
+    "tests/test_product_image_adapter.py",
+    "tests/test_zh_script_and_violation_policy.py",
 ]
 
 PYTHON = sys.executable

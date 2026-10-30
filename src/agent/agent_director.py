@@ -172,22 +172,28 @@ class AgentDirector:
         primary = self.spec.get("raw_video_path")
         if primary:
             primary_abs = resolve_path(primary, spec_dir) or os.path.abspath(primary)
-            exists = os.path.exists(primary_abs)
-            if exists and primary_abs not in paths:
-                paths.insert(0, primary_abs)
-            scan_dir = os.path.dirname(primary_abs)
-            # 同目录其余视频一并纳入候选（跨素材选段）
-            # 仅在主文件真实存在时扫描，避免占位路径把无关目录视频误当素材。
-            if exists and os.path.isdir(scan_dir):
-                for name in sorted(os.listdir(scan_dir)):
-                    if not name.lower().endswith(self.VIDEO_EXTS):
-                        continue
-                    ap = os.path.abspath(os.path.join(scan_dir, name))
-                    if ap not in paths:
-                        paths.append(ap)
-            if not exists and primary_abs not in paths:
+            if os.path.isdir(primary_abs):
+                for name in sorted(os.listdir(primary_abs)):
+                    if name.lower().endswith(self.VIDEO_EXTS):
+                        ap = os.path.abspath(os.path.join(primary_abs, name))
+                        if ap not in paths:
+                            paths.append(ap)
+            elif os.path.isfile(primary_abs):
+                if primary_abs not in paths:
+                    paths.insert(0, primary_abs)
+                scan_dir = os.path.dirname(primary_abs)
+                # 同目录其余视频一并纳入候选（跨素材选段）
+                if os.path.isdir(scan_dir):
+                    for name in sorted(os.listdir(scan_dir)):
+                        if not name.lower().endswith(self.VIDEO_EXTS):
+                            continue
+                        ap = os.path.abspath(os.path.join(scan_dir, name))
+                        if ap not in paths:
+                            paths.append(ap)
+            elif not os.path.exists(primary_abs):
                 # 保持既有初始化容错契约：占位路径原样保留，由后续阶段报错
-                paths.insert(0, primary_abs)
+                if primary_abs not in paths:
+                    paths.insert(0, primary_abs)
         if not paths:
             raise FileNotFoundError(
                 f"未找到任何可用的源视频素材（raw_video_path={self.spec.get('raw_video_path')}）")
@@ -421,6 +427,31 @@ class AgentDirector:
         if os.path.exists(verified_cache):
             with open(verified_cache, "r", encoding="utf-8") as f:
                 all_segments = json.load(f)
+            # 1.5-0 字形归一（2026-10-30）：缓存命中也做幂等归一，
+            # 防止历史缓存带繁体字；归一后写回缓存保证字幕/文档一致。
+            self._norm_report = {"skipped": True}
+            try:
+                from src.tools.normalize_zh_script import normalize_segments
+                nrm_c = (self.constraints.get("asr_script_normalization", {}) or {})
+                if nrm_c.get("enabled", True):
+                    all_segments, norm_report = normalize_segments(
+                        all_segments,
+                        protect_terms=nrm_c.get("protect_terms"),
+                        prefer=str(nrm_c.get("converter", "opencc")))
+                    self._norm_report = norm_report
+                    if norm_report.get("n_changed_segments"):
+                        with open(verified_cache, "w", encoding="utf-8") as f:
+                            json.dump(all_segments, f, ensure_ascii=False, indent=2)
+                        print(f"  [ASR-NORM] 缓存归一 {norm_report['n_changed_segments']} 段 / "
+                              f"{norm_report['n_changed_chars']} 字"
+                              f"（残留 {len(norm_report['residual_traditional_segments'])} 段）")
+                    with open(os.path.join(self.work_dir,
+                                           "script_normalization_report.json"),
+                              "w", encoding="utf-8") as f:
+                        json.dump(norm_report, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                self._norm_report = {"error": str(e)}
+                print(f"  [ASR-NORM] 字形归一失败（跳过）: {e}")
             # 1.5a 一致性预检（防止素材与契约商品错配）
             try:
                 from src.tools.check_spec_material_consistency import (
@@ -609,7 +640,7 @@ class AgentDirector:
         except Exception as e:
             print(f"  [MAGNIFIER] 锚点分配失败（不阻断，成片将无放大镜）: {e}")
 
-        # 决策 2.5: 违规词三通道处理准备（2026-10-27 反馈驱动）
+        # 决策 2.5: 违规词处置（2026-10-30 简化：Agent 一轮复核 → 仅字幕删词）
         try:
             verified_cache = os.path.join(self.work_dir,
                                           "whisper_segments_verified.json")
@@ -620,10 +651,24 @@ class AgentDirector:
                     all_segments = json.load(f)
                 from src.tools.apply_violation_handling import (
                     prepare_violation_handling)
-                prepare_violation_handling(plan, all_segments, self.work_dir,
-                                           self.constraints)
+                vh = prepare_violation_handling(plan, all_segments, self.work_dir,
+                                                self.constraints)
+                # Agent 字幕复核归档：归一结果 + 违规裁决，供人审与 QC 追溯
+                try:
+                    review = {
+                        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "normalization": getattr(self, "_norm_report", None),
+                        "violation_summary": vh.get("summary"),
+                        "decisions": vh.get("decisions"),
+                    }
+                    with open(os.path.join(self.work_dir,
+                                           "asr_subtitle_review.json"),
+                              "w", encoding="utf-8") as f:
+                        json.dump(review, f, ensure_ascii=False, indent=2)
+                except Exception as e:
+                    print(f"  [REVIEW] 复核报告落盘失败（不阻断）: {e}")
         except Exception as e:
-            print(f"  [VIOLATION] 三通道处理准备失败（不阻断）: {e}")
+            print(f"  [VIOLATION] 处置准备失败（不阻断）: {e}")
 
         plan_path = os.path.join(self.work_dir, "plan.json")
         with open(plan_path, "w", encoding="utf-8") as f:

@@ -116,6 +116,8 @@ class AsrReviewGate:
         self.warn_ratio_limit = float(c.get("warn_ratio_limit", self.DEFAULT_WARN_RATIO_LIMIT))
         self.cjk_min_ratio = float(c.get("cjk_min_ratio", self.DEFAULT_CJK_MIN_RATIO))
         self.repeat_run_len = int(c.get("repeat_run_len", self.DEFAULT_REPEAT_RUN_LEN))
+        # A11 字形审计（2026-10-30）：残留繁体即拦截（归一应在进入门禁前完成）
+        self.traditional_block = bool(c.get("traditional_block", True))
         # 自定义语义词
         self.semantic_words = c.get("semantic_words") or SEMANTIC_WORDS
 
@@ -141,6 +143,19 @@ class AsrReviewGate:
 
         # —— 逐条 segment 级校验 ——
         valid_count = 0
+        # A11 前置：转换器降级告警（2026-10-30）
+        # contains_traditional 是回环比对，内置字表仅 120 字——降级后生僻繁体
+        # 既转不掉也检不出，门禁会静默变弱，必须显式记 WARN。
+        if self.traditional_block:
+            try:
+                from src.tools.normalize_zh_script import converter_name
+                cname = converter_name()
+                if cname != "opencc-t2s":
+                    _add("A11_CONVERTER_DEGRADED", "WARN", -1,
+                         f"字形归一降级为 {cname}（未安装 opencc），"
+                         f"A11 对生僻繁体可能漏检")
+            except Exception:
+                pass
         for i, s in enumerate(segs):
             text = (s.get("text") or "").strip()
             start, end = s.get("start"), s.get("end")
@@ -218,6 +233,19 @@ class AsrReviewGate:
                 _add("A10_LOW_DENSITY_LONG", "WARN", i,
                      f"单段 {end - start:.1f}s 但仅 {len(stripped)} 字"
                      f"（{len(stripped)/(end-start):.2f} 字/秒，疑似回声/空段）", text[:30])
+
+            # A11 繁体字形残留（2026-10-30 新增）
+            # 现象：faster-whisper zh 词表含港台繁体，"褲/個/類/麼/嗎/覺"概率性输出；
+            # 归一（OpenCC t2s）应在进入门禁前完成，此处拦截任何残留，防繁体烧录。
+            if self.traditional_block:
+                try:
+                    from src.tools.normalize_zh_script import contains_traditional
+                    if contains_traditional(text):
+                        _add("A11_TRADITIONAL", "BLOCK", i,
+                             "含繁体字（应已被 t2s 归一，检查归一开关与转换器）",
+                             text[:40])
+                except Exception as e:  # 归一模块不可用时不阻断审核
+                    _add("A11_CHECK_UNAVAILABLE", "WARN", i, f"字形审计不可用: {e}")
 
             valid_count += 1
 
