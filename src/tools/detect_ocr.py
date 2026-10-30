@@ -35,6 +35,7 @@ import numpy as np
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
+from src.core.path_resolver import cv2_imread
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -236,7 +237,7 @@ if __name__ == "__main__":
     parser.add_argument("--constraints", default="contracts/constraints.yaml")
     args = parser.parse_args()
 
-    img = cv2.imread(args.image)
+    img = cv2_imread(args.image)
     if img is None:
         print(f"无法读取图片: {args.image}")
         sys.exit(1)

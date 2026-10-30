@@ -120,3 +120,37 @@ def relativize(path: str, base_dir: str = None) -> str:
     if rel.startswith(".."):
         return path
     return rel.replace("\\", "/")
+
+
+def cv2_imread(path: str, flags: int = 1):
+    """跨平台 cv2.imread（解决 Windows 下中文路径无法读取的问题）。"""
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        import cv2
+        import numpy as np
+        with open(path, "rb") as f:
+            buf = np.frombuffer(f.read(), dtype=np.uint8)
+        return cv2.imdecode(buf, flags)
+    except Exception:
+        return None
+
+
+def cv2_imwrite(path: str, img, params: list = None) -> bool:
+    """跨平台 cv2.imwrite（解决 Windows 下中文路径无法写入的问题）。"""
+    if img is None:
+        return False
+    try:
+        import cv2
+        import numpy as np
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        ext = os.path.splitext(path)[1]
+        ok, buf = cv2.imencode(ext, img, params)
+        if not ok:
+            return False
+        with open(path, "wb") as f:
+            f.write(buf)
+        return True
+    except Exception:
+        return False
+
