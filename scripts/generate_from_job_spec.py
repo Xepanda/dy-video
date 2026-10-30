@@ -111,23 +111,15 @@ def collect_source_videos(spec: dict, spec_dir: str) -> list:
     return paths
 
 
+from src.tools.build_plan import _derive_hook_text, _derive_cta_text
+
+
 def derive_texts(spec: dict) -> dict:
-    """从契约商品信息派生 Hook 卡 / CTA 文案（与 build_plan 派生规则一致）。"""
-    options = spec.get("options", {}) or {}
-    product = spec.get("product", {}) or {}
-    l1 = str(product.get("title_line1") or "").strip()
-    l2 = str(product.get("title_line2") or "").strip()
-
-    hook = str(options.get("hook_card_text") or "").strip()
-    if not hook:
-        hook = f"{l1} · {l2}"[:16] if (l1 and l2) else (l1 or l2 or "今晚必看爆款")[:16]
-
-    cta = str(options.get("cta_text") or "").strip()
-    if not cta:
-        name = l2 or l1
-        cta = (f"戳左下方小黄车看{name}"[:14]) if name else "戳左下方小黄车查看上身搭配"
-
-    return {"hook_card_text": hook, "cta_text": cta}
+    """从契约商品信息派生 Hook 卡 / CTA 文案（与 build_plan 派生规则严格一致）。"""
+    return {
+        "hook_card_text": _derive_hook_text(spec),
+        "cta_text": _derive_cta_text(spec),
+    }
 
 
 def build_resolved_spec(spec: dict, videos: list, texts: dict) -> dict:

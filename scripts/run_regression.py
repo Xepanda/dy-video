@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 run_regression.py - 素材回归测试体系（B16）
-==========================================
 机制：
   1. 单元测试层：tests/ 下全部测试脚本（价格检测/OCR 纯净度/决策网关/
      时间线桥接/LLM 审核/管道单测）逐个子进程执行；
@@ -52,6 +51,7 @@ UNIT_TESTS = [
     "tests/test_dead_constraint_wiring.py",
     "tests/test_product_image_adapter.py",
     "tests/test_zh_script_and_violation_policy.py",
+    "tests/test_desktop_spec_creator.py",
 ]
 
 PYTHON = sys.executable
