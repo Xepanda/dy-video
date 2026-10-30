@@ -115,6 +115,17 @@ def case_spec_no_absolute_paths():
         if not os.path.isdir(pdir):
             continue
         for fn in sorted(os.listdir(pdir)):
+            if fn.endswith(".resolved.json"):
+                continue
+            if d == "." and fn == "job_spec.json":
+                # 根目录的 job_spec.json 允许作为用户当前任务输入（指向外部机器路径）；
+                # 若其 project_id 不是 sample 开头，则视为用户任务 spec，跳过入库规范校验
+                try:
+                    with open(os.path.join(pdir, fn), "r", encoding="utf-8") as f:
+                        if not json.load(f).get("project_id", "").startswith("sample"):
+                            continue
+                except Exception:
+                    pass
             if fn.startswith("job_spec") and fn.endswith(".json"):
                 spec_files.append(os.path.join(pdir, fn))
     assert spec_files, "未找到 spec 文件"

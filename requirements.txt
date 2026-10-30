@@ -9,8 +9,11 @@ jieba>=0.42.1
 pypinyin>=0.49.0
 pyyaml>=6.0.0
 rapidocr-onnxruntime>=1.2.0
+
 # 繁简字形归一（src/tools/normalize_zh_script.py）。缺失时自动降级到内置 120 字表，
 # 但 A11 门禁与 QC「字幕无繁体字」断言依赖转换器覆盖度——降级后会漏检生僻繁体，
 # 故列为必需依赖；运行期若仍降级，门禁会记 WARN（A11_CONVERTER_DEGRADED）。
 opencc-python-reimplemented>=0.1.7
 
+pywebview>=6.0.0
+pyinstaller>=6.0.0

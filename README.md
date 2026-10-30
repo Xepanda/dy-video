@@ -91,7 +91,7 @@ dy-live-ecommerce-editor/
 ├── tests/                       # 自动化单元测试套件
 │   └── test_pipeline_units.py   # 覆盖 ASR 校验、语义分类、Agent 决策、构图算法
 ├── job_spec.json                # 当前任务契约配置
-├── 一键启动填表小工具.bat       # 人工输入素材与商品信息的快捷交互入口
+启动任务配置器.exe  # 或 SpecCreator.exe
 ├── requirements.txt             # 依赖清单
 └── .gitignore                   # 严格排除大体积素材与运行期缓存
 ```
@@ -108,7 +108,7 @@ dy-live-ecommerce-editor/
 剪辑前，用户需提供原始直播录像与商品信息以建立契约上下文。
 双击运行根目录的：
 ```bash
-一键启动填表小工具.bat
+启动任务配置器.exe  # 或 SpecCreator.exe
 ```
 *(或在终端执行 `python src/tools/spec_creator.py`)*
 系统将在浏览器自动打开可视化表单页面，点选视频素材、商品平铺图、填写品牌名与核心面料/版型卖点，点击“导出任务文件”即可生成标准 `job_spec.json`。
