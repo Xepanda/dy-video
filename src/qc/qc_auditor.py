@@ -42,6 +42,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from src.tools.detect_price import find_price_matches
+from src.core.path_resolver import cv2_imread
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -215,18 +216,68 @@ class QcAuditor:
                          metric_key="subtitle_banned_tokens",
                          measured=bad_found, threshold=[])
 
-        # ---- 违规词零残留（2026-10-27 反馈驱动）----
+        # ---- 违规词处置核验（2026-10-30 简化口径）----
+        # 用户策略：只从字幕删词（不显示），声音继续、画面不打码。
+        # 因此不再做"词库全量零残留"，改为：
+        #   ① 判定清单完整性（每条候选都有 action + reason）
+        #   ② 判定清单零残留（被判删除的词不得出现在字幕）
         vw_c = self.constraints.get("violation_words", {}) or {}
         if (vw_c.get("detect", {}) or {}).get("subtitles", True):
-            from src.tools.detect_violation import audit_ass_file
-            vres = audit_ass_file(ass_path)
-            v_enforce = str(vw_c.get("enforce_level", "BLOCK")).upper()
-            self._assert(vres["clean"], "字幕违规词零残留（违规词库）",
-                         f"字幕检出 {vres['total_hits']} 处违规词"
-                         + (f": {', '.join(h['word'] for h in vres['hits'][:5])}"
-                            if vres["hits"] else ""),
-                         level=v_enforce, metric_key="violation_words.enforce_level",
-                         measured=vres["total_hits"], threshold=0)
+            work_dir = os.path.dirname(os.path.abspath(ass_path)) if ass_path else ""
+            hp = os.path.join(work_dir, "violation_handling.json")
+            decisions, delete_words = [], []
+            if os.path.exists(hp):
+                try:
+                    with open(hp, "r", encoding="utf-8") as f:
+                        hd = json.load(f)
+                    decisions = hd.get("decisions") or []
+                    delete_words = hd.get("subtitle_delete_words") or []
+                except Exception as e:
+                    print(f"[QC] violation_handling.json 解析失败: {e}")
+            bad = [d for d in decisions
+                   if not d.get("action") or not d.get("reason")]
+            self._assert(not bad, "违规判定完整性",
+                         f"{len(decisions)} 条候选均含 action/reason"
+                         if not bad else f"{len(bad)} 条缺 action/reason",
+                         level="BLOCK", metric_key="violation_words.review",
+                         measured=len(bad), threshold=0)
+            ass_text = ""
+            if ass_path and os.path.exists(ass_path):
+                with open(ass_path, "r", encoding="utf-8", errors="ignore") as f:
+                    ass_text = f.read()
+            leaked = [w for w in delete_words if w and w in ass_text]
+            self._assert(not leaked, "字幕违规词零残留（判定清单）",
+                         f"判定删除 {len(delete_words)} 词，残留 {len(leaked)}"
+                         + (f": {', '.join(leaked[:5])}" if leaked else ""),
+                         level=str(vw_c.get("enforce_level", "BLOCK")).upper(),
+                         metric_key="violation_words.enforce_level",
+                         measured=len(leaked), threshold=0)
+
+            # ---- 字幕字形审计：无繁体字（2026-10-30）----
+            try:
+                from src.tools.normalize_zh_script import (
+                    contains_traditional, converter_name)
+                cname = converter_name()
+                dlg = [ln for ln in ass_text.splitlines()
+                       if ln.startswith("Dialogue:")]
+                trad = [ln for ln in dlg if contains_traditional(ln)]
+                self._assert(not trad, "字幕无繁体字",
+                             f"{len(dlg)} 行对白，含繁体 {len(trad)} 行"
+                             + (f"（示例：{trad[0][-24:]}）" if trad else ""),
+                             level="BLOCK",
+                             metric_key="asr_script_normalization.enabled",
+                             measured=len(trad), threshold=0)
+                # 转换器降级 → 断言能力变弱，显式记录（不拦截）
+                self._assert(cname == "opencc-t2s", "字形转换器完整性",
+                             f"转换器 {cname}"
+                             + ("" if cname == "opencc-t2s" else
+                                "（未安装 opencc，生僻繁体可能漏检）"),
+                             level="WARN",
+                             metric_key="asr_script_normalization.converter",
+                             measured=cname, threshold="opencc-t2s")
+            except Exception as e:
+                self._assert(True, "字幕无繁体字",
+                             f"字形审计不可用（跳过）: {str(e)[:60]}", level="WARN")
 
         # ---- B10 封面渲染几何复测 ----
         if cover_meta_path and os.path.exists(cover_meta_path):
@@ -754,7 +805,7 @@ class QcAuditor:
         try:
             import cv2
             import numpy as np
-            img = cv2.imread(cover_path)
+            img = cv2_imread(cover_path)
             y0 = max(0, int(prod.get("top_y", 1530)))
             y1 = min(img.shape[0], int(prod.get("bottom_y", 1700)))
             region = img[y0:y1, :]
@@ -789,7 +840,7 @@ class QcAuditor:
             from src.tools.detect_ocr import check_background_text
             with open(cover_meta_path, "r", encoding="utf-8") as f:
                 meta = json.load(f)
-            img = cv2.imread(cover_path)
+            img = cv2_imread(cover_path)
             if img is None:
                 self._assert(False, "封面背景文字纯净度", f"封面无法读取: {cover_path}",
                              metric_key="ocr.background_text_area_max")

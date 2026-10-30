@@ -2,7 +2,7 @@
 # 依据《会议纪要》+ 2026-10-20 客户决策编制；每个 metric key 在 constraints_map.md 登记纪要原文。
 # 规则：阈值只改本文件，不改代码；本文件版本进入缓存键与 QC 报告。
 
-version: 1.6
+version: 1.7
 updated: "2026-10-28"
 
 # ============ 变更记录 ============
@@ -302,6 +302,8 @@ asr_review:
   overlap_tolerance_sec: 0.5  # 相邻段重叠容差，超出记 WARN
   duration_tolerance_sec: 2.0  # end 超出媒体时长的容差
   warn_ratio_limit: 0.35     # WARN 占比超此比例自动升级为 BLOCK（防带病放行）
+  # 2026-10-30 新增 A11：字形审计（残留繁体即拦截，防繁体字幕烧录）
+  traditional_block: true
   cjk_min_ratio: 0.55        # 中文字符占比下限，低于记 WARN（疑似乱码）
   repeat_run_len: 5          # 连续重复字符阈值（"啊啊啊啊"判为噪声串）
 
@@ -361,6 +363,20 @@ fade_effect:
 # 词库来源：飞书《违规整合》（抖音电商学习中心极限词清单），
 # 本地镜像 contracts/violation_words.yaml（可用 manage_violation_words.py 导入更新）。
 # 三通道处理（决策）：字幕屏蔽 + 语音消音 + 视频打码，确保零残留。
+# ============ ASR 字形归一（2026-10-30 新增，反馈驱动）============
+# 背景：faster-whisper 的 zh 词表含港台繁体，褲/個/類/麼/嗎/覺 等字概率性输出繁体；
+#       language=zh 不约束字形，initial_prompt 因吞音回归已默认关闭。
+# 方案：确定性 t2s（OpenCC 词组级，幂等、时间戳守恒）+ A11 门禁 + 商品术语校验。
+asr_script_normalization:
+  enabled: true
+  converter: opencc           # opencc（词组级，推荐）| builtin（内置字表兜底）
+  protect_terms:              # 归一后校验术语写法（缺失仅告警）
+    - "桑蚕丝"
+    - "羊绒"
+    - "羊毛"
+    - "针织衫"
+    - "渐变"
+
 violation_words:
   library_path: "contracts/violation_words.yaml"
   detect:
@@ -368,13 +384,24 @@ violation_words:
     subtitles: true             # 成片字幕扫描（字幕屏蔽依据）
     cover_ocr: true             # 封面/画面文字 OCR 扫描（视频打码依据）
     scan_frames: 6              # 视频打码通道的抽帧数（每分镜）
+  # 2026-10-30 用户明确：真实违禁词只从字幕里删掉（不显示即可），
+  # 声音继续、画面不打码。以下默认值即为该策略。
   handling:
-    subtitle_mask: true         # 通道 1：字幕命中词替换为 ***
-    audio_mute: true            # 通道 2：命中时段语音消音（80ms 淡入出避免爆音）
-    video_mosaic: true          # 通道 3：画面可见命中词区域打码（boxblur）
-    mosaic_pad_px: 24           # 打码区域外扩像素
-    mute_fade_ms: 80            # 消音淡变时长（ms）
-  enforce_level: BLOCK          # BLOCK=成片字幕/语音检出即拦截；WARN=仅记录
+    subtitle_action: delete     # 字幕动作：delete（删除词）| mask（替换 ***）
+    subtitle_mask: true         # 兼容旧键：true 时按 subtitle_action 执行
+    audio_mute: false           # 通道 2 默认关闭（声音继续）
+    video_mosaic: false         # 通道 3 默认关闭（画面不打码）
+    mosaic_pad_px: 24           # 打码外扩像素（开启通道 3 时生效）
+    mute_fade_ms: 80            # 消音淡变时长 ms（开启通道 2 时生效）
+  # 判定：由 agent 工具复核（流水线只产出 violation_review_request.json，
+  # agent 审阅后回写 violation_decisions.json；流水线不内置 LLM、不依赖 API Key）
+  review:
+    enabled: true
+    max_candidates: 40          # 单次复核候选上限（超出走兜底）
+    fallback_hard_categories:   # LLM 不可用兜底：仅这两类删字幕
+      - medical_claim
+      - false_absolutism
+  enforce_level: BLOCK          # BLOCK=判定清单内检出即拦截；WARN=仅记录
 
 # ============ 叠加层人脸安全审核（2026-10-27 新增，反馈驱动）============
 # 贴纸/Hook卡/字幕带/放大镜等叠加元素不得遮挡模特面部（尤其是眼睛区域）。

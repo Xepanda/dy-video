@@ -264,6 +264,29 @@ class ViolationDetector:
 
 # ---------------------------------------------------------------- 便捷函数
 
+def mask_text_action(text: str, words: List[str],
+                     action: str = "delete") -> Tuple[str, List[str]]:
+    """按动作处理字幕文本（2026-10-30 用户要求：只删词不显示）。
+
+    action="delete" —— 直接从字幕中删除命中词（并收敛残留标点）；
+    action="mask"   —— 替换为 ***（兼容旧行为）。
+    返回 (处理后文本, 实际命中的词列表)。长词优先，避免子串重复替换。
+    """
+    if not text or not words:
+        return text, []
+    hits: List[str] = []
+    out = text
+    for w in sorted({w for w in words if w}, key=len, reverse=True):
+        if w in out:
+            hits.append(w)
+            out = out.replace(w, "***" if action == "mask" else "")
+    if action != "mask" and hits:
+        out = re.sub(r"[，。、！？；：,]{2,}", lambda m: m.group(0)[0], out)
+        out = re.sub(r"^[，。、！？；：,\s]+", "", out)
+        out = re.sub(r"\s{2,}", " ", out).strip()
+    return out, hits
+
+
 def find_violation_matches(text: str, library_path: str = None) -> List[Dict[str, Any]]:
     """单文本检测（模块级便捷入口，对齐 detect_price.find_price_matches）。"""
     return ViolationDetector(library_path=library_path).scan_text(text)
