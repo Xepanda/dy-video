@@ -41,7 +41,9 @@ output/
 data/work_dirs/
 data/candidates/
 data/*.jpg
+data/*_meta.json
 data/test_overlays/
+data/raw_samples/*/
 data/raw_samples/*.mp4
 data/raw_samples/*.rar
 data/raw_samples/*.zip
