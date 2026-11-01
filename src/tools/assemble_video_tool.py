@@ -30,11 +30,15 @@ def assemble_video_tool(
     plan_path: str,
     output_mp4_path: str,
     work_dir: str = None,
-    cache_key: str = None
+    cache_key: str = None,
+    constraints: dict = None,
 ) -> Tuple[str, float]:
     """根据剪辑计划 plan.json 执行确定性总装。
 
     cache_key（B13）：命中 final_video 阶段缓存且成片存在则跳过总装。
+    constraints（2026-11-01）：上游（AgentDirector）已注入统一开关时直接透传；
+        未提供时回落到 contracts/constraints.yaml。**必须透传**，否则
+        spec.options.features（如 render_profile=plain）到不了装配器。
     """
     if not os.path.exists(plan_path):
         raise FileNotFoundError(f"剪辑计划文件不存在: {plan_path}")
@@ -47,9 +51,9 @@ def assemble_video_tool(
         work_dir = os.path.join(PROJECT_ROOT, "data", "work_dirs", project_id)
 
     # 阈值唯一来源：contracts/constraints.yaml（响度/真峰值目标）
-    constraints = {}
+    constraints = constraints or {}
     _cpath = os.path.join(PROJECT_ROOT, "contracts", "constraints.yaml")
-    if os.path.exists(_cpath):
+    if not constraints and os.path.exists(_cpath):
         import yaml
         with open(_cpath, "r", encoding="utf-8") as f:
             constraints = yaml.safe_load(f) or {}

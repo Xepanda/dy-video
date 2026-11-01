@@ -155,22 +155,42 @@ def _classify(text: str, prod_ctx: Dict[str, Any] = None) -> List[str]:
     return cats
 
 
+_WELFARE_NOUN_ALLOW = re.compile(r"福利(?:款|感)|很福利")
+
+
+def _promo_policy(constraints: Dict[str, Any] = None) -> str:
+    """当前"福利"类措辞策略：allow_welfare（默认）| block_all。"""
+    feats = (constraints or {}).get("features") or {}
+    vals = feats.get("values") or {}
+    return str(vals.get("promo_words") or "allow_welfare")
+
+
 def is_blacklisted(text: str, use_price: bool = True,
                   constraints: Dict[str, Any] = None) -> Tuple[bool, str]:
     """黑名单判定（无时间窗，纯内容信号）。
 
     constraints.blacklist.inventory / .changover 可覆盖内置正则（不改正则代码即可调参）。
+
+    2026-11-01 统一开关 promo_words：
+      allow_welfare（默认）—— 先在文本中剥离"福利款/福利感/很福利"这类**名词性卖点**，
+                            再跑原正则。因此「这个是福利款，价格特别优惠」放行，
+                            而「你们今天福利来啦」「福利价九十九」「抢福利」「福利名额」
+                            仍按 `.*福利.*` 被拦（原正则不动，零回归）。
+      block_all          —— 不剥离，保持历史行为（任何"福利"整句删）。
     """
     if use_price and find_price_matches(text):
         return True, "命中价格表达"
+    probe = text
+    if _promo_policy(constraints) != "block_all":
+        probe = _WELFARE_NOUN_ALLOW.sub("", text)
     bl = (constraints or {}).get("blacklist", {}) or {}
     inv_patterns = bl.get("inventory") or INVENTORY_PATTERNS
     chg_patterns = bl.get("changover") or CHANGEOVER_PATTERNS
     for pat in inv_patterns:
-        if re.search(pat, text):
+        if re.search(pat, probe):
             return True, f"命中库存/促销 ({pat})"
     for pat in chg_patterns:
-        if re.search(pat, text):
+        if re.search(pat, probe):
             return True, f"命中换款/离场 ({pat})"
     return False, ""
 
@@ -261,7 +281,7 @@ def build_blocks(segments: List[Dict[str, Any]],
     for b in blocks:
         text_all = "，".join(s.get("text", "") for s in b["segments"])
         # 块级复查：合并文本可能产生跨段黑名单短语（如"甩"+"个链接"）
-        bad, reason = is_blacklisted(text_all)
+        bad, reason = is_blacklisted(text_all, constraints=constraints)
         if bad:
             b["_drop"] = reason
             continue
@@ -579,6 +599,13 @@ def build_plan(
             print(f"[BUILD-PLAN] 命中阶段缓存（{len(cached.get('clips', []))} 个分镜）")
             return cached
     constraints = constraints or {}
+    # 统一开关（2026-11-01）：上游（agent_director）通常已注入；独立调用时自行派生
+    if "features" not in constraints:
+        try:
+            from src.tools.feature_flags import apply as _apply_features
+            constraints = _apply_features(constraints, spec_data)
+        except Exception as e:  # 开关不可用不阻断主流程
+            print(f"[BUILD-PLAN][WARN] 开关解析失败，使用默认配置: {e}")
     funnel_c = (constraints.get("video", {}) or {}).get("funnel", {})
     dur_range = ((constraints.get("video", {}) or {}).get("duration_range")) or [45, 65]
     dur_min, dur_max = float(dur_range[0]), float(dur_range[1])

@@ -52,6 +52,7 @@ UNIT_TESTS = [
     "tests/test_product_image_adapter.py",
     "tests/test_zh_script_and_violation_policy.py",
     "tests/test_desktop_spec_creator.py",
+    "tests/test_feature_flags.py",
 ]
 
 PYTHON = sys.executable

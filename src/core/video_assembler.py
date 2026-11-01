@@ -806,6 +806,19 @@ class VideoAssembler:
         fade_in = float(fade_c.get("fade_in_sec", 0.3) or 0.0) if fade_c.get("enabled", True) else 0.0
         fade_out = float(fade_c.get("fade_out_sec", 0.3) or 0.0) if fade_c.get("enabled", True) else 0.0
 
+        # —— 统一开关：成片形态（2026-11-01）——
+        # plain = 全片无字幕/无文字/无贴纸（Hook 卡、CTA、品牌条、挂角贴纸一并旁路）。
+        # 注意：QC 侧会把 7 项字幕类断言记为 SKIP（不是 PASS），报告会披露覆盖率。
+        try:
+            from src.tools.feature_flags import features_of
+            _feat = features_of(self.constraints)
+        except Exception:
+            _feat = {"render_profile": "branded", "values": {}}
+        render_profile = str(_feat.get("render_profile", "branded"))
+        text_on = (render_profile != "plain")
+        if not text_on:
+            print("[ASSEMBLER] 成片形态=plain：字幕/Hook卡/CTA/品牌条/贴纸 全部旁路")
+
         n_clips = len(plan["clips"])
         timeline, sub_events = self.render_clips(plan, transition_sec=trans_d)
 
@@ -838,7 +851,10 @@ class VideoAssembler:
         # 1. 生成对应时间的变色字幕
         ass_path = os.path.join(self.work_dir, "subtitles.ass")
         keywords = plan.get("subtitles", {}).get("keywords", [])
-        generate_ass_subtitles(sub_events, ass_path, keywords=keywords)
+        if text_on:
+            generate_ass_subtitles(sub_events, ass_path, keywords=keywords)
+        elif os.path.exists(ass_path):
+            os.remove(ass_path)   # 防止上一轮残留的 ASS 被 QC 误读
 
         # 2. 合成 Boom 冲击音
         boom_wav = os.path.join(self.work_dir, "boom.wav")
@@ -847,22 +863,24 @@ class VideoAssembler:
         # 3. 生成 Hook 卡片与 CTA 贴片
         hook_text = plan.get("hook_card", {}).get("text", "今晚必看爆款")
         hook_y = int(plan.get("hook_card", {}).get("y", 280))  # 动态避让人脸顶（B10）
-        hook_png = os.path.join(self.work_dir, "hook_card.png")
+        hook_png = os.path.join(self.work_dir, "hook_card.png") if text_on else ""
         hook_c = self.constraints.get("hook_card", {}) or {}
-        generate_hook_card(hook_text, hook_png,
-                           width=int(hook_c.get("width", 720) or 720),
-                           height=int(hook_c.get("height", 168) or 168))
+        if text_on:
+            generate_hook_card(hook_text, hook_png,
+                               width=int(hook_c.get("width", 720) or 720),
+                               height=int(hook_c.get("height", 168) or 168))
 
         cta_text = plan.get("cta", {}).get("text", "戳左下方小黄车查看上身搭配")
-        cta_png = os.path.join(self.work_dir, "cta_badge.png")
-        generate_cta_badge(cta_text, cta_png)
+        cta_png = os.path.join(self.work_dir, "cta_badge.png") if text_on else ""
+        if text_on:
+            generate_cta_badge(cta_text, cta_png)
 
         # 3.5 顶部平台标识条（2026-10-24 新增，常驻水印区）
         bar_c = self.constraints.get("platform_bar", {}) or {}
         bar_png = ""
         shop_name = ""
         account = ""
-        if bar_c.get("enabled", True):
+        if bar_c.get("enabled", True) and text_on:
             brand = plan.get("brand", {}) or {}
             shop_name = bar_c.get("shop_name") or brand.get("title_en") or ""
             account = bar_c.get("account") or (
@@ -880,7 +898,7 @@ class VideoAssembler:
         # 3.6 挂角利益点贴纸（按分镟时序出现/消失）
         sticker_c = self.constraints.get("video_sticker", {}) or {}
         sticker_pngs: List[Tuple[str, float, float]] = []   # (png, t_in, t_out)
-        if sticker_c.get("enabled", True):
+        if sticker_c.get("enabled", True) and text_on:
             fade_in_s = float(sticker_c.get("fade_in_sec", 0.35) or 0.35)
             fade_out_s = float(sticker_c.get("fade_out_sec", 0.35) or 0.35)
             hold_ratio = float(sticker_c.get("hold_ratio", 0.72) or 0.72)
@@ -979,10 +997,11 @@ class VideoAssembler:
             fc.append("[0:a]null[abase]")
             cur_v, cur_a = "vbase", "abase"
 
-        # —— 5.2 字幕烷馇 -—
-        ass_rel = os.path.basename(ass_path)
-        fc.append(f"[{cur_v}]subtitles={ass_rel}[vsub]")
-        cur_v = "vsub"
+        # —— 5.2 字幕（plain 模式旁路）——
+        if text_on:
+            ass_rel = os.path.basename(ass_path)
+            fc.append(f"[{cur_v}]subtitles={ass_rel}[vsub]")
+            cur_v = "vsub"
 
         # —— 5.3 叠加层（贴纸 → 标识条 → Hook卡 → CTA）——
         in_idx = boom_idx
@@ -1021,23 +1040,25 @@ class VideoAssembler:
             fc.append(f"[{cur_v}][bar{in_idx}]overlay=0:0:alpha=premultiplied[{nxt}]")
             cur_v = nxt
 
-        # Hook 卡片（0~2.5s）
-        in_idx += 1
-        hook_in = in_idx
-        hook_rel = os.path.basename(hook_png)
-        inputs += ["-i", hook_rel]
-        fc.append(f"[{cur_v}][{hook_in}:v]overlay=(W-w)/2:{hook_y}"
-                  f":enable='between(t,0,2.5)':alpha=premultiplied[vhook]")
-        cur_v = "vhook"
+        # Hook 卡片（0~2.5s；plain 模式不叠）
+        if hook_png:
+            in_idx += 1
+            hook_in = in_idx
+            hook_rel = os.path.basename(hook_png)
+            inputs += ["-i", hook_rel]
+            fc.append(f"[{cur_v}][{hook_in}:v]overlay=(W-w)/2:{hook_y}"
+                      f":enable='between(t,0,2.5)':alpha=premultiplied[vhook]")
+            cur_v = "vhook"
 
-        # CTA 贴片（末 2.5s）
-        in_idx += 1
-        cta_in = in_idx
-        cta_rel = os.path.basename(cta_png)
-        inputs += ["-i", cta_rel]
-        fc.append(f"[{cur_v}][{cta_in}:v]overlay=40:1440"
-                  f":enable='gte(t,{max(0.0, total_dur - 2.5):.2f})':alpha=premultiplied[vcta]")
-        cur_v = "vcta"
+        # CTA 贴片（末 2.5s；plain 模式不叠）
+        if cta_png:
+            in_idx += 1
+            cta_in = in_idx
+            cta_rel = os.path.basename(cta_png)
+            inputs += ["-i", cta_rel]
+            fc.append(f"[{cur_v}][{cta_in}:v]overlay=40:1440"
+                      f":enable='gte(t,{max(0.0, total_dur - 2.5):.2f})':alpha=premultiplied[vcta]")
+            cur_v = "vcta"
 
         # —— 5.4 全片头尾淡入淡出 -—
         if fade_in > 0 or fade_out > 0:
@@ -1091,6 +1112,8 @@ class VideoAssembler:
                 "box": [cx - r, cy - r, cx + r, cy + r],
             })
         overlay_meta = {
+            "render_profile": render_profile,
+            "text_layers_enabled": text_on,
             "platform_bar": {
                 "applied": bool(bar_png),
                 "height": int(bar_c.get("height", 88) or 88) if bar_png else 0,
@@ -1099,7 +1122,7 @@ class VideoAssembler:
                 "account": account if bar_png else "",
             } if bar_png else {"applied": False},
             "hook_card": {
-                "applied": True,
+                "applied": bool(hook_png),
                 "x": (OUT_W - int(hook_c.get("width", 720) or 720)) // 2,
                 "y": hook_y,
                 "w": int(hook_c.get("width", 720) or 720),
@@ -1108,7 +1131,7 @@ class VideoAssembler:
                 "text": hook_text,
             },
             "cta_badge": {
-                "applied": True,
+                "applied": bool(cta_png),
                 "x": 40, "y": 1440, "w": 480, "h": 100,
                 "t_in": max(0.0, total_dur - 2.5), "t_out": total_dur,
                 "text": cta_text,

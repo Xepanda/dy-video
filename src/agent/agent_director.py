@@ -50,6 +50,25 @@ class AgentDirector:
             self.spec = json.load(f)
 
         self.constraints = _load_constraints()
+        # 统一能力开关（2026-11-01）：把 spec.options.features 派生到 constraints
+        # （时长档/面料配额/转场/放大镜/字幕动作），并注入 constraints["features"]
+        # 供 assembler / qc / build_plan 直接读取。深拷贝，不污染 yaml 默认值。
+        try:
+            from src.tools.feature_flags import apply as _apply_features
+            self.constraints = _apply_features(self.constraints, self.spec)
+            _f = self.constraints.get("features") or {}
+            _vals = _f.get("values") or {}
+            print(f"[FEATURES] 开关 v{_f.get('version')} | 包装={_vals.get('render_profile')} "
+                  f"时长={_vals.get('duration_preset')} 参数占比={_vals.get('fabric_ratio')} "
+                  f"违禁词={_vals.get('violation_action')} "
+                  f"转场={_vals.get('transition')} 放大镜={_vals.get('magnifier')}")
+            for _fr in (_f.get("forced") or []):
+                print(f"  [FEATURES] 组合规则收敛 {_fr['key']}: {_fr['from']} → {_fr['to']}"
+                      f"（{_fr.get('note', '')}）")
+            for _w in (_f.get("warnings") or []):
+                print(f"  [FEATURES][WARN] {_w}")
+        except Exception as _e:
+            print(f"[FEATURES][WARN] 开关解析失败，使用默认值: {_e}")
         self.project_id = self.spec.get("project_id", "demo")
         # —— 多源支持（2026-10-21）：同目录同商品的多个直播视频均可作为候选素材 ——
         # spec.raw_video_paths 显式列出；未提供则扫描 raw_video_path 所在目录下的全部视频。
@@ -694,6 +713,8 @@ class AgentDirector:
             output_mp4_path=final_mp4_path,
             work_dir=self.work_dir,
             cache_key=ck,
+            # 必须透传：含 features 派生（render_profile=plain 决定是否烧字幕）
+            constraints=self.constraints,
         )
 
         # -------------------------------------------------------------
@@ -724,6 +745,8 @@ class AgentDirector:
                 cover_meta_path=cover_meta_path,
                 candidates_path=candidates_json,
                 overlay_meta_path=overlay_meta_path,
+                # 决策 6：参数类内容占比断言需要分镜表（I0 使能项）
+                plan_path=plan_path,
             )
             if ck:
                 from src.tools.stage_cache import save_stage

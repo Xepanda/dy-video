@@ -99,6 +99,13 @@ class SpecManager:
         if not p_l1 and not p_l2:
             errors.append("商品名称至少填写一行")
 
+        # 统一能力开关校验（未知开关 / 非法值 / 未开放项）
+        try:
+            from src.tools.feature_flags import validate as _fv
+            errors.extend(_fv(payload))
+        except Exception as e:  # 校验器不可用时不阻断保存
+            print(f"[SPEC][WARN] 开关校验不可用: {e}")
+
         return errors
 
     def build_spec_dict(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -155,7 +162,9 @@ class SpecManager:
             "options": {
                 "duration_range": duration_range,
                 "split_strategy": split_strategy,
-                "highlight_keywords": keywords
+                "highlight_keywords": keywords,
+                # 统一能力开关（2026-11-01）：由 GUI 面板产生，随任务落盘可复现
+                "features": dict(payload.get("features") or {}),
             }
         }
         return spec
@@ -209,6 +218,7 @@ class DesktopSpecApi:
                 "duration_range": options.get("duration_range", "45-65"),
                 "split_strategy": options.get("split_strategy", "force_off"),
                 "keywords": "，".join(options.get("highlight_keywords", ["桑蚕丝", "羊绒", "羊毛", "显瘦", "针织衫", "闭眼入", "降温"])),
+                "features": options.get("features") or {},
                 "has_existing": True,
                 "spec_path": self.spec_path,
             }
@@ -224,6 +234,7 @@ class DesktopSpecApi:
             "duration_range": "45-65",
             "split_strategy": "force_off",
             "keywords": "桑蚕丝，羊绒，羊毛，显瘦，针织衫，闭眼入，降温",
+            "features": {},
             "has_existing": False,
             "spec_path": self.spec_path,
         }
@@ -357,8 +368,19 @@ class DesktopSpecApi:
 
 
 def get_html_content() -> str:
-    """生成内嵌的现代化暗黑风格桌面表单 UI（无任何外部网络依赖）。"""
-    return """<!DOCTYPE html>
+    """生成内嵌的现代化暗黑风格桌面表单 UI（无任何外部网络依赖）。
+
+    能力开关面板由 contracts/features.yaml 动态渲染（单一事实源），
+    前端不硬编码任何开关项，避免"界面加了一个、代码没接"的死键问题。
+    """
+    try:
+        from src.tools.feature_flags import load_definitions
+        _feat_json = json.dumps(load_definitions(), ensure_ascii=False)
+    except Exception as _e:
+        print(f"[SPEC][WARN] 开关定义不可用，将隐藏开关面板: {_e}")
+        _feat_json = '{"groups": [], "combos": []}'
+
+    html = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -668,6 +690,17 @@ def get_html_content() -> str:
                 </div>
             </div>
 
+            <!-- 6. 能力开关（统一入口） -->
+            <div class="card">
+                <div class="card-title">⚙️ 6. 能力开关（统一入口）</div>
+                <div class="hint" style="margin-bottom:10px;">
+                    默认值即当前推荐配置；改动会写入 job_spec.json 的 options.features，随任务复现。
+                    灰色标注「未开放」的项尚未接线，保持默认即可。
+                </div>
+                <div id="featurePanel"></div>
+                <div id="featureNote" class="hint" style="margin-top:8px;color:#f59e0b;"></div>
+            </div>
+
             <div class="action-bar">
                 <button type="button" class="btn btn-save" id="btnSave" onclick="saveOnly()">
                     💾 仅保存任务配置 (job_spec.json)
@@ -717,9 +750,135 @@ def get_html_content() -> str:
                 product_img_2: document.getElementById('product_img_2').value.trim(),
                 duration_range: document.getElementById('duration_range').value,
                 split_strategy: document.getElementById('split_strategy').value,
-                keywords: document.getElementById('keywords').value.trim()
+                keywords: document.getElementById('keywords').value.trim(),
+                features: readFeatures()
             };
         }
+
+        // ---------------- 统一能力开关（从 contracts/features.yaml 渲染）----------------
+        const FEATURES_DEFS = __FEATURES_JSON__;
+
+        function esc(v) {
+            return String(v == null ? '' : v).replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        function renderFeatures() {
+            const root = document.getElementById('featurePanel');
+            const noteEl0 = document.getElementById('featureNote');
+            if (!root) return;
+            // 打包版（PyInstaller）若未带上 contracts/features.yaml，这里会空——
+            // 必须显式提示，而不是让面板静默消失（否则用户以为没有开关）。
+            if (!FEATURES_DEFS || !FEATURES_DEFS.groups || !FEATURES_DEFS.groups.length) {
+                root.innerHTML = '<div style="color:#f59e0b;font-size:12px;">'
+                    + '未加载到开关定义（contracts/features.yaml 缺失）——本次按推荐默认值执行。</div>';
+                return;
+            }
+            let html = '';
+            FEATURES_DEFS.groups.forEach(function (g) {
+                html += '<div style="margin:16px 0 6px;font-weight:700;color:#e8a91e;font-size:13px;">' + esc(g.label) + '</div>';
+                if (g.desc) html += '<div style="color:#98a2b3;font-size:12px;margin-bottom:8px;">' + esc(g.desc) + '</div>';
+                (g.items || []).forEach(function (it) {
+                    const dis = (it.state === 'disabled');
+                    html += '<div style="border:1px solid #2a2f3a;border-radius:10px;padding:10px 12px;margin-bottom:8px;' + (dis ? 'opacity:.55;' : '') + '">';
+                    html += '<div style="font-weight:600;font-size:13px;">' + esc(it.label);
+                    if (dis) html += ' <span style="color:#f59e0b;font-size:11px;">[未开放]</span>';
+                    html += '</div>';
+                    if (it.help) html += '<div style="color:#98a2b3;font-size:12px;margin:4px 0 8px;">' + esc(it.help) + '</div>';
+                    if (dis && it.disabled_reason) html += '<div style="color:#f59e0b;font-size:11px;margin-bottom:6px;">原因：' + esc(it.disabled_reason) + '</div>';
+                    (it.options || []).forEach(function (o) {
+                        const checked = (String(o.value) === String(it.default)) ? 'checked' : '';
+                        html += '<label style="display:block;margin:5px 0;font-size:13px;cursor:' + (dis ? 'not-allowed' : 'pointer') + ';">'
+                            + '<input type="radio" name="feat_' + esc(it.key) + '" value="' + esc(o.value) + '" ' + checked
+                            + (dis ? ' disabled' : '') + ' onchange="applyCombosUI()"> '
+                            + '<b>' + esc(o.label) + '</b>'
+                            + (o.desc ? '<span style="color:#98a2b3;"> — ' + esc(o.desc) + '</span>' : '')
+                            + '</label>';
+                    });
+                    html += '</div>';
+                });
+            });
+            root.innerHTML = html;
+            applyCombosUI();
+        }
+
+        function readFeatures() {
+            const out = {};
+            if (!FEATURES_DEFS || !FEATURES_DEFS.groups) return out;
+            FEATURES_DEFS.groups.forEach(function (g) {
+                (g.items || []).forEach(function (it) {
+                    // 未开放项不落盘：否则一旦将来把某项默认值改掉，旧 spec 里钉住的
+                    // 旧值会被 validate 判为「取值非法/尚未开放」而无法保存。
+                    if (it.state === 'disabled') return;
+                    const el = document.querySelector('input[name="feat_' + it.key + '"]:checked');
+                    if (el) out[it.key] = el.value;
+                });
+            });
+            return out;
+        }
+
+        // 组合规则锁定前的选择快照：解锁时还原，避免"选了纯画面再切回品牌版，
+        // 违禁词处置悄悄停在『仅记录』"这种静默残留。
+        const _lockedPrev = {};
+
+        function resetFeatureLocks() {
+            if (!FEATURES_DEFS || !FEATURES_DEFS.groups) return;
+            FEATURES_DEFS.groups.forEach(function (g) {
+                (g.items || []).forEach(function (it) {
+                    const dis = (it.state === 'disabled');
+                    document.querySelectorAll('input[name="feat_' + it.key + '"]').forEach(function (el) {
+                        el.disabled = dis;
+                    });
+                });
+            });
+            Object.keys(_lockedPrev).forEach(function (k) {
+                const prev = _lockedPrev[k];
+                delete _lockedPrev[k];
+                document.querySelectorAll('input[name="feat_' + k + '"]').forEach(function (el) {
+                    if (el.value === prev) el.checked = true;
+                });
+            });
+        }
+
+        function applyCombosUI() {
+            resetFeatureLocks();
+            const f = readFeatures();
+            const notes = [];
+            (FEATURES_DEFS.combos || []).forEach(function (rule) {
+                const when = rule.when || {};
+                const hit = Object.keys(when).every(function (k) { return String(f[k]) === String(when[k]); });
+                if (!hit) return;
+                const force = rule.force || {};
+                Object.keys(force).forEach(function (k) {
+                    const want = String(force[k]);
+                    const cur = document.querySelector('input[name="feat_' + k + '"]:checked');
+                    if (cur && cur.value !== want && !(k in _lockedPrev)) {
+                        _lockedPrev[k] = cur.value;
+                    }
+                    document.querySelectorAll('input[name="feat_' + k + '"]').forEach(function (el) {
+                        el.checked = (el.value === want);
+                        el.disabled = true;
+                    });
+                    const lab = document.querySelector('input[name="feat_' + k + '"]').closest('div');
+                    if (lab) lab.style.borderColor = '#f59e0b';
+                });
+                if (rule.note) notes.push(rule.note);
+            });
+            const noteEl = document.getElementById('featureNote');
+            if (noteEl) noteEl.innerHTML = notes.map(function (t) { return '• ' + esc(t); }).join('<br>');
+        }
+
+        function restoreFeatures(saved) {
+            Object.keys(saved || {}).forEach(function (k) {
+                const val = String(saved[k]);
+                document.querySelectorAll('input[name="feat_' + k + '"]').forEach(function (el) {
+                    if (el.value === val) el.checked = true;
+                });
+            });
+            applyCombosUI();
+        }
+
+        document.addEventListener('DOMContentLoaded', renderFeatures);
 
         async function browseVideoFile() {
             if (window.pywebview && window.pywebview.api) {
@@ -798,6 +957,7 @@ def get_html_content() -> str:
                     if (data.duration_range) document.getElementById('duration_range').value = data.duration_range;
                     if (data.split_strategy) document.getElementById('split_strategy').value = data.split_strategy;
                     if (data.keywords) document.getElementById('keywords').value = data.keywords;
+                    if (data.features) restoreFeatures(data.features);
                 }
             }
         });
@@ -805,6 +965,8 @@ def get_html_content() -> str:
 </body>
 </html>
 """
+    # 注入开关定义（单一事实源 → 前端渲染）
+    return html.replace("__FEATURES_JSON__", _feat_json)
 
 
 def main():

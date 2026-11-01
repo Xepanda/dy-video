@@ -45,6 +45,10 @@ _CODE_FINGERPRINT_FILES = [
     "src/qc/qc_auditor.py",
     "src/graphics/cover_renderer.py",
     "contracts/constraints.yaml",
+    # 2026-11-01：能力开关定义会改变装配结果（plain 不烧字幕/不叠贴纸），
+    # 不进指纹就会出现"改了开关仍命中旧成片"的陈旧缓存。
+    "contracts/features.yaml",
+    "src/tools/assemble_video_tool.py",
 ]
 
 
