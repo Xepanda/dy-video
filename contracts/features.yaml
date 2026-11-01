@@ -1,0 +1,237 @@
+# ============ 统一能力开关（Single Source of Truth）============
+# 2026-11-01 新增：把散落在 constraints / spec / 代码里的能力收敛成一组用户可选开关。
+#
+# 设计约束（务必遵守，否则会重演"改了配置没生效"的历史问题）：
+#   1. 本文件是**唯一定义源**：GUI 从这里渲染控件，feature_flags 从这里取默认值，
+#      任何一端都不得硬编码第二份；
+#   2. 每个 key 必须有**消费点**（被 feature_flags.apply() 派生到已有的配置键，
+#      或由某模块直接读取）；未接线的开关一律 state: disabled 并在 UI 置灰说明；
+#   3. 开关值写入 spec.options.features，**不写回 constraints.yaml**——constraints
+#      仍是"全局默认 + 阈值"，开关是"单任务覆盖"；
+#   4. 组合冲突在 feature_flags.validate() 里用 override 规则强制收敛，
+#      不允许静默共存。
+#
+# 版本号参与缓存键：改动本文件必须递增。
+version: 1
+updated: "2026-11-01"
+
+groups:
+  # ---------------------------------------------------------------- 成片形态
+  - id: output
+    label: 成片形态
+    desc: 决定成片是"带包装的带货片"还是"纯画面原生片"
+    items:
+      - key: render_profile
+        label: 包装版本
+        control: radio
+        default: branded
+        state: enabled
+        help: 品牌包装版会烧字幕、加品牌条/钩子卡/片尾小黄车提示/挂角贴纸；纯画面版全片无任何文字图层。
+        options:
+          - value: branded
+            label: 品牌包装版（推荐）
+            desc: 字幕 + 顶部品牌条 + 开场钩子卡 + 片尾小黄车提示 + 挂角卖点贴纸
+          - value: plain
+            label: 纯画面版
+            desc: 全片无字幕/无文字/无贴纸；质检中 10 项文字类断言记为 SKIP（不是 PASS，报告会披露覆盖率下降）
+
+      - key: duration_preset
+        label: 时长档位
+        control: radio
+        default: standard
+        state: enabled
+        help: 40–44 秒档位经评估会挤死"面料类"内容配额（8~10s 窗口），故不提供；需要更短请用"紧凑档"。
+        options:
+          - value: standard
+            label: 标准 45–65 秒（推荐）
+            desc: 黄金带货区间，兼容现有全部回归基线
+          - value: compact
+            label: 紧凑 48–55 秒
+            desc: 节奏更紧，适合完播率优先；会自动把"参数占比"锁定为严格档
+
+  # ---------------------------------------------------------------- 内容配比
+  - id: content
+    label: 内容配比与合规
+    desc: 控制"讲参数"的比例与合规话术的松紧
+    items:
+      - key: fabric_ratio
+        label: 参数类内容占比
+        control: radio
+        default: strict
+        state: enabled
+        help: 面料/做工/版式讲解的时长上限。实测 7 条历史成片中 7 条都超过 25%（最高 33.6%），严格档修的就是这个。
+        options:
+          - value: strict
+            label: 严格 ≤25%（推荐）
+            desc: 面料镜头上限 11 秒，质检按 25% 出断言（45 秒片子上实测 24.4%）
+          - value: loose
+            label: 宽松 ≈33%（现状）
+            desc: 保持当前 20 秒上限，仅记录占比不做判定；用于对比实验
+
+      - key: promo_words
+        label: 福利类措辞（放行范围）
+        control: radio
+        default: allow_welfare
+        state: enabled
+        help: 当前黑名单含"福利"二字即整句删除，会把"这个是福利款，价格特别优惠"整句砍掉。本开关只放行名词性卖点，交易话术照删。
+        options:
+          - value: allow_welfare
+            label: 放行"福利款/福利感/很福利"（推荐）
+            desc: 保留达人真实卖点表达；"福利价/福利来/抢福利/福利名额/福利链接"仍全部拦截
+          - value: block_all
+            label: 一律拦截（现状）
+            desc: 任何含"福利"的整句都删；合规但会丢卖点块
+
+      - key: violation_action
+        label: 违禁词处置
+        control: radio
+        default: delete
+        state: enabled
+        help: 违禁词只在字幕层处理，音频不做消音、画面不做打码（既定策略）。
+        options:
+          - value: delete
+            label: 从字幕删除（推荐）
+            desc: 命中词直接消失，句子其余部分保留；已实测无价格/无 *** 残留
+          - value: mask
+            label: 替换为 ***
+            desc: 保留词位置但内容不可读，页面上更"显眼"
+          - value: record_only
+            label: 仅记录不处理
+            desc: 只写判定清单供人工看；选它会由质检给出 WARN 提示
+
+  # ---------------------------------------------------------------- 视听技法
+  - id: craft
+    label: 视听技法
+    desc: 转场与细节放大，均属"锦上添花"，关掉不影响交付
+    items:
+      - key: transition
+        label: 切片间转场
+        control: switch
+        default: "on"
+        state: enabled
+        help: 关闭后退回硬切（旧行为），无淡入淡出。
+        options:
+          - value: "on"
+            label: 0.25 秒淡入淡出
+            desc: 视频 xfade + 音频 acrossfade，时间轴按 N−1 个转场折算
+          - value: "off"
+            label: 硬切
+            desc: 不做转场，切片首尾直接拼；总时长不减
+
+      - key: magnifier
+        label: 面料放大镜
+        control: switch
+        default: "on"
+        state: enabled
+        help: 在面料类分镜上叠一枚 1.8x 圆形放大镜，锚点由人体姿态计算，天然避开面部。
+        options:
+          - value: "on"
+            label: 开启（最多 2 枚）
+            desc: 金色圆环 + 镜内细节放大，出现/消失带淡变
+          - value: "off"
+            label: 关闭
+            desc: 纯推镜，无圆形特效
+
+      - key: auto_frame
+        label: 头顶构图自动放大（17%）
+        control: switch
+        default: "off"
+        state: disabled
+        disabled_reason: 算法与"清晰度门禁"的取舍尚未验证（放大必然掉清晰度），计划在下一迭代接入。
+        help: 头顶留白超过画面高度 17% 时自动等比放大、底边不动、左右对称裁。
+        options:
+          - value: "on"
+            label: 开启
+            desc: 远机位素材人物会放大到占屏更满
+          - value: "off"
+            label: 保持原构图（当前）
+            desc: 不做任何缩放
+
+      - key: speech_rate
+        label: 语速
+        control: radio
+        default: "1.0"
+        state: disabled
+        disabled_reason: atempo 全库 0 处，属从零新增；需全链时间戳（字幕/消音/转场/时长）联动改造，风险最高，单独迭代。
+        help: 加快语速压缩信息密度。
+        options:
+          - value: "1.0"
+            label: 原速（当前）
+            desc: 不做任何变速
+          - value: "1.15"
+            label: 1.15 倍（推荐档）
+            desc: 70 秒素材约收敛到 61 秒
+          - value: "1.2"
+            label: 1.2 倍（极限）
+            desc: 更快，但齿音/呼吸声会被放大
+
+  # ---------------------------------------------------------------- 商品资料
+  - id: product
+    label: 商品资料
+    desc: 与商品本身相关、随资料自动生效的能力
+    items:
+      - key: color_quota
+        label: 多色配额
+        control: radio
+        default: "off"
+        state: disabled
+        disabled_reason: 颜色标注与"只按达人身穿计入"的口径尚未落地（阶段一为 ASR 口径），待颜色能力上线后开放。
+        help: 主推色应占更大时长（2 色 60–70%、3 色 45–55%）。
+        options:
+          - value: "off"
+            label: 不做颜色配额（当前）
+            desc: 各颜色按素材价值自然分配
+          - value: asr
+            label: 按话术统计（阶段一）
+            desc: 用台词里的颜色词判断，无法识别时明示"未标注比例"
+
+  # ---------------------------------------------------------------- 交付与审核
+  - id: delivery
+    label: 交付与审核
+    desc: 交付物形态与人工复核
+    items:
+      - key: manual_review
+        label: 人工复核清单
+        control: switch
+        default: "on"
+        state: enabled
+        help: 34 项自检里有 13 项机器判不了（情绪、话术与画面匹配等），交付时生成一份预填模板，只需勾选异常项。
+        options:
+          - value: "on"
+            label: 生成（推荐）
+            desc: 输出 output/<任务号>/manual_review.md，13 项默认"未发现问题"
+          - value: "off"
+            label: 不生成
+            desc: 交付物里只有成片/封面/质检报告
+
+      - key: review_sheet
+        label: 分镜审核图
+        control: switch
+        default: "off"
+        state: disabled
+        disabled_reason: 工具尚未实现（build_review_sheet.py 在下一批）。
+        help: 每镜抽 1 帧拼成 8~12 格联系表，便于 10 秒扫完整片。
+        options:
+          - value: "on"
+            label: 生成
+            desc: 便于人工快速核对每镜内容
+          - value: "off"
+            label: 不生成（当前）
+            desc: 交付物不含审核图
+
+# ---------------------------------------------------------------- 组合规则
+# when: 触发条件（key=value）；force: 强制收敛；level: override（静默改）| warn（只提示）
+combos:
+  - when: {render_profile: plain}
+    force: {violation_action: record_only}
+    level: override
+    note: 纯画面版没有字幕可删，违禁词处置自动降为"仅记录"；质检会同步披露该降级。
+  - when: {duration_preset: compact}
+    force: {fabric_ratio: strict}
+    level: override
+    note: 紧凑档下若放宽参数占比，会挤掉场景/搭配内容，故锁定严格档。
+
+# 注意：plain 形态下哪些断言记 SKIP，**不在本文件声明**。
+# 早期版本此处有一份 forces_skip 清单，但没有任何代码消费它，且与实际检查项
+# 名称不一致（曾写出并不存在的「Hook 卡人脸安全」「CTA 贴片位置」）。
+# 权威位置是 src/qc/qc_auditor.py（消费方）+ docs/feature_switches_2026-11-01.md（说明）。
