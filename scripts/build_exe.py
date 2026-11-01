@@ -35,6 +35,8 @@ def build_exe():
         "--hidden-import", "pythonnet",
         "--hidden-import", "webview.platforms.winforms",
         "--hidden-import", "webview.platforms.edgechromium",
+        "--hidden-import", "src.tools.feature_flags",
+        "--hidden-import", "yaml",
         "--distpath", dist_dir,
         "--workpath", build_dir,
         entry_point

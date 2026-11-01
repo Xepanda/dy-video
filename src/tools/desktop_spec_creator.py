@@ -188,19 +188,19 @@ class DesktopSpecApi:
     """提供给前端 JS 调用的桌面原生桥接 API（零网络端口）。"""
 
     def __init__(self, spec_path: str = DEFAULT_SPEC_PATH):
-        self.spec_path = os.path.abspath(spec_path)
-        self.manager = SpecManager()
-        self.window = None
+        self._spec_path = os.path.abspath(spec_path)
+        self._manager = SpecManager()
+        self._window = None
         self._pipeline_process = None
         self._pipeline_logs = []
         self._pipeline_status = "idle"  # idle | running | success | error
 
     def set_window(self, window):
-        self.window = window
+        self._window = window
 
     def load_initial_data(self) -> Dict[str, Any]:
         """加载初始数据（优先读取已有 job_spec.json）。"""
-        loaded = self.manager.load_spec(self.spec_path)
+        loaded = self._manager.load_spec(self._spec_path)
         if loaded:
             brand = loaded.get("brand", {})
             product = loaded.get("product", {})
@@ -220,7 +220,7 @@ class DesktopSpecApi:
                 "keywords": "，".join(options.get("highlight_keywords", ["桑蚕丝", "羊绒", "羊毛", "显瘦", "针织衫", "闭眼入", "降温"])),
                 "features": options.get("features") or {},
                 "has_existing": True,
-                "spec_path": self.spec_path,
+                "spec_path": self._spec_path,
             }
         return {
             "project_id": "sample_silk_knitwear_01",
@@ -236,16 +236,16 @@ class DesktopSpecApi:
             "keywords": "桑蚕丝，羊绒，羊毛，显瘦，针织衫，闭眼入，降温",
             "features": {},
             "has_existing": False,
-            "spec_path": self.spec_path,
+            "spec_path": self._spec_path,
         }
 
     def select_video_file(self) -> Optional[str]:
         """弹出原生文件选择对话框（单视频文件）。"""
-        if not self.window:
+        if not self._window:
             return None
         import webview
         file_types = ("视频文件 (*.mp4;*.mov;*.mkv;*.ts;*.flv)", "所有文件 (*.*)")
-        res = self.window.create_file_dialog(
+        res = self._window.create_file_dialog(
             dialog_type=webview.OPEN_DIALOG,
             allow_multiple=False,
             file_types=file_types
@@ -256,10 +256,10 @@ class DesktopSpecApi:
 
     def select_video_folder(self) -> Optional[str]:
         """弹出原生文件夹选择对话框（视频素材目录）。"""
-        if not self.window:
+        if not self._window:
             return None
         import webview
-        res = self.window.create_file_dialog(
+        res = self._window.create_file_dialog(
             dialog_type=webview.FOLDER_DIALOG
         )
         if res and len(res) > 0:
@@ -268,11 +268,11 @@ class DesktopSpecApi:
 
     def select_image_file(self) -> Optional[str]:
         """弹出原生图片选择对话框。"""
-        if not self.window:
+        if not self._window:
             return None
         import webview
         file_types = ("图片文件 (*.png;*.jpg;*.jpeg;*.webp)", "所有文件 (*.*)")
-        res = self.window.create_file_dialog(
+        res = self._window.create_file_dialog(
             dialog_type=webview.OPEN_DIALOG,
             allow_multiple=False,
             file_types=file_types
@@ -283,16 +283,16 @@ class DesktopSpecApi:
 
     def save_spec(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """校验并保存 job_spec.json。"""
-        errors = self.manager.validate(payload)
+        errors = self._manager.validate(payload)
         if errors:
             return {"success": False, "message": "；".join(errors)}
 
         try:
-            spec = self.manager.build_spec_dict(payload)
-            self.manager.save_spec(spec, self.spec_path)
+            spec = self._manager.build_spec_dict(payload)
+            self._manager.save_spec(spec, self._spec_path)
             return {
                 "success": True,
-                "message": f"任务配置文件保存成功！路径：{self.spec_path}",
+                "message": f"任务配置文件保存成功！路径：{self._spec_path}",
                 "spec": spec
             }
         except Exception as e:
@@ -314,7 +314,7 @@ class DesktopSpecApi:
             try:
                 python_exe = find_python_interpreter()
                 script_path = os.path.join(PROJECT_ROOT, "scripts", "generate_from_job_spec.py")
-                cmd = [python_exe, script_path, "--spec", self.spec_path]
+                cmd = [python_exe, script_path, "--spec", self._spec_path]
                 self._pipeline_logs.append(f"启动 Python: {python_exe}\n")
                 self._pipeline_logs.append(f"执行命令: {' '.join(cmd)}\n")
 
@@ -332,28 +332,28 @@ class DesktopSpecApi:
 
                 for line in proc.stdout:
                     self._pipeline_logs.append(line)
-                    if self.window:
+                    if self._window:
                         try:
                             clean_line = json.dumps(line)
-                            self.window.evaluate_js(f"window.appendLog({clean_line});")
+                            self._window.evaluate_js(f"window.appendLog({clean_line});")
                         except Exception:
                             pass
 
                 proc.wait()
                 if proc.returncode == 0:
                     self._pipeline_status = "success"
-                    if self.window:
-                        self.window.evaluate_js("window.onPipelineComplete(true, '剪辑与质检全部通过！');")
+                    if self._window:
+                        self._window.evaluate_js("window.onPipelineComplete(true, '剪辑与质检全部通过！');")
                 else:
                     self._pipeline_status = "error"
-                    if self.window:
-                        self.window.evaluate_js(f"window.onPipelineComplete(false, '剪辑流程退出，返回码: {proc.returncode}');")
+                    if self._window:
+                        self._window.evaluate_js(f"window.onPipelineComplete(false, '剪辑流程退出，返回码: {proc.returncode}');")
             except Exception as e:
                 self._pipeline_status = "error"
                 err_msg = f"启动流水线异常: {str(e)}"
                 self._pipeline_logs.append(err_msg + "\n")
-                if self.window:
-                    self.window.evaluate_js(f"window.onPipelineComplete(false, {json.dumps(err_msg)});")
+                if self._window:
+                    self._window.evaluate_js(f"window.onPipelineComplete(false, {json.dumps(err_msg)});")
 
         thread = threading.Thread(target=_run_worker, daemon=True)
         thread.start()
