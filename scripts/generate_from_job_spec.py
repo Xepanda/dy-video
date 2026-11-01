@@ -212,7 +212,9 @@ def main() -> int:
     manifest = director.run_director_workflow()
 
     # —— 5. 交付汇总 ——
-    print(f"\n[5/5] 交付物汇总:")
+    material_dir = director.get_material_dir()
+    os.makedirs(material_dir, exist_ok=True)
+    print(f"\n[5/5] 交付物汇总（已直接保存至素材目录: {material_dir}）:")
     deliverables = manifest.get("final_deliverables", {})
     gen_manifest = {
         "project_id": project_id,
@@ -229,6 +231,9 @@ def main() -> int:
     gen_path = os.path.join(director.output_dir, "generation_manifest.json")
     with open(gen_path, "w", encoding="utf-8") as f:
         json.dump(gen_manifest, f, ensure_ascii=False, indent=2)
+    material_manifest = os.path.join(material_dir, f"{project_id}_generation_manifest.json")
+    if os.path.abspath(gen_path) != os.path.abspath(material_manifest):
+        shutil.copy2(gen_path, material_manifest)
 
     # —— 5.1 人工复核清单（统一开关 manual_review 的消费点）——
     # 34 项自检里 13 项机器判不了（情绪、话术与画面匹配、搭配完整性等），
@@ -272,12 +277,15 @@ def main() -> int:
             _lines += ["", f"审核人：____　日期：____", ""]
             with open(mr_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(_lines))
-            gen_manifest["manual_review"] = mr_path
+            material_mr = os.path.join(material_dir, f"{project_id}_manual_review.md")
+            if os.path.abspath(mr_path) != os.path.abspath(material_mr):
+                shutil.copy2(mr_path, material_mr)
+            gen_manifest["manual_review"] = material_mr
             if isinstance(deliverables, dict):
-                deliverables["manual_review"] = mr_path
+                deliverables["manual_review"] = material_mr
             with open(gen_path, "w", encoding="utf-8") as f:
                 json.dump(gen_manifest, f, ensure_ascii=False, indent=2)
-            print(f"  [✓] manual_review: {mr_path}（13 项预填，勾异常即可）")
+            print(f"  [✓] manual_review: {material_mr}（13 项预填，勾异常即可）")
     except Exception as e:
         print(f"  [WARN] 生成人工复核清单失败（不阻断交付）: {e}")
 

@@ -970,20 +970,37 @@ def get_html_content() -> str:
 
 
 def main():
-    import webview
+    # 若有 PyInstaller splash 启动画面，先关闭以无缝切入主窗口
+    try:
+        import pyi_splash
+        pyi_splash.close()
+    except ImportError:
+        pass
 
-    api = DesktopSpecApi()
-    window = webview.create_window(
-        title="🎬 抖音带货直播剪辑 · 任务配置与启动器",
-        html=get_html_content(),
-        js_api=api,
-        width=920,
-        height=940,
-        min_size=(800, 720),
-        resizable=True
-    )
-    api.set_window(window)
-    webview.start(debug=False)
+    try:
+        import webview
+
+        api = DesktopSpecApi()
+        window = webview.create_window(
+            title="🎬 抖音带货直播剪辑 · 任务配置与启动器",
+            html=get_html_content(),
+            js_api=api,
+            width=920,
+            height=940,
+            min_size=(800, 720),
+            resizable=True
+        )
+        api.set_window(window)
+        webview.start(debug=False)
+    except Exception as e:
+        import traceback
+        err_msg = traceback.format_exc()
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(0, f"启动任务配置器遇到异常：\n\n{err_msg}", "启动失败", 0x10)
+        except Exception:
+            pass
+        raise
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ import os
 import sys
 import json
 import time
+import shutil
 import argparse
 from typing import Dict, Any, Optional
 
@@ -217,6 +218,37 @@ class AgentDirector:
             raise FileNotFoundError(
                 f"未找到任何可用的源视频素材（raw_video_path={self.spec.get('raw_video_path')}）")
         return paths
+
+    def get_material_dir(self) -> str:
+        """获取用户提供的素材所在目录（绝对路径）。
+
+        规则：
+        1. 若 raw_video_path 指向目录，直接作为素材目录；
+        2. 若 raw_video_path 指向文件，取其所在目录；
+        3. 若 raw_video_paths 提供了文件列表，取首个文件所在目录；
+        4. 兜底回退到 self.output_dir。
+        """
+        spec_dir = os.path.dirname(self.spec_path)
+        primary = self.spec.get("raw_video_path")
+        if primary:
+            p = resolve_path(primary, spec_dir) or os.path.abspath(primary)
+            if os.path.isdir(p):
+                return os.path.abspath(p)
+            elif os.path.isfile(p):
+                return os.path.abspath(os.path.dirname(p))
+            elif os.path.isdir(os.path.dirname(p)):
+                return os.path.abspath(os.path.dirname(p))
+
+        raw_paths = self.spec.get("raw_video_paths") or []
+        for p in raw_paths:
+            rp = resolve_path(p, spec_dir) or os.path.abspath(p)
+            if os.path.exists(rp):
+                return os.path.abspath(os.path.dirname(rp))
+
+        if self.raw_videos:
+            return os.path.abspath(os.path.dirname(self.raw_videos[0]))
+
+        return self.output_dir
 
     def _assign_magnifiers(self, plan: Dict[str, Any]) -> None:
         """为面料/工艺类分镜分配放大镜圆圈锚点（2026-10-27 反馈驱动）。
@@ -698,7 +730,10 @@ class AgentDirector:
         # -------------------------------------------------------------
         print("\n>>> [PHASE 3] 工具链执行成片渲染与混流...")
 
-        final_cover_path = os.path.join(self.output_dir, f"{self.project_id}_cover.jpg")
+        material_dir = self.get_material_dir()
+        os.makedirs(material_dir, exist_ok=True)
+
+        final_cover_path = os.path.join(self.output_dir, f"{self.project_id}.jpg")
         cover_meta_path = os.path.join(self.output_dir, f"{self.project_id}_cover_render_meta.json")
         render_cover_with_meta(
             base_frame_path=selected_cover["image_path"],
@@ -707,7 +742,7 @@ class AgentDirector:
             meta_output_path=cover_meta_path,
         )
 
-        final_mp4_path = os.path.join(self.output_dir, f"{self.project_id}_final.mp4")
+        final_mp4_path = os.path.join(self.output_dir, f"{self.project_id}.mp4")
         out_mp4, actual_dur = assemble_video_tool(
             plan_path=plan_path,
             output_mp4_path=final_mp4_path,
@@ -752,6 +787,26 @@ class AgentDirector:
                 from src.tools.stage_cache import save_stage
                 save_stage(self.work_dir, "qc", ck, auditor.report)
 
+        # 产物直接交付并保存到用户提供的素材目录下，文件名与任务名字 (project_id) 完全一致
+        target_mp4 = os.path.join(material_dir, f"{self.project_id}.mp4")
+        target_cover = os.path.join(material_dir, f"{self.project_id}.jpg")
+        target_qc = os.path.join(material_dir, f"{self.project_id}_qc_report.json")
+
+        if os.path.abspath(final_mp4_path) != os.path.abspath(target_mp4):
+            shutil.copy2(out_mp4, target_mp4)
+        if os.path.abspath(final_cover_path) != os.path.abspath(target_cover):
+            shutil.copy2(final_cover_path, target_cover)
+        if os.path.exists(qc_report_path) and os.path.abspath(qc_report_path) != os.path.abspath(target_qc):
+            shutil.copy2(qc_report_path, target_qc)
+
+        # 兼容旧版读取：在 output_dir 留存 _final.mp4 和 _cover.jpg 副本
+        legacy_mp4 = os.path.join(self.output_dir, f"{self.project_id}_final.mp4")
+        legacy_cover = os.path.join(self.output_dir, f"{self.project_id}_cover.jpg")
+        if not os.path.exists(legacy_mp4) and os.path.exists(out_mp4):
+            shutil.copy2(out_mp4, legacy_mp4)
+        if not os.path.exists(legacy_cover) and os.path.exists(final_cover_path):
+            shutil.copy2(final_cover_path, legacy_cover)
+
         decision_manifest = {
             "project_id": self.project_id,
             "decision_timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -769,10 +824,12 @@ class AgentDirector:
             "consistency_check": consistency_report,
             "dialogue_script_stats": dialogue_stats,
             "final_deliverables": {
-                "video": out_mp4,
-                "cover": final_cover_path,
+                "video": target_mp4,
+                "cover": target_cover,
                 "cover_render_meta": cover_meta_path,
-                "qc_report": qc_report_path,
+                "qc_report": target_qc,
+                "output_dir_video": out_mp4,
+                "output_dir_cover": final_cover_path,
             },
         }
         manifest_path = os.path.join(self.output_dir, "agent_decision_manifest.json")
@@ -782,8 +839,9 @@ class AgentDirector:
         elapsed = time.time() - start_time
         print(f"\n=======================================================")
         print(f"Agent 导演总装与质检验收完成! 总耗时: {elapsed:.1f} 秒")
-        print(f"最终成片: {out_mp4} ({actual_dur:.2f}s)")
-        print(f"高定封面: {final_cover_path}")
+        print(f"最终成片（已保存至素材目录）: {target_mp4} ({actual_dur:.2f}s)")
+        print(f"高定封面（已保存至素材目录）: {target_cover}")
+        print(f"质检报告（已保存至素材目录）: {target_qc}")
         print(f"决策清单: {manifest_path}")
         print(f"质检结论: {'ALL PASS' if passed else 'BLOCK FAILED'}"
               f"（{len(auditor.report.get('warnings', []))} 条 WARN）")
