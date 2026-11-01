@@ -8,6 +8,25 @@
   "properties": {
     "all_passed": { "type": "boolean", "description": "所有 BLOCK 级检查通过才为 true" },
     "constraints_version": { "type": "integer" },
+    "render_profile": {
+      "type": "string",
+      "description": "本次成片形态（branded / plain），决定字幕类断言是否有检查对象"
+    },
+    "disclaimers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "必须向交付人披露的降级说明（如 plain 形态下违禁词处置降为仅记录）"
+    },
+    "coverage": {
+      "type": "object",
+      "description": "断言覆盖率（plain 等形态会导致部分断言无对象，必须显式披露，避免『全绿但没检』）",
+      "properties": {
+        "total": { "type": "integer" },
+        "executed": { "type": "integer" },
+        "skipped": { "type": "integer" },
+        "ratio": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
     "checks": {
       "type": "array",
       "items": {
@@ -15,8 +34,14 @@
         "required": ["name", "status", "level"],
         "properties": {
           "name": { "type": "string" },
-          "status": { "enum": ["PASS", "FAIL", "WARN"] },
-          "level": { "enum": ["BLOCK", "WARN"] },
+          "status": {
+            "enum": ["PASS", "FAIL", "WARN", "SKIP"],
+            "description": "SKIP = 该项在本次成片形态下无检查对象（不是 PASS），计入 coverage.skipped"
+          },
+          "level": {
+            "enum": ["BLOCK", "WARN", "-"],
+            "description": "- 仅用于 SKIP 项，表示不参与门禁判定"
+          },
           "detail": { "type": "string" },
           "metric_key": { "type": "string", "description": "对应 constraints.yaml 的指标 key" },
           "measured": {}, 

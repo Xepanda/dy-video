@@ -230,6 +230,57 @@ def main() -> int:
     with open(gen_path, "w", encoding="utf-8") as f:
         json.dump(gen_manifest, f, ensure_ascii=False, indent=2)
 
+    # —— 5.1 人工复核清单（统一开关 manual_review 的消费点）——
+    # 34 项自检里 13 项机器判不了（情绪、话术与画面匹配、搭配完整性等），
+    # 交付时生成预填模板，审核人只需勾选异常项（正常 30 秒内完成）。
+    try:
+        from src.tools.feature_flags import features_of
+        _feats = features_of(director.constraints)
+        if str((_feats.get("values") or {}).get("manual_review", "on")) != "off":
+            _n = sum(1 for c in ((manifest.get("qc_warnings") or [])))
+            mr_path = os.path.join(director.output_dir, "manual_review.md")
+            _dur = manifest.get("total_duration") or 0
+            _lines = [
+                f"# 人工复核清单 · {project_id}",
+                "",
+                f"> 自动质检：{'全绿' if manifest.get('qc_passed') else '未通过'}｜"
+                f"WARN {_n} 条｜成片 {float(_dur):.2f}s｜形态 "
+                f"{(features_of(director.constraints).get('values') or {}).get('render_profile', 'branded')}",
+                "> 以下 13 项机器无法判定，**默认全部视为「未发现问题」**；"
+                "若发现异常请勾选 `[x]` 并在备注列写一句原因。",
+                "",
+                "| # | 检查项 | 异常 | 备注 |",
+                "| :--- | :--- | :--- | :--- |",
+            ]
+            _items = [
+                "前 5 秒是否靠真实卖点留人且未堆参数",
+                "前 5 秒是否让观众明确「卖的是哪一件」",
+                "核心卖点是否讲完整（有解释或展示）",
+                "同一卖点重复时是否换了画面/搭配",
+                "非主题款讲解是否已删除",
+                "是否已删除链接/上车/发货/库存类叫卖",
+                "无价格数字但保留福利感",
+                "是否避开违禁词清单",
+                "音量是否统一、无爆音、无杂音",
+                "助播话语处理是否合理",
+                "搭配展示是否完整、转场是否自然",
+                "情绪瞬间/真实感是否保留",
+                "话术与画面是否匹配（说面料给摸扯、说遮胯给近景）",
+            ]
+            for _i, _t in enumerate(_items, 1):
+                _lines.append(f"| {_i} | {_t} | [ ] |  |")
+            _lines += ["", f"审核人：____　日期：____", ""]
+            with open(mr_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(_lines))
+            gen_manifest["manual_review"] = mr_path
+            if isinstance(deliverables, dict):
+                deliverables["manual_review"] = mr_path
+            with open(gen_path, "w", encoding="utf-8") as f:
+                json.dump(gen_manifest, f, ensure_ascii=False, indent=2)
+            print(f"  [✓] manual_review: {mr_path}（13 项预填，勾异常即可）")
+    except Exception as e:
+        print(f"  [WARN] 生成人工复核清单失败（不阻断交付）: {e}")
+
     for k, v in deliverables.items():
         exists = "✓" if v and os.path.exists(v) else "✗"
         print(f"  [{exists}] {k}: {v}")

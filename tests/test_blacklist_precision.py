@@ -68,6 +68,23 @@ MUST_BLOCK_BLACKLIST = [
     "这个款已经断码了只剩大码",
 ]
 
+# —— promo_words 开关（2026-11-01）——
+# allow_welfare（默认）：只放行名词性卖点"福利款/福利感/很福利"，
+# 交易话术里的"福利"仍整句拦截（"你们今天福利来啦" 是回归守门用例）。
+MUST_ALLOW_WELFARE_NOUN = [
+    "这个是福利款",
+    "质感很福利",
+    "福利感拉满",
+    "这个福利款很显瘦",
+]
+MUST_BLOCK_WELFARE_TRADE = [
+    "你们今天福利来啦",
+    "抢福利",
+    "福利名额",
+    "福利链接",
+    "福利价九十九",
+]
+
 
 def main():
     failures = []
@@ -103,6 +120,27 @@ def main():
             print(f"  [FAIL] 漏网: {t}")
         else:
             print(f"  [PASS] 拦截: {t} ({reason[:28]})")
+
+    print("\n[TEST-黑名单精度] D. 福利类措辞按开关分流（allow_welfare / block_all）")
+    for t in MUST_ALLOW_WELFARE_NOUN:
+        bad, reason = is_blacklisted(t)
+        if bad:
+            failures.append(f"福利名词被误杀: {t} ({reason})")
+            print(f"  [FAIL] 误杀: {t} ({reason})")
+        else:
+            print(f"  [PASS] 放行福利名词: {t}")
+        # 关掉开关后必须回到历史行为（任何"福利"整句拦）
+        blk = {"features": {"values": {"promo_words": "block_all"}}}
+        if not is_blacklisted(t, constraints=blk)[0]:
+            failures.append(f"block_all 未生效: {t}")
+            print(f"  [FAIL] block_all 未生效: {t}")
+    for t in MUST_BLOCK_WELFARE_TRADE:
+        bad, reason = is_blacklisted(t)
+        if not bad:
+            failures.append(f"福利交易话术漏网: {t}")
+            print(f"  [FAIL] 漏网: {t}")
+        else:
+            print(f"  [PASS] 拦截福利交易话术: {t} ({reason[:28]})")
 
     print(f"\n[TEST-黑名单精度] {'全部通过' if not failures else f'失败 {len(failures)} 项'}")
     if failures:

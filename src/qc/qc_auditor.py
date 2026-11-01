@@ -73,10 +73,77 @@ class QcAuditor:
 
     def __init__(self, constraints: Dict[str, Any] = None):
         self.constraints = constraints or _load_constraints()
+        # 统一开关：plain 模式下字幕/文字类断言无对象，统一记 SKIP（不是 PASS）
+        try:
+            from src.tools.feature_flags import features_of
+            self._feat = features_of(self.constraints)
+        except Exception:
+            self._feat = {"render_profile": "branded", "values": {}}
+        self.render_profile = str(self._feat.get("render_profile", "branded"))
+        self.subtitles_active = (self.render_profile != "plain")
         self.report = {"all_passed": True, "constraints_version":
-                       self.constraints.get("version", 1), "checks": [], "warnings": []}
+                       self.constraints.get("version", 1), "checks": [],
+                       "warnings": [],
+                       "render_profile": self.render_profile,
+                       "disclaimers": []}
+        if not self.subtitles_active:
+            self.report["disclaimers"].append(
+                "本次为纯画面（plain）成片：字幕类断言无检查对象，已记为 SKIP 而非 PASS；"
+                "违禁词处置降级为仅记录，音频与画面不做处理。")
 
     # ------------------------------------------------------------ 断言原语
+
+    def _skip(self, name: str, reason: str, metric_key: str = "") -> None:
+        """记录 SKIP（不参与 all_passed 判定，但计入覆盖率，避免"假绿"）。"""
+        self.report["checks"].append({
+            "name": name, "status": "SKIP", "level": "-", "detail": reason,
+            "metric_key": metric_key, "measured": None, "threshold": None,
+        })
+        print(f"  [SKIP] {name}: {reason}")
+
+    #: 决策 6（2026-10-30）：参数类内容占比固定 ≤25%，与面料配额 11s 配套。
+    FABRIC_RATIO_MAX = 0.25
+
+    def _audit_fabric_ratio(self, plan_path: str = None) -> None:
+        """参数类（面料/做工）内容时长占比复测（2026-11-01，I0 使能项）。
+
+        数据源 = plan.json 的 clips[].category / .dur。QC 此前只收成片/封面/字幕
+        三类路径，**没有任何分镜数据**，占比类断言无从下手（I5~I7 同样卡在这里）。
+        口径：fabric 类分镜时长合计 / 分镜时长合计；严格档门禁 ≤25%，
+        宽松档只记录不判定（与 features.yaml 中 fabric_ratio 的语义一致）。
+        """
+        if not plan_path or not os.path.exists(plan_path):
+            self._skip("参数类内容占比复测", "未提供 plan.json（分镜表），无法统计占比",
+                       metric_key="video.funnel.fabric")
+            return
+        try:
+            with open(plan_path, "r", encoding="utf-8") as f:
+                plan = json.load(f)
+        except Exception as e:  # noqa: BLE001
+            self._skip("参数类内容占比复测", f"plan.json 读取失败: {str(e)[:60]}",
+                       metric_key="video.funnel.fabric")
+            return
+        clips = plan.get("clips") or []
+        total = sum(float(c.get("dur", 0) or 0) for c in clips)
+        fab_clips = [c for c in clips if str(c.get("category", "")).startswith("fabric")]
+        fab = sum(float(c.get("dur", 0) or 0) for c in fab_clips)
+        if total <= 0:
+            self._skip("参数类内容占比复测", "plan.json 无有效分镜时长",
+                       metric_key="video.funnel.fabric")
+            return
+        ratio = fab / total
+        mode = str((self._feat.get("values") or {}).get("fabric_ratio", "strict"))
+        detail = (f"面料/做工 {fab:.1f}s / 全片 {total:.1f}s = {ratio * 100:.1f}%"
+                  f"（{len(fab_clips)} 个分镜）")
+        if mode != "strict":
+            self._assert(True, "参数类内容占比复测", detail + "｜宽松档仅记录不判定",
+                         level="WARN", metric_key="video.funnel.fabric",
+                         measured=round(ratio, 4), threshold=None)
+            return
+        self._assert(ratio <= self.FABRIC_RATIO_MAX, "参数类内容占比复测",
+                     detail + f"｜严格档上限 {self.FABRIC_RATIO_MAX:.0%}",
+                     metric_key="video.funnel.fabric",
+                     measured=round(ratio, 4), threshold=self.FABRIC_RATIO_MAX)
 
     def _assert(self, condition: bool, name: str, detail: str,
                 level: str = "BLOCK", metric_key: str = "",
@@ -107,6 +174,7 @@ class QcAuditor:
         cover_meta_path: str = None,
         candidates_path: str = None,
         overlay_meta_path: str = None,
+        plan_path: str = None,
     ) -> bool:
         print("\n=======================================================")
         print("启动自动化量化质检门禁 v2（constraints 驱动）...")
@@ -120,7 +188,11 @@ class QcAuditor:
         # ---- B1 文件存在性 ----
         self._assert(os.path.exists(video_path), "成片文件存在性", f"{video_path}")
         self._assert(os.path.exists(cover_path), "封面文件存在性", f"{cover_path}")
-        self._assert(os.path.exists(ass_path), "字幕文件存在性", f"{ass_path}")
+        if self.subtitles_active:
+            self._assert(os.path.exists(ass_path), "字幕文件存在性", f"{ass_path}")
+        else:
+            self._skip("字幕文件存在性", "plain 成片不生成字幕文件（按开关预期）",
+                       metric_key="feature.render_profile")
         if not os.path.exists(video_path):
             return False
 
@@ -168,8 +240,16 @@ class QcAuditor:
         # 音画同步抽检（2026-10-24 接入，av_sync_error_max_ms 此前是死键）
         self._audit_av_sync(video_path, video_c)
 
+        # ---- B6.5 参数类内容占比（决策 6：≤25%，I0 使能项）----
+        self._audit_fabric_ratio(plan_path)
+
         # ---- B7~B9 字幕断言 ----
-        if os.path.exists(ass_path):
+        if not self.subtitles_active:
+            for _nm in ("字幕避让小黄车盲区", "字幕零价格断言",
+                        "字幕无 ASR 禁用错词", "违规判定完整性",
+                        "字幕违规词零残留（判定清单）", "字幕无繁体字"):
+                self._skip(_nm, "plain 成片无字幕，本项无检查对象")
+        if self.subtitles_active and os.path.exists(ass_path):
             with open(ass_path, "r", encoding="utf-8-sig", errors="ignore") as f:
                 ass_content = f.read()
 
@@ -297,6 +377,12 @@ class QcAuditor:
         # ---- B12 封面宽占比复测（决策 1）----
         if candidates_path and os.path.exists(candidates_path):
             self._audit_cover_width(candidates_path, self.constraints.get("cover", {}) or {})
+        else:
+            # 缺候选清单时这 3 项原本"静默消失"（报告里查无此项，却也不是 SKIP）——
+            # 与 plain over-skip 同类，统一显式记 SKIP 以计入覆盖率。
+            for _nm in ("封面宽占比复测", "封面完整人体复测", "封面衣着一致性"):
+                self._skip(_nm, "未提供 cover_candidates.json，本项无检查对象",
+                           metric_key="cover.person_width_ratio")
 
         # ---- B13 封面背景文字纯净度复测（V7, B11）----
         ocr_c = self.constraints.get("ocr", {}) or {}
@@ -312,6 +398,19 @@ class QcAuditor:
         self._audit_overlay_face_safety(video_path, overlay_meta_path)
         # 成片 ASR 复检门禁（2026-10-27：闭环"物理咬合原声"承诺）
         self._audit_final_video_asr(video_path, ass_path)
+
+        # ---- 覆盖率汇总（plain 模式下必须披露，避免"全绿但没检"）----
+        _total = len(self.report["checks"])
+        _skipped = sum(1 for c in self.report["checks"] if c.get("status") == "SKIP")
+        self.report["coverage"] = {
+            "total": _total,
+            "executed": _total - _skipped,
+            "skipped": _skipped,
+            "ratio": round((_total - _skipped) / _total, 3) if _total else 1.0,
+        }
+        if _skipped:
+            print(f"\n[QC] 覆盖率 {self.report['coverage']['ratio']:.0%}"
+                  f"（{_skipped}/{_total} 项因成片形态跳过，详见 checks 中 SKIP 项）")
 
         # ---- 输出报告 ----
         if report_output_path:
@@ -479,10 +578,20 @@ class QcAuditor:
         with open(overlay_meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
 
+        # —— 0) 纯画面形态说明 ——
+        # 2026-11-01 实跑发现：除 7 项字幕断言外，"视频顶部平台标识"也会因
+        # plain 不叠条而硬失败。但**只跳过文字/贴纸两项**：放大镜、转场、镜像
+        # 属画面技法，与成片形态无关，必须照检（曾因整体 return 而静默漏检 4 项）。
+        # Hook 卡 / CTA 的人脸安全由 _audit_overlay_face_safety 读 meta.applied
+        # 统一处理，这里不另造检查名。
+
         # —— 1) 顶部平台标识条 ——
         bar_c = constraints.get("platform_bar", {}) or {}
         bar = meta.get("platform_bar", {}) or {}
-        if bar_c.get("enabled", True):
+        if not self.subtitles_active:
+            self._skip("视频顶部平台标识", "plain 成片不叠加品牌条（按开关预期）",
+                       metric_key="video.platform_bar")
+        elif bar_c.get("enabled", True):
             if bar.get("applied"):
                 # 像素复测：抽取成片中部一帧，检查顶部条带内是否存在
                 # 高亮像素（图标/文字），确认标识条真的画上去了
@@ -508,7 +617,10 @@ class QcAuditor:
         # —— 2) 挂角利益点贴纸：时序完整性 ——
         sticker_c = constraints.get("video_sticker", {}) or {}
         events = meta.get("sticker_events", []) or []
-        if sticker_c.get("enabled", True):
+        if not self.subtitles_active:
+            self._skip("挂角贴纸时序", "plain 成片不叠加利益点贴纸（按开关预期）",
+                       metric_key="video.sticker_timing")
+        elif sticker_c.get("enabled", True):
             bad = []
             for e in events:
                 span = float(e.get("t_out", 0)) - float(e.get("t_in", 0))
@@ -715,7 +827,17 @@ class QcAuditor:
                          (res.get("warnings") or ["跳过"])[0],
                          level="WARN", metric_key="final_asr_verify")
             return
+        # plain：V1 无字幕可比对，记 SKIP 并从结果循环中排除——否则同一项会
+        # 同时出现 SKIP 与「未提供 .ass … 跳过比对」的 WARN（重复且互相矛盾）。
+        # V2/V3/V4/V5 与成片形态无关（语音违规/价格/密度/消音），照常执行。
+        _text_dep = set()
+        if not self.subtitles_active:
+            self._skip("成片ASR复检-V1 字幕-原声一致性",
+                       "plain 成片无字幕，本项无检查对象")
+            _text_dep.add("V1")
         for c in res.get("checks", []):
+            if c.get("id") in _text_dep:
+                continue
             status = c.get("status")
             if status == "PASS":
                 self._assert(True, f"成片ASR复检-{c['id']} {c['name']}",
