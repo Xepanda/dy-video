@@ -187,42 +187,31 @@ class SpecManager:
 class DesktopSpecApi:
     """提供给前端 JS 调用的桌面原生桥接 API（零网络端口）。"""
 
-    def __init__(self, spec_path: str = DEFAULT_SPEC_PATH):
-        self.spec_path = os.path.abspath(spec_path)
-        self.manager = SpecManager()
-        self.window = None
-        self._pipeline_process = None
-        self._pipeline_logs = []
-        self._pipeline_status = "idle"  # idle | running | success | error
+    def __init__(self, spec_path: Optional[str] = None):
+        # 若外部显式传入（如单元测试），落盘优先使用；否则动态落盘至用户的素材目录，绝不污染仓库
+        self._custom_spec_path = os.path.abspath(spec_path) if spec_path else None
+        self._manager = SpecManager()
+        self._window = None
 
     def set_window(self, window):
-        self.window = window
+        self._window = window
+
+    def resolve_material_dir(self, raw_video_path: str) -> Optional[str]:
+        """解析用户提供的素材目录绝对路径。"""
+        if not raw_video_path:
+            return None
+        abs_p = os.path.abspath(raw_video_path)
+        if os.path.isdir(abs_p):
+            return abs_p
+        elif os.path.isfile(abs_p):
+            return os.path.dirname(abs_p)
+        elif os.path.isdir(os.path.dirname(abs_p)):
+            return os.path.dirname(abs_p)
+        return None
 
     def load_initial_data(self) -> Dict[str, Any]:
-        """加载初始数据（优先读取已有 job_spec.json）。"""
-        loaded = self.manager.load_spec(self.spec_path)
-        if loaded:
-            brand = loaded.get("brand", {})
-            product = loaded.get("product", {})
-            options = loaded.get("options", {})
-            imgs = product.get("item_images", [])
-            return {
-                "project_id": loaded.get("project_id", "sample_silk_knitwear_01"),
-                "raw_video_path": loaded.get("raw_video_path", "data/raw_samples/silk_knitwear_sample"),
-                "brand_en": brand.get("title_en", "MIXCITY"),
-                "brand_cn": brand.get("subtitle_cn", "深圳高端女装"),
-                "product_title_l1": product.get("title_line1", "桑蚕丝羊绒羊毛"),
-                "product_title_l2": product.get("title_line2", "渐变针织衫"),
-                "product_img_1": imgs[0] if len(imgs) > 0 else "data/raw_samples/sample_product_card.png",
-                "product_img_2": imgs[1] if len(imgs) > 1 else "",
-                "duration_range": options.get("duration_range", "45-65"),
-                "split_strategy": options.get("split_strategy", "force_off"),
-                "keywords": "，".join(options.get("highlight_keywords", ["桑蚕丝", "羊绒", "羊毛", "显瘦", "针织衫", "闭眼入", "降温"])),
-                "features": options.get("features") or {},
-                "has_existing": True,
-                "spec_path": self.spec_path,
-            }
-        return {
+        """加载初始数据供界面展示（仅作为表单默认填项，绝不写回仓库）。"""
+        default_data = {
             "project_id": "sample_silk_knitwear_01",
             "raw_video_path": "data/raw_samples/silk_knitwear_sample",
             "brand_en": "MIXCITY",
@@ -236,16 +225,42 @@ class DesktopSpecApi:
             "keywords": "桑蚕丝，羊绒，羊毛，显瘦，针织衫，闭眼入，降温",
             "features": {},
             "has_existing": False,
-            "spec_path": self.spec_path,
+            "spec_path": "",
         }
+        if os.path.exists(DEFAULT_SPEC_PATH):
+            try:
+                loaded = self._manager.load_spec(DEFAULT_SPEC_PATH)
+                if loaded:
+                    brand = loaded.get("brand", {})
+                    product = loaded.get("product", {})
+                    options = loaded.get("options", {})
+                    imgs = product.get("item_images", [])
+                    default_data.update({
+                        "project_id": loaded.get("project_id", default_data["project_id"]),
+                        "raw_video_path": loaded.get("raw_video_path", default_data["raw_video_path"]),
+                        "brand_en": brand.get("title_en", default_data["brand_en"]),
+                        "brand_cn": brand.get("subtitle_cn", default_data["brand_cn"]),
+                        "product_title_l1": product.get("title_line1", default_data["product_title_l1"]),
+                        "product_title_l2": product.get("title_line2", default_data["product_title_l2"]),
+                        "product_img_1": imgs[0] if len(imgs) > 0 else default_data["product_img_1"],
+                        "product_img_2": imgs[1] if len(imgs) > 1 else "",
+                        "duration_range": options.get("duration_range", default_data["duration_range"]),
+                        "split_strategy": options.get("split_strategy", default_data["split_strategy"]),
+                        "keywords": "，".join(options.get("highlight_keywords", ["桑蚕丝", "羊绒", "羊毛", "显瘦", "针织衫", "闭眼入", "降温"])),
+                        "features": options.get("features") or {},
+                        "has_existing": True,
+                    })
+            except Exception:
+                pass
+        return default_data
 
     def select_video_file(self) -> Optional[str]:
         """弹出原生文件选择对话框（单视频文件）。"""
-        if not self.window:
+        if not self._window:
             return None
         import webview
         file_types = ("视频文件 (*.mp4;*.mov;*.mkv;*.ts;*.flv)", "所有文件 (*.*)")
-        res = self.window.create_file_dialog(
+        res = self._window.create_file_dialog(
             dialog_type=webview.OPEN_DIALOG,
             allow_multiple=False,
             file_types=file_types
@@ -256,10 +271,10 @@ class DesktopSpecApi:
 
     def select_video_folder(self) -> Optional[str]:
         """弹出原生文件夹选择对话框（视频素材目录）。"""
-        if not self.window:
+        if not self._window:
             return None
         import webview
-        res = self.window.create_file_dialog(
+        res = self._window.create_file_dialog(
             dialog_type=webview.FOLDER_DIALOG
         )
         if res and len(res) > 0:
@@ -268,11 +283,11 @@ class DesktopSpecApi:
 
     def select_image_file(self) -> Optional[str]:
         """弹出原生图片选择对话框。"""
-        if not self.window:
+        if not self._window:
             return None
         import webview
         file_types = ("图片文件 (*.png;*.jpg;*.jpeg;*.webp)", "所有文件 (*.*)")
-        res = self.window.create_file_dialog(
+        res = self._window.create_file_dialog(
             dialog_type=webview.OPEN_DIALOG,
             allow_multiple=False,
             file_types=file_types
@@ -282,89 +297,52 @@ class DesktopSpecApi:
         return None
 
     def save_spec(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """校验并保存 job_spec.json。"""
-        errors = self.manager.validate(payload)
+        """校验并保存配置至用户素材目录，绝不修改仓库，并打开系统文件资源管理器。"""
+        errors = self._manager.validate(payload)
         if errors:
             return {"success": False, "message": "；".join(errors)}
 
+        raw_video = str(payload.get("raw_video_path") or "").strip()
+        material_dir = self.resolve_material_dir(raw_video)
+
+        if self._custom_spec_path:
+            target_path = self._custom_spec_path
+            material_dir = os.path.dirname(target_path)
+        elif material_dir:
+            target_path = os.path.join(material_dir, "job_spec.json")
+        else:
+            return {"success": False, "message": f"未找到有效的素材路径，请先选择视频文件或素材文件夹（当前填写：{raw_video}）"}
+
         try:
-            spec = self.manager.build_spec_dict(payload)
-            self.manager.save_spec(spec, self.spec_path)
+            spec = self._manager.build_spec_dict(payload)
+            self._manager.save_spec(spec, target_path)
+
+            project_id = str(payload.get("project_id") or "").strip()
+            if project_id and project_id != "job_spec":
+                p_spec = os.path.join(material_dir, f"{project_id}_job_spec.json")
+                if os.path.abspath(p_spec) != os.path.abspath(target_path):
+                    shutil.copy2(target_path, p_spec)
+
+            # 打开系统资源管理器并高亮选中生成的配置文件
+            if not self._custom_spec_path and not os.environ.get("PYTEST_CURRENT_TEST"):
+                try:
+                    if os.name == "nt":
+                        norm_p = os.path.normpath(target_path)
+                        subprocess.Popen(f'explorer.exe /select,"{norm_p}"')
+                    else:
+                        subprocess.Popen(["xdg-open", material_dir])
+                except Exception as e:
+                    print(f"[SPEC][WARN] 打开资源管理器失败: {e}")
+
             return {
                 "success": True,
-                "message": f"任务配置文件保存成功！路径：{self.spec_path}",
-                "spec": spec
+                "message": f"任务配置已生成至素材目录：\n{target_path}\n已自动为您打开文件资源管理器！",
+                "spec": spec,
+                "target_path": target_path,
+                "material_dir": material_dir
             }
         except Exception as e:
-            return {"success": False, "message": f"保存失败: {str(e)}"}
-
-    def start_pipeline(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """保存并启动剪辑流水线。"""
-        save_res = self.save_spec(payload)
-        if not save_res["success"]:
-            return save_res
-
-        if self._pipeline_status == "running":
-            return {"success": False, "message": "剪辑任务正在运行中，请等待完成"}
-
-        self._pipeline_logs = []
-        self._pipeline_status = "running"
-
-        def _run_worker():
-            try:
-                python_exe = find_python_interpreter()
-                script_path = os.path.join(PROJECT_ROOT, "scripts", "generate_from_job_spec.py")
-                cmd = [python_exe, script_path, "--spec", self.spec_path]
-                self._pipeline_logs.append(f"启动 Python: {python_exe}\n")
-                self._pipeline_logs.append(f"执行命令: {' '.join(cmd)}\n")
-
-                proc = subprocess.Popen(
-                    cmd,
-                    cwd=PROJECT_ROOT,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    bufsize=1
-                )
-                self._pipeline_process = proc
-
-                for line in proc.stdout:
-                    self._pipeline_logs.append(line)
-                    if self.window:
-                        try:
-                            clean_line = json.dumps(line)
-                            self.window.evaluate_js(f"window.appendLog({clean_line});")
-                        except Exception:
-                            pass
-
-                proc.wait()
-                if proc.returncode == 0:
-                    self._pipeline_status = "success"
-                    if self.window:
-                        self.window.evaluate_js("window.onPipelineComplete(true, '剪辑与质检全部通过！');")
-                else:
-                    self._pipeline_status = "error"
-                    if self.window:
-                        self.window.evaluate_js(f"window.onPipelineComplete(false, '剪辑流程退出，返回码: {proc.returncode}');")
-            except Exception as e:
-                self._pipeline_status = "error"
-                err_msg = f"启动流水线异常: {str(e)}"
-                self._pipeline_logs.append(err_msg + "\n")
-                if self.window:
-                    self.window.evaluate_js(f"window.onPipelineComplete(false, {json.dumps(err_msg)});")
-
-        thread = threading.Thread(target=_run_worker, daemon=True)
-        thread.start()
-
-        return {"success": True, "message": "剪辑流水线已启动！"}
-
-    def get_pipeline_status(self) -> Dict[str, Any]:
-        return {
-            "status": self._pipeline_status,
-            "logs": "".join(self._pipeline_logs[-50:])
-        }
+            return {"success": False, "message": f"保存配置失败: {str(e)}"}
 
 
 def get_html_content() -> str:
@@ -500,44 +478,34 @@ def get_html_content() -> str:
             gap: 16px;
         }
         .action-bar {
-            display: grid;
-            grid-template-columns: 1fr 1.3fr;
-            gap: 14px;
-            margin-top: 20px;
+            margin-top: 24px;
         }
-        .btn {
-            padding: 13px 20px;
+        .btn-save-primary {
+            width: 100%;
+            padding: 16px 20px;
             border: none;
             border-radius: 10px;
-            font-size: 15px;
-            font-weight: 600;
+            font-size: 16px;
+            font-weight: 700;
             cursor: pointer;
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: #ffffff;
+            box-shadow: 0 4px 15px rgba(245, 158, 11, 0.35);
             display: flex;
             align-items: center;
             justify-content: center;
             gap: 8px;
-            transition: transform 0.1s, opacity 0.15s;
+            transition: transform 0.1s, opacity 0.15s, box-shadow 0.2s;
         }
-        .btn:active {
-            transform: scale(0.98);
-        }
-        .btn-save {
-            background: #334155;
-            color: #f8fafc;
-            border: 1px solid #475569;
-        }
-        .btn-save:hover {
-            background: #475569;
-        }
-        .btn-run {
-            background: linear-gradient(135deg, #f59e0b, #d97706);
-            color: #ffffff;
-            box-shadow: 0 4px 15px rgba(245, 158, 11, 0.35);
-        }
-        .btn-run:hover {
+        .btn-save-primary:hover {
             opacity: 0.95;
+            box-shadow: 0 6px 20px rgba(245, 158, 11, 0.5);
+            transform: translateY(-1px);
         }
-        .btn:disabled {
+        .btn-save-primary:active {
+            transform: translateY(0);
+        }
+        .btn-save-primary:disabled {
             opacity: 0.5;
             cursor: not-allowed;
             transform: none !important;
@@ -560,35 +528,7 @@ def get_html_content() -> str:
             border: 1px solid #ef4444;
             color: #f87171;
         }
-        .log-section {
-            display: none;
-            margin-top: 20px;
-            background: #050811;
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 14px;
-        }
-        .log-header {
-            font-size: 13px;
-            color: #38bdf8;
-            font-weight: 600;
-            margin-bottom: 10px;
-            display: flex;
-            justify-content: space-between;
-        }
-        .log-box {
-            font-family: Consolas, "Courier New", monospace;
-            font-size: 12px;
-            color: #a5f3fc;
-            background: #020617;
-            padding: 10px;
-            border-radius: 6px;
-            height: 200px;
-            overflow-y: auto;
-            white-space: pre-wrap;
-            line-height: 1.4;
-            border: 1px solid #1e293b;
-        }
+        
     </style>
 </head>
 <body>
@@ -702,24 +642,13 @@ def get_html_content() -> str:
             </div>
 
             <div class="action-bar">
-                <button type="button" class="btn btn-save" id="btnSave" onclick="saveOnly()">
-                    💾 仅保存任务配置 (job_spec.json)
-                </button>
-                <button type="button" class="btn btn-run" id="btnRun" onclick="saveAndRun()">
-                    🚀 保存并一键运行剪辑流水线
+                <button type="button" class="btn-save-primary" id="btnSave" onclick="saveOnly()">
+                    💾 保存配置到素材目录并打开
                 </button>
             </div>
 
             <div class="alert-box alert-success" id="alertSuccess"></div>
             <div class="alert-box alert-error" id="alertError"></div>
-
-            <div class="log-section" id="logSection">
-                <div class="log-header">
-                    <span>⚡ 实时剪辑与质检日志</span>
-                    <span id="logStatus">运行中...</span>
-                </div>
-                <div class="log-box" id="logBox"></div>
-            </div>
         </form>
     </div>
 
@@ -905,42 +834,26 @@ def get_html_content() -> str:
 
         async function saveOnly() {
             const payload = collectPayload();
-            if (window.pywebview && window.pywebview.api) {
-                const res = await window.pywebview.api.save_spec(payload);
-                showAlert(res.success, res.message);
+            if (!payload.raw_video_path) {
+                showAlert(false, "请先选择或填写直播素材视频/目录路径！");
+                return;
             }
-        }
-
-        async function saveAndRun() {
-            const payload = collectPayload();
             if (window.pywebview && window.pywebview.api) {
-                document.getElementById('btnRun').disabled = true;
-                document.getElementById('btnSave').disabled = true;
-                document.getElementById('logSection').style.display = 'block';
-                document.getElementById('logBox').innerText = '正在启动流水线...\\n';
-                document.getElementById('logStatus').innerText = '运行中...';
-
-                const res = await window.pywebview.api.start_pipeline(payload);
-                showAlert(res.success, res.message);
-                if (!res.success) {
-                    document.getElementById('btnRun').disabled = false;
-                    document.getElementById('btnSave').disabled = false;
+                const btn = document.getElementById('btnSave');
+                btn.disabled = true;
+                const origText = btn.innerText;
+                btn.innerText = "⏳ 正在保存配置至素材目录...";
+                try {
+                    const res = await window.pywebview.api.save_spec(payload);
+                    showAlert(res.success, res.message);
+                } catch (e) {
+                    showAlert(false, "保存异常: " + e);
+                } finally {
+                    btn.disabled = false;
+                    btn.innerText = origText;
                 }
             }
         }
-
-        window.appendLog = function(line) {
-            const box = document.getElementById('logBox');
-            box.innerText += line;
-            box.scrollTop = box.scrollHeight;
-        };
-
-        window.onPipelineComplete = function(success, msg) {
-            document.getElementById('btnRun').disabled = false;
-            document.getElementById('btnSave').disabled = false;
-            document.getElementById('logStatus').innerText = success ? '✓ 已完成' : '✗ 异常中止';
-            showAlert(success, msg);
-        };
 
         window.addEventListener('pywebviewready', async function() {
             if (window.pywebview && window.pywebview.api) {
@@ -986,7 +899,7 @@ def main():
             html=get_html_content(),
             js_api=api,
             width=920,
-            height=940,
+            height=840,
             min_size=(800, 720),
             resizable=True
         )

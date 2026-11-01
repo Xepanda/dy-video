@@ -121,6 +121,35 @@ def test_api_save_spec_rejects_invalid() -> None:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def test_api_save_spec_direct_to_material_dir() -> None:
+    """GUI 默认模式下直接落盘至用户素材目录，绝对不修改仓库内文件。"""
+    tmpdir = tempfile.mkdtemp()
+    try:
+        payload = _sample_payload()
+        payload["project_id"] = "custom_silk_99"
+        material_dir = os.path.join(tmpdir, "user_material_folder")
+        os.makedirs(material_dir, exist_ok=True)
+        payload["raw_video_path"] = material_dir
+
+        repo_spec = os.path.join(PROJECT_ROOT, "job_spec.json")
+        orig_mtime = os.path.getmtime(repo_spec) if os.path.exists(repo_spec) else None
+
+        api = DesktopSpecApi()
+        result = api.save_spec(payload)
+
+        assert result["success"] is True, result.get("message")
+        target_spec = os.path.join(material_dir, "job_spec.json")
+        named_spec = os.path.join(material_dir, "custom_silk_99_job_spec.json")
+        assert os.path.exists(target_spec), "素材目录下未生成 job_spec.json"
+        assert os.path.exists(named_spec), "素材目录下未生成 custom_silk_99_job_spec.json"
+
+        if orig_mtime is not None:
+            assert os.path.getmtime(repo_spec) == orig_mtime, "仓库内 job_spec.json 被篡改！"
+        print("  [PASS] DesktopSpecApi：直接生成至素材目录且仓库内零修改")
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def test_environment_helpers() -> None:
     """项目根目录与解释器探测可用，且不再硬编码个人路径。"""
     root = get_project_root()
@@ -146,6 +175,7 @@ def main() -> int:
         test_spec_manager_save_and_load,
         test_api_save_spec,
         test_api_save_spec_rejects_invalid,
+        test_api_save_spec_direct_to_material_dir,
         test_environment_helpers,
     ]
     failed = 0
