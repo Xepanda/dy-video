@@ -409,6 +409,123 @@ class TestBuildPlan(unittest.TestCase):
         self.assertEqual(resolve_funnel_order(custom_spec, rules),
                          ["hook", "styling", "craft_detail", "fit", "decision_closing"])
 
+        # 3. 验证 build_plan 传入 category='skirt_dress' 时真正按品类漏斗排布分镜
+        segs = [
+            {"start": 0.0, "end": 4.0, "duration": 4.0, "text": "姐妹们看这个半身裙太好看了。"},
+            {"start": 5.0, "end": 15.0, "duration": 10.0, "text": "版型显瘦修身遮肉显高显比例。"},
+            {"start": 16.0, "end": 26.0, "duration": 10.0, "text": "做工细节非常考究纯羊毛走线细节。"},
+            {"start": 27.0, "end": 47.0, "duration": 20.0, "text": "搭配一条牛仔裤或者半裙都很百搭。"},
+            {"start": 48.0, "end": 56.0, "duration": 8.0, "text": "纠结选哪个颜色我建议买驼色仙女买白色。"},
+        ]
+        bp_constraints = {
+            "video": {
+                "duration_range": [45, 65],
+                "funnel": {
+                    "hook": {"min": 3, "max": 8},
+                    "fabric": {"min": 6, "max": 10},
+                    "craft_detail": {"min": 6, "max": 10},
+                    "fit": {"min": 8, "max": 15},
+                    "styling": {"min": 15, "max": 30},
+                    "decision_closing": {"min": 6, "max": 12},
+                }
+            },
+            "slicing_rules": {
+                "enabled": True,
+                "funnel_order_overridable": True,
+                "funnel_orders": FUNNEL_ORDERS,
+                "default_funnel_order": ["hook", "fabric", "fit", "styling"],
+            }
+        }
+        skirt_plan = build_plan("dummy.mp4", segs, {"category": "skirt_dress", "options": {}}, bp_constraints)
+        plan_cats = [c["category"] for c in skirt_plan["clips"]]
+        # 验证 fit 出现在 craft_detail 或 fabric 之前
+        fit_idx = plan_cats.index("fit") if "fit" in plan_cats else -1
+        craft_idx = plan_cats.index("craft_detail") if "craft_detail" in plan_cats else (
+            plan_cats.index("fabric") if "fabric" in plan_cats else -1)
+        self.assertTrue(fit_idx >= 0 and craft_idx >= 0 and fit_idx < craft_idx,
+                        f"裙装类目漏斗中 fit 应优先于 craft_detail/fabric: {plan_cats}")
+
+    def test_punch_clip_multi_candidate_blocks(self):
+        """T4 防退化: 多独立 Hook 候选块时不应在首块即提前 break，应累积至 hook_target 产生提神快切与常规呼吸段。"""
+        from src.tools.build_plan import build_plan
+        from src.tools.cut_style_rules import measure_pacing, check_pacing_curve
+
+        segs = [
+            {"start": 0.0, "end": 4.0, "duration": 4.0, "text": "姐妹们这款毛衣太好看了。"},
+            {"start": 6.0, "end": 9.0, "duration": 3.0, "text": "真的是闭眼入的一款新款。"},
+            {"start": 12.0, "end": 22.0, "duration": 10.0, "text": "做工细节非常考究一体成型。"},
+            {"start": 25.0, "end": 40.0, "duration": 15.0, "text": "版型显瘦修身遮肉显高显比例。"},
+            {"start": 42.0, "end": 60.0, "duration": 18.0, "text": "搭配一条裤子或者半裙都非常好看百搭。"},
+            {"start": 62.0, "end": 70.0, "duration": 8.0, "text": "纠结选哪个颜色我建议买驼色仙女买白色。"},
+        ]
+        constraints = {
+            "slicing_rules": {
+                "enabled": True,
+                "pacing_curve": {
+                    "enabled": True,
+                    "punch_min_sec": 1.5,
+                    "punch_max_sec": 2.8,
+                    "punch_min_count": 1,
+                    "hook_segment_sec": 4.0,
+                    "hook_target_sec": 10.0,
+                }
+            },
+            "video": {
+                "duration_range": [45, 65],
+                "funnel": {
+                    "hook": {"min": 3, "max": 12},
+                    "fabric": {"min": 8, "max": 20},
+                    "fit": {"min": 8, "max": 15},
+                    "styling": {"min": 15, "max": 30},
+                    "decision_closing": {"min": 6, "max": 12},
+                }
+            }
+        }
+        plan = build_plan("dummy.mp4", segs, self.SPEC, constraints=constraints)
+        hook_clips = [c for c in plan["clips"] if c.get("category") == "hook"]
+        self.assertGreaterEqual(len(hook_clips), 2, f"多候选块时 Hook 区间应切出多段: {[c['dur'] for c in hook_clips]}")
+        has_punch = any(1.45 <= c["dur"] <= 2.85 for c in hook_clips)
+        has_std = any(c["dur"] >= 3.0 for c in hook_clips)
+        self.assertTrue(has_punch, f"应包含提神快切段: {[c['dur'] for c in hook_clips]}")
+        self.assertTrue(has_std, f"应包含常规呼吸段: {[c['dur'] for c in hook_clips]}")
+
+    def test_wrist_motion_no_double_weighting(self):
+        """T5 防退化: 手部动作性评分不应在 build_blocks 与 build_plan 中被重复乘算两次。"""
+        from src.tools.build_plan import _segment_score, build_blocks, build_plan
+
+        seg_active = {"start": 4.0, "end": 12.0, "duration": 8.0,
+                      "text": "面料做工纯羊毛走线细节高级。", "wrist_motion": 0.16}
+        base_seg = {"text": "面料做工纯羊毛走线细节高级。", "duration": 8.0}
+
+        base_sc = _segment_score(base_seg, "fabric")
+        single_boost_sc = _segment_score(dict(base_seg, wrist_motion=0.16), "fabric")
+        self.assertAlmostEqual(single_boost_sc / base_sc, 1.30, delta=0.05,
+                               msg="单次加权应约为 1.30 倍")
+
+        # 验证 build_plan 处理后，候选块得分未被二次叠加乘到 1.69 倍
+        blocks, _ = build_blocks([seg_active])
+        score_after_blocks = blocks[0]["scores"]["fabric"]
+        self.assertAlmostEqual(score_after_blocks / base_sc, 1.30, delta=0.05,
+                               msg="build_blocks 后得分加权为 1.30 倍")
+
+    def test_pose_failure_safe_fallback(self):
+        """T5/T6 防退化: pose 检测失败时，wrist_motion 缺失不应触发扣分，ankles_in_frame 不应误判为 True。"""
+        from src.tools.extract_shot_features import frame_features, clip_features
+        import numpy as np
+
+        # 纯黑画面，无人体姿态
+        blank_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        ff = frame_features(blank_frame)
+        self.assertFalse(ff["pose_ok"])
+        self.assertFalse(ff["ankles_in_frame"], "无 pose 关键点时脚踝不应误判为入画")
+
+        # 验证缺失 pose 时候选评分保留基准分，不扣分
+        from src.tools.build_plan import _segment_score
+        seg = {"text": "面料做工纯羊毛走线细节高级。", "duration": 8.0, "wrist_motion": None}
+        base_sc = _segment_score({"text": "面料做工纯羊毛走线细节高级。", "duration": 8.0}, "fabric")
+        none_sc = _segment_score(seg, "fabric")
+        self.assertEqual(base_sc, none_sc, "缺失 pose 特征时评分必须与基线分完全一致")
+
 
 # ================================================================ 封面渲染
 

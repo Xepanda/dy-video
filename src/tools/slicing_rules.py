@@ -338,7 +338,18 @@ def check_full_body_ratio(clips: Sequence[Dict[str, Any]],
         return True, 0.0
     if not clips:
         return True, 0.0
-    full = sum(1 for c in clips if c.get("framing") == "full_body")
+    full = 0
+    for c in clips:
+        framing = c.get("framing")
+        if not framing and (c.get("span") is not None or c.get("body_h") is not None):
+            framing = classify_framing(
+                float(c.get("body_h", 0) or 0),
+                constraints,
+                span=float(c.get("span", 0) or 0) if c.get("span") is not None else None,
+                ankles_in_frame=bool(c.get("ankles_in_frame", True)),
+            )
+        if framing == "full_body":
+            full += 1
     ratio = full / len(clips)
     return ratio >= float(sf.get("full_body_min_ratio", 0.0)), ratio
 
@@ -432,7 +443,8 @@ def resolve_funnel_order(spec: Dict[str, Any], constraints: Dict[str, Any]) -> L
     参考片实测顺序为 hook→fit→craft_detail→styling→decision_closing（半身裙卖点重心是比例而非面料），
     故内置品类预设字典（skirt_dress / coat_outerwear / default），仍可被 spec.options.funnel_order 覆写。
     """
-    rules = constraints.get("slicing_rules", {}) or {}
+    rules = constraints.get("slicing_rules") if (isinstance(constraints, dict) and "slicing_rules" in constraints) else constraints
+    rules = rules or {}
     opts = (spec or {}).get("options", {}) or {}
     override = opts.get("funnel_order")
 

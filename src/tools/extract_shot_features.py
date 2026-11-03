@@ -74,7 +74,7 @@ def frame_features(frame) -> Dict[str, Any]:
     from src.tools.detect_face import FaceAnalyzer, _load_pose_landmarks
     out = {"body_h": 0.0, "span": 0.0, "shoulder_w": 0.0, "face_area": 0.0,
            "fabric_block": 0.0, "pose_ok": False, "face_ok": False,
-           "ankles_in_frame": True, "ankles_y": 0.0}
+           "ankles_in_frame": False, "ankles_y": 0.0}
     try:
         lm = _load_pose_landmarks(frame)
     except Exception:
@@ -170,7 +170,11 @@ def clip_features(video_path: str, st: float, end: float,
 
     wrist_motion = round(float(statistics.median(wrist_disps)), 4) if wrist_disps else 0.0
     torso_motion = round(float(statistics.median(torso_disps)), 4) if torso_disps else 0.0
-    ankles_in = bool(sum(1 for r in rows if r.get("ankles_in_frame", True)) >= (len(rows) / 2.0))
+    valid_pose_for_ankles = [r for r in rows if r.get("pose_ok")]
+    ankles_in = bool(
+        valid_pose_for_ankles and
+        sum(1 for r in valid_pose_for_ankles if r.get("ankles_in_frame")) >= (len(valid_pose_for_ankles) / 2.0)
+    )
 
     return {"body_h": med("body_h"), "span": med("span"),
             "shoulder_w": med("shoulder_w"),

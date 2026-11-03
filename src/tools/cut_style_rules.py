@@ -290,7 +290,8 @@ def check_color_consistency(constraints: Dict[str, Any],
 # ============ R10 节奏与情绪曲线 ============
 
 def measure_pacing(cuts: Sequence[float], segments: Sequence[Dict[str, Any]],
-                   total_sec: float) -> Dict[str, Any]:
+                   total_sec: float,
+                   constraints: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """测量节奏曲线：钩子区切点密度、句长、语速、收紧比。"""
     segs = [s for s in segments if float(s.get("end", 0)) > float(s.get("start", 0))]
     if not segs:
@@ -316,14 +317,17 @@ def measure_pacing(cuts: Sequence[float], segments: Sequence[Dict[str, Any]],
     mid_start, mid_end = 0.25 * total_sec, 0.70 * total_sec
     mid_clips = [c for c in cuts if mid_start <= c <= mid_end]
 
-    # 片段时长离散度测量（2026-11-03 改进方案：σ 与极差比）
     # 片段时长离散度测量（2026-11-03 改进方案：σ 与极差比、提神快切档）
     sorted_cuts = sorted(c for c in cuts if 0.0 < c < total_sec)
     pts = [0.0] + sorted_cuts + [total_sec]
     clip_durs = [round(pts[i + 1] - pts[i], 3) for i in range(len(pts) - 1)] if total_sec > 0 else []
     sigma = statistics.pstdev(clip_durs) if len(clip_durs) >= 2 else 0.0
     ratio_disp = (max(clip_durs) / max(min(clip_durs), 1e-6)) if clip_durs else 1.0
-    punch_count = sum(1 for d in clip_durs if 1.45 <= d <= 2.85)
+
+    p_sec = ((constraints.get("slicing_rules") or {}).get("pacing_curve") or {}) if isinstance(constraints, dict) else {}
+    p_min = float(p_sec.get("punch_min_sec", 1.5) or 1.5)
+    p_max = float(p_sec.get("punch_max_sec", 2.8) or 2.8)
+    punch_count = sum(1 for d in clip_durs if (p_min - 0.05) <= d <= (p_max + 0.05))
 
     return {
         "hook_window_sec": hook_window,

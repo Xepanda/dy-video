@@ -308,7 +308,16 @@ def build_blocks(segments: List[Dict[str, Any]],
         for s in sorted(grp, key=lambda x: x.get("start", 0.0)):
             st = s.get("start", 0.0)
             en = s.get("end", st)
-            if cur is not None and st - cur["end"] <= MERGE_GAP_SEC:
+            wm_split = False
+            if cur is not None:
+                cur_wms = [x["wrist_motion"] for x in cur["segments"] if x.get("wrist_motion") is not None]
+                s_wm = s.get("wrist_motion")
+                if (s_wm is not None) != bool(cur_wms):
+                    wm_split = True
+                elif s_wm is not None and cur_wms:
+                    if abs(s_wm - statistics.median(cur_wms)) >= 0.05:
+                        wm_split = True
+            if cur is not None and st - cur["end"] <= MERGE_GAP_SEC and not wm_split:
                 cur["end"] = max(cur["end"], en)
                 cur["segments"].append(s)
             else:
@@ -338,6 +347,7 @@ def build_blocks(segments: List[Dict[str, Any]],
         if wm is None:
             seg_wms = [s["wrist_motion"] for s in b["segments"] if s.get("wrist_motion") is not None]
             wm = float(statistics.median(seg_wms)) if seg_wms else None
+        b["wrist_motion"] = wm
         b["scores"] = {c: round(_segment_score({"text": text_all, "duration": b["dur"], "wrist_motion": wm}, c, prod_ctx=prod_ctx), 2)
                        for c in ("hook", "fabric", "craft_detail", "fit", "styling", "decision_closing")}
     blocks = [b for b in blocks if not b.get("_drop")]
@@ -387,6 +397,8 @@ def _hook_target_sec(constraints: Dict[str, Any]) -> float:
     try:
         _rules = constraints.get("slicing_rules") or {}
         _pc = _rules.get("pacing_curve") or {}
+        if not _pc.get("enabled", False):
+            return 0.0
         v = _pc.get("hook_target_sec")
         if v:
             return float(v)
@@ -400,13 +412,15 @@ def _hook_punch_params(constraints: Dict[str, Any]) -> Tuple[float, float, int]:
     try:
         _rules = constraints.get("slicing_rules") or {}
         _pc = _rules.get("pacing_curve") or {}
+        if not _pc.get("enabled", False):
+            return 1.5, 2.8, 0
         p_min = float(_pc.get("punch_min_sec", 1.5))
         p_max = float(_pc.get("punch_max_sec", 2.8))
         p_cnt = int(_pc.get("punch_min_count", 1))
         return p_min, p_max, p_cnt
     except Exception:
         pass
-    return 1.5, 2.8, 1
+    return 1.5, 2.8, 0
 
 
 def _resolve_candidate_wrist_motion(b: Dict[str, Any], raw_video_path: Optional[str]) -> Optional[float]:
@@ -429,10 +443,11 @@ def _resolve_candidate_wrist_motion(b: Dict[str, Any], raw_video_path: Optional[
             en = float(b.get("end", st))
             if en > st:
                 feats = clip_features(vid, st, en, samples=3)
-                wm = feats.get("wrist_motion")
-                b["wrist_motion"] = wm
-                b["ankles_in_frame"] = feats.get("ankles_in_frame", True)
-                return wm
+                if feats.get("pose_ok") and feats.get("wrist_motion") is not None:
+                    wm = feats.get("wrist_motion")
+                    b["wrist_motion"] = wm
+                    b["ankles_in_frame"] = feats.get("ankles_in_frame", False)
+                    return wm
         except Exception:
             pass
     return None
@@ -593,9 +608,16 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
             # （2026-10-27：裁剪点吸附句末标点，避免从半句砍断）
             win_st = kept[0].get("start", block["start"])
             win_en = kept[-1].get("end", win_st + target)
+            is_hc = False
             if win_en - win_st > target + 0.05:
                 win_en = _snap_end_to_sentence(kept, win_st + target, pauses=pauses)
+                cut_segs = [s for s in kept if s.get("start", 0) < win_en < s.get("end", 0)]
                 kept = [s for s in kept if s.get("start", 0) < win_en]
+                if cut_segs:
+                    s_cut = cut_segs[0]
+                    rest_tail = dict(s_cut, start=win_en, duration=round(s_cut.get("end", 0) - win_en, 2))
+                    rest = [rest_tail] + rest
+                    is_hc = True
             trimmed = {
                 "start": win_st,
                 "end": win_en,
@@ -606,6 +628,8 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
                 "source_file": block.get("source_file", ""),
                 "source_tag": block.get("source_tag", ""),
             }
+            if is_hc:
+                trimmed["_hard_cut"] = True
             if rest:
                 remainder = {
                     "start": rest[0].get("start", block["start"]),
@@ -640,7 +664,13 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
         use_hard_cut = True
         hard_end = _snap_end_to_sentence(segs, block["start"] + target, pauses=pauses)
         kept = [s for s in segs if s.get("start", 0) < hard_end]
-        rest = [s for s in segs if s.get("start", 0) >= hard_end]
+        cut_segs = [s for s in segs if s.get("start", 0) < hard_end < s.get("end", 0)]
+        if cut_segs:
+            s_cut = cut_segs[0]
+            rest_tail = dict(s_cut, start=hard_end, duration=round(s_cut.get("end", 0) - hard_end, 2))
+            rest = [rest_tail] + [s for s in segs if s.get("start", 0) >= hard_end and s != s_cut]
+        else:
+            rest = [s for s in segs if s.get("start", 0) >= hard_end]
 
     def _mk(segs_subset, force_end=None):
         st = segs_subset[0].get("start", block["start"]) if segs_subset else block["start"]
@@ -656,6 +686,7 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
     if use_hard_cut:
         # 硬裁剪路径：结束于精确目标时刻（防呆：不得因 acc 被改写而误入段对齐路径）
         trimmed = _mk(kept, force_end=block["start"] + target)
+        trimmed["_hard_cut"] = True
     else:
         # 段对齐路径：结束于最后一个整段的段界（与 remainder 无缝衔接，无重叠）
         trimmed = _mk(kept)
@@ -665,8 +696,15 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
         if trimmed["dur"] - target > 0.05:
             hard_end = _snap_end_to_sentence(segs, block["start"] + target, pauses=pauses)
             kept = [s for s in segs if s.get("start", 0) < hard_end]
-            rest = [s for s in segs if s.get("start", 0) >= hard_end]
+            cut_segs = [s for s in segs if s.get("start", 0) < hard_end < s.get("end", 0)]
+            if cut_segs:
+                s_cut = cut_segs[0]
+                rest_tail = dict(s_cut, start=hard_end, duration=round(s_cut.get("end", 0) - hard_end, 2))
+                rest = [rest_tail] + [s for s in segs if s.get("start", 0) >= hard_end and s != s_cut]
+            else:
+                rest = [s for s in segs if s.get("start", 0) >= hard_end]
             trimmed = _mk(kept, force_end=hard_end)
+            trimmed["_hard_cut"] = True
     if rest:
         remainder = _mk(rest)
         if remainder["dur"] >= MIN_BLOCK_SEC:
@@ -907,7 +945,7 @@ def build_plan(
         from src.tools.slicing_rules import load_slicing_rules, resolve_funnel_order
         _sr = load_slicing_rules(constraints)
         if _sr:
-            _order = resolve_funnel_order(spec_data, _sr)
+            _order = resolve_funnel_order(spec_data, constraints)
             if _order and _order != order:
                 meta["notes"].append(f"漏斗顺序按品类预设/覆写: {' → '.join(order)} "
                                      f"→ {' → '.join(_order)}")
@@ -940,26 +978,28 @@ def build_plan(
                  if (cat in b["categories"] or (cat == "craft_detail" and "fabric" in b["categories"]))
                  and id(b) not in used_ids]
         # T5: 对做工与面料类目候选块执行手部动作性（wrist_motion）动态加权打分
+        # 仅当候选块此前未获得 wrist_motion（为 None）且能从源视频提取时，才基于实际特征重新计分，杜绝双重倍率叠加
         if cat in ("fabric", "craft_detail"):
             for b in cands:
-                wm = _resolve_candidate_wrist_motion(b, raw_video_path)
-                if wm is not None:
-                    base_sc = b["scores"].get(cat, 0.0)
-                    if wm >= 0.08:
-                        b["scores"][cat] = round(base_sc * 1.30, 2)
-                    elif wm < 0.03:
-                        b["scores"][cat] = round(max(1.0, base_sc * 0.85), 2)
+                if b.get("wrist_motion") is None:
+                    wm = _resolve_candidate_wrist_motion(b, raw_video_path)
+                    if wm is not None:
+                        b["wrist_motion"] = wm
+                        b["scores"][cat] = round(_segment_score(
+                            {"text": b.get("text", ""), "duration": b.get("dur", 0.0), "wrist_motion": wm},
+                            cat, prod_ctx=prod_ctx), 2)
         cands.sort(key=lambda b: b["scores"].get(cat, 0), reverse=True)
         picked: List[Dict[str, Any]] = []
         acc = 0.0
+        p_min, p_max, p_cnt = _hook_punch_params(constraints)
+        target_limit = min(_hook_target_sec(constraints), q_max) if (cat == "hook" and p_cnt > 0) else q_min
         for b in cands:
-            if acc >= q_min and picked:
+            if acc >= target_limit and picked:
                 break
             # R10 / T4: 钩子区提神快切档（punch_sec 1.5~2.8s 与常规段交替）
-            if cat == "hook" and acc < _hook_target_sec(constraints):
+            if cat == "hook" and p_cnt > 0 and acc < _hook_target_sec(constraints):
                 _cur = b
                 _guard = 0
-                p_min, p_max, p_cnt = _hook_punch_params(constraints)
                 punch_target = round((p_min + p_max) / 2.0, 2)    # 约 2.15s
                 standard_target = _hook_segment_sec(constraints)  # 默认 4.0s
                 while (_cur is not None and acc < _hook_target_sec(constraints)
@@ -976,10 +1016,14 @@ def build_plan(
                     elif len(picked) % 2 == 1:
                         _want = min(_cur["dur"], punch_target)
                     else:
-                        _want = min(_cur["dur"], standard_target)
+                        if len(cands) == 1 and not has_punch and p_min + 1.2 <= _cur["dur"] < standard_target + 1.2:
+                            _want = punch_target
+                        else:
+                            _want = min(_cur["dur"], standard_target)
 
+                    _pk = HOOK_KEYWORDS if len(picked) == 0 else None
                     tb = _trim_block_to_duration(
-                        _cur, _want, prefer_keywords=HOOK_KEYWORDS,
+                        _cur, _want, prefer_keywords=_pk,
                         pauses=_pauses_for(_cur))
                     if tb["dur"] < 1.0 or acc + tb["dur"] > q_max:
                         break
@@ -988,10 +1032,14 @@ def build_plan(
                     used_ids.add(id(_cur))
                     acc += tb["dur"]
                     _rem = tb.pop("remainder", None)
+                    if _rem is not None and _rem["dur"] >= 1.0:
+                        blocks.append(_rem)      # 余料也挂回池，供后续类别复用
+                    if tb.get("_hard_cut"):
+                        _cur = None
+                        break
                     if _rem is None or _rem["dur"] < 1.0:
                         _cur = None
                         break
-                    blocks.append(_rem)      # 余料也挂回池，供后续类别复用
                     _cur = _rem
                 if picked and picked[-1].get("_quota_cat") == cat:
                     continue
@@ -1172,6 +1220,9 @@ def build_plan(
         if b.get("source_file"):
             clip["source_file"] = b["source_file"]
             clip["source_tag"] = b.get("source_tag", "")
+        for feat_k in ("wrist_motion", "ankles_in_frame", "span", "body_h", "framing"):
+            if b.get(feat_k) is not None:
+                clip[feat_k] = b[feat_k]
         # R2：时长区间标记（供 Agent 决策与 QC 复核；不改时长本身）
         if _cd_min or _cd_max < 1e9:
             clip["duration_in_range"] = bool(
