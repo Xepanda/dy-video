@@ -193,6 +193,80 @@ def case_qc_overlay_audit():
     print("[PASS] QC 已接入叠加元素复测 + 音画同步抽检")
 
 
+def case_qc_cover_width_audits_delivered_candidate():
+    """QC 封面宽占比复测必须审计**实际交付**的候选，不能假定 candidates[0]。
+
+    背景（2026-11-01 实测，project-1）：
+      候选池按 frontal_score 降序落盘，但决策网关会逐个校验并**拒绝**
+      不合规项——本次拒绝了 candidates[0]（宽占比 0.341 < 下界 0.36），
+      最终交付 cand_01_201024（宽占比 0.374，合规）。
+      QC 若仍审 candidates[0]，会对一个**从未出现在成片上**的候选做 BLOCK
+      判定，误拦截合规成片（与 §11.2 #4 Hook 卡 y=280 硬编码同类）。
+
+    守卫目标：
+      1) 审计对象由 chosen_cover_id 决定（实际交付项）；
+      2) 门禁未被削弱：指定一个确实超范围的候选仍必须 BLOCK；
+      3) id 缺失/非法时回退 candidates[0]，保持旧调用方兼容。
+    """
+    import json
+    import tempfile
+    import inspect
+    from src.qc.qc_auditor import QcAuditor
+
+    sig = inspect.signature(QcAuditor.audit_final_deliverables)
+    assert "chosen_cover_id" in sig.parameters, \
+        "audit_final_deliverables 应接受 chosen_cover_id（审计实际交付的封面候选）"
+
+    constraints_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "contracts", "constraints.yaml")
+    with open(constraints_path, "r", encoding="utf-8") as f:
+        constraints = yaml.safe_load(f)
+    cover_c = constraints.get("cover", {}) or {}
+    warn_range = cover_c.get("person_width_warn_range", [0.55, 0.85])
+
+    # 构造两个候选：[0] 超范围（模拟被网关拒绝），[1] 合规（模拟实际交付）
+    bad_ratio = float(warn_range[0]) - 0.02
+    good_ratio = float(warn_range[0]) + 0.02
+    cands = [
+        {"id": "cand_bad", "framing": {"achieved_width_ratio": bad_ratio,
+                                        "post_scale_sharpness": 300,
+                                        "knees_visible": True}},
+        {"id": "cand_good", "framing": {"achieved_width_ratio": good_ratio,
+                                        "post_scale_sharpness": 300,
+                                        "knees_visible": True}},
+    ]
+    tmp = tempfile.mktemp(suffix=".json")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cands, f, ensure_ascii=False)
+
+    def _block_fails(chosen_id):
+        auditor = QcAuditor(constraints)
+        auditor._audit_cover_width(tmp, cover_c, chosen_cover_id=chosen_id)
+        return [c for c in auditor.report["checks"]
+                if c.get("status") == "FAIL" and c.get("level") == "BLOCK"]
+
+    try:
+        # 1) 指定实际交付的合规候选 → 不得 BLOCK
+        fails = _block_fails("cand_good")
+        assert not fails, f"审计实际交付的合规候选不应 BLOCK: {fails}"
+        # 2) 门禁未被削弱：指定确实超范围的候选 → 必须 BLOCK
+        fails = _block_fails("cand_bad")
+        assert fails, "审计超范围候选必须 BLOCK（门禁被削弱）"
+        # 3) 不传 id → 回退 candidates[0]（超范围）→ 必须 BLOCK（保持旧行为）
+        fails = _block_fails(None)
+        assert fails, "未指定 id 时应回退 candidates[0] 并对其判定"
+        # 4) 非法 id → 回退 candidates[0] → 必须 BLOCK，且不抛异常
+        fails = _block_fails("__not_exist__")
+        assert fails, "非法 id 应回退 candidates[0] 并对其判定"
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+    print("[PASS] QC 封面宽占比复测审计实际交付候选（门禁强度保持不变）")
+
+
 def case_spec_unified_60fps_and_hook720():
     """2026-10-25 全局统一：帧率 60fps + Hook 标题卡 720×168。
 
@@ -256,6 +330,7 @@ def main():
                case_zoom_timed_transition, case_effect_is_decision_variable,
                case_occlusion_patch, case_split_labels,
                case_qc_overlay_audit,
+               case_qc_cover_width_audits_delivered_candidate,
                case_spec_unified_60fps_and_hook720):
         try:
             fn()

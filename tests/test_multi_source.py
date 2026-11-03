@@ -179,11 +179,76 @@ def case_filler_clean():
     print("[PASS] 用例6 口语填充词清理")
 
 
+def case_source_scan_excludes_own_artifacts():
+    """素材扫描必须排除**本任务自己的产物**（重跑不自我投毒）。
+
+    背景（2026-11-01 实测，project-1）：交付物写入素材目录
+    （`{project_id}.mp4` / `.jpg`），与 raw_video_path 同目录。
+    重跑时若不排除，上一轮的**成片**会被当成第 N+1 段原始素材重新摄入
+    → 素材清单污染（实测 6 段变 7 段，多出的正是上轮成片 project-1.mp4），
+    进而影响选段与成片内容。
+
+    守卫目标：
+      1) 目录扫描排除 `{pid}.mp4` / `{pid}_final.mp4` / `{pid}_cover.jpg`；
+      2) 显式清单（resolved spec 可能被上一轮污染）同样排除；
+      3) 同目录的**真实**原始素材（时间戳命名）不得被误删。
+    """
+    import json
+    import tempfile
+    from scripts.generate_from_job_spec import collect_source_videos
+    from src.agent.agent_director import AgentDirector
+
+    tmpdir = tempfile.mkdtemp(prefix="dy_srcscan_")
+    try:
+        # 真实原始素材（时间戳命名）+ 本任务产物 + 同名别的任务产物
+        real_names = ["20261023125521_20261023125634.mp4",
+                      "20261023125634_20261023130010.mp4"]
+        own_names = ["project-1.mp4", "project-1_final.mp4",
+                     "project-1_cover.jpg"]
+        other_names = ["project-2.mp4"]      # 别的任务的产物 → 不该被本任务排除
+        for n in real_names + own_names + other_names:
+            with open(os.path.join(tmpdir, n), "wb") as f:
+                f.write(b"\x00")
+
+        spec = {
+            "project_id": "project-1",
+            "raw_video_path": tmpdir,
+            "raw_video_paths": [],
+            "options": {},
+        }
+        got = [os.path.basename(p) for p in collect_source_videos(spec, tmpdir)]
+        assert "project-1.mp4" not in got, f"目录扫描未排除自身成片: {got}"
+        assert "project-1_final.mp4" not in got, f"目录扫描未排除历史副本: {got}"
+        for n in real_names:
+            assert n in got, f"真实原始素材被误删: {n}（got={got}）"
+        assert "project-2.mp4" in got, f"误删了其它任务的产物: {got}"
+
+        # 显式清单被上一轮污染时，同样必须排除自身产物
+        spec2 = dict(spec)
+        spec2["raw_video_paths"] = [
+            os.path.join(tmpdir, n) for n in (real_names + ["project-1.mp4"])
+        ]
+        d = AgentDirector.__new__(AgentDirector)   # 不跑 __init__（避免真实素材依赖）
+        d.project_id = "project-1"
+        spec_dir = tmpdir
+        paths = []
+        for p in spec2["raw_video_paths"]:
+            if os.path.exists(p) and not d._is_own_artifact(os.path.basename(p)):
+                paths.append(p)
+        assert "project-1.mp4" not in [os.path.basename(x) for x in paths], \
+            "显式清单未排除自身产物"
+        print("[PASS] 用例7 素材扫描排除自身产物（重跑不自我投毒）")
+    finally:
+        import shutil
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def main():
     failures = []
     for fn in (case_no_cross_file_merge, case_trim_keeps_source,
                case_plan_duration_and_clips, case_no_idle_chatter_in_topup,
-               case_subtitle_polish_keeps_source, case_filler_clean):
+               case_subtitle_polish_keeps_source, case_filler_clean,
+               case_source_scan_excludes_own_artifacts):
         try:
             fn()
         except AssertionError as e:

@@ -177,11 +177,44 @@ def case_constraints_override():
     print("[PASS] constraints.asr_review 阈值可覆盖")
 
 
+def case_isolated_noise_dropped_not_blocked():
+    """个别噪声句应被**丢弃**而非让整个任务失败（2026-11-01）。
+
+    背景：6 段素材里的 2 句口吃（"呃呃呃…"）曾让整个 17 分钟任务
+    被 A2_REPEAT_RUN 阻断。门禁的本意是拦"提示词复读循环"这类
+    **整体退化**（A5 密度校验已覆盖），不该因个别噪声句把整任务毙掉。
+
+    守卫目标：
+      1) 160 句中 2 句噪声 → 放行，且这两句被标记为待丢弃；
+      2) 全部是噪声 → 仍 BLOCK（系统性退化不能放过）；
+      3) 噪声占比 50% → 仍 BLOCK。
+    """
+    segs = [{"start": i * 1.0, "end": i * 1.0 + 0.9,
+             "text": f"第{i}句商品卖点讲解"} for i in range(160)]
+    segs[40] = {"start": 40.0, "end": 41.0, "text": "呃" * 40}
+    segs[90] = {"start": 90.0, "end": 91.0, "text": "呃" * 40}
+    r = AsrReviewGate(media_duration=None).review(segs)
+    assert r["passed"] is True, "个别噪声句不应阻断整个任务"
+    assert r.get("dropped_count") == 2, f"应标记 2 句待丢弃：{r.get('dropped_count')}"
+    assert r.get("dropped_indices") == [40, 90], f"丢弃下标不对：{r.get('dropped_indices')}"
+    assert r.get("drop_ratio", 1.0) < 0.30, "占比应低于上限"
+
+    # 全是噪声 → 系统性退化，仍须 BLOCK
+    bad = [{"start": i * 1.0, "end": i * 1.0 + 0.9, "text": "呃" * 40} for i in range(10)]
+    _expect_block("全片噪声（系统性退化）", bad, code="A2_DROP_RATIO_EXCEEDED")
+    # 噪声占比 50% → 仍须 BLOCK
+    mix = [{"start": i * 1.0, "end": i * 1.0 + 0.9,
+            "text": ("呃" * 40 if i % 2 else f"第{i}句卖点")} for i in range(20)]
+    _expect_block("噪声占比 50%", mix, code="A2_DROP_RATIO_EXCEEDED")
+    print("[PASS] 个别噪声句丢弃不阻断，系统性退化仍阻断")
+
+
 def main():
     failures = []
     for fn in (case_block_points, case_pass_ok, case_warn_escalation,
                case_prompt_echo,
-               case_wired_into_verifier, case_report_persisted, case_constraints_override):
+               case_wired_into_verifier, case_report_persisted, case_constraints_override,
+               case_isolated_noise_dropped_not_blocked):
         try:
             fn()
         except AssertionError as e:

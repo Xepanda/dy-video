@@ -173,6 +173,48 @@ class TestBuildPlan(unittest.TestCase):
         for c in fabric_clips:
             self.assertGreaterEqual(c["zoom"], 1.0)
 
+    def test_decision_closing_selection(self):
+        """S2: decision_closing 类目检索与片尾排序权重。"""
+        from src.tools.build_plan import build_plan, build_blocks
+        # 1. 验证 build_blocks 输出的 scores 包含 decision_closing 分值
+        probe_segs = [
+            {"start": 10.0, "end": 18.0, "duration": 8.0, "text": "普通建议买白色"},
+            {"start": 20.0, "end": 28.0, "duration": 8.0, "text": "纠结选哪个颜色我建议买驼色仙女买白色"},
+        ]
+        probe_blocks, _ = build_blocks(probe_segs)
+        self.assertTrue(all("decision_closing" in b["scores"] for b in probe_blocks),
+                        "block scores 必须包含 decision_closing 评分")
+        self.assertGreater(probe_blocks[1]["scores"]["decision_closing"],
+                           probe_blocks[0]["scores"]["decision_closing"],
+                           "双组促单加权得分应显著高于单组弱促单")
+
+        # 2. 竞争性选段：即使弱候选排在前面，高分强促单候选必须被优先选中并置于片尾
+        segs = list(self.SEGMENTS) + [
+            {"start": 110.0, "end": 118.0, "duration": 8.0,
+             "text": "弱促单：选色可以看看白色一套"},
+            {"start": 120.0, "end": 128.0, "duration": 8.0,
+             "text": "强促单：如果你纠结选哪个颜色我就建议你买驼色了买的人最多小仙女去穿白色一套"},
+        ]
+        constraints = {
+            "video": {
+                "duration_range": [45, 65],
+                "funnel": {
+                    "hook": {"min": 3, "max": 8},
+                    "fabric": {"min": 8, "max": 20},
+                    "fit": {"min": 8, "max": 15},
+                    "styling": {"min": 15, "max": 30},
+                    "decision_closing": {"min": 6, "max": 12},
+                },
+            }
+        }
+        plan = build_plan("dummy.mp4", segs, self.SPEC, constraints)
+        clips = plan["clips"]
+        last_clip = clips[-1]
+        self.assertEqual(last_clip["category"], "decision_closing",
+                         f"成片末段应为 decision_closing: {[c['category'] for c in clips]}")
+        self.assertIn("强促单", last_clip["desc"], "高分强促单候选必须优先被选入成片尾部")
+        self.assertIn("驼色", last_clip["desc"])
+
     def test_blacklist_no_price(self):
         from src.tools.build_plan import build_blocks
         segs = [{"start": 0.0, "end": 2.0, "duration": 2.0, "text": "到手价只要299"},

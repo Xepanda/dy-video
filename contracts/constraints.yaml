@@ -272,10 +272,190 @@ video:
   # funnel_enforce_level 可升为 BLOCK（需附回归结果，阈值变更纪律）
   funnel_enforce_level: WARN
   funnel:
-    hook:      { min: 3,  max: 8  }
-    fabric:    { min: 8,  max: 20 }
-    fit:       { min: 8,  max: 15 }
-    styling:   { min: 15, max: 30 }
+    # hook 上限 8 → 12（2026-11-02，R10 节奏曲线）：原 3~8s 只能容下 **1 个**短段，
+    # 导致钩子区只有 1 个切点、开场 6.4s 不够抓人（实测 R10 FAIL）。
+    # 参考片钩子区（0~10s）有 **3 个切点**，段长 1.78/4.72/6.73s。
+    hook:              { min: 3,  max: 12 }
+    fabric:            { min: 8,  max: 20 }
+    fit:               { min: 8,  max: 15 }
+    styling:           { min: 15, max: 30 }
+    decision_closing:  { min: 6,  max: 12 }
+
+# ============ 切片规则（2026-11-01 新增）============
+# 来源：参考成品 SSY410163_蝴蝶结高腰A字半身裙_切片.mp4 的实测拆解
+#       （证据见 docs/reference_cut_analysis_SSY410163.md）
+# 定位：把"人工切片为什么这么切"翻译成**可判定**的阈值，供 build_plan 选段、
+#       切片时长控制、镜头多样性约束与 QC 断言消费。
+# 纪律：每个键必须有消费点（§11.4 #20）；未接线的一律 state: disabled 并登记原因。
+slicing_rules:
+  enabled: true
+  # ---- R1 切点落在 ASR 句末（语义边界），气口仅作辅助精调 ----
+  # 参考片实测：9 个切点与最近 ASR 句末偏移中位 **0.03s**、最大 0.37s。
+  # → 真正可复现的规则是"切在句末"（本仓库已有 _snap_end_to_sentence 承载），
+  #   气口只用于在**多个候选句末之间**做精调，不改变"切在句末"这一大原则。
+  #
+  # ⚠️ 实测修正（2026-11-01）：参考成片切点处的 −120dB 是**拼接产物**
+  #    （剪辑软件切音轨留下的缝），**不是**选段信号——
+  #    源侧凹陷在切点处中位 8.2dB，与随机点 9.4dB 无富集（0/9 命中随机 95 分位）。
+  #    且直播素材底噪高（实测 −53.4dB），绝对静音阈值在原始素材上命中 0 处。
+  #    故气口判据必须用**相对凹陷**（相对局部语流电平的下陷深度），
+  #    阈值随素材自适应（见 slicing_rules.adaptive_silence_db）。
+  cut_on_speech_pause:
+    enabled: true
+    # 主判据：切点必须落在 ASR 句末（本仓库既有能力），此处定义其**允许偏移**。
+    # 参考片实测偏移中位 0.03s / 最大 0.37s → 容差 0.45s 既覆盖真实分布，
+    # 又远小于旧值 2.0s（2.0s 会把切点挪到别的句子上）。
+    max_offset_from_sentence: 0.45
+    # 句末吸附的搜索窗口（宁短勿长：只向前找，不越过后一句）
+    snap_tolerance_sec: 0.45
+    # 辅助精调：气口（相对凹陷）的最小深度 dB。低于此值的凹陷不算气口。
+    dip_threshold_db: 8.0
+    # 气口搜索窗口（在句末附近 ±该窗口内找更深的凹陷）
+    search_window_sec: 0.40
+    # 自适应静音阈值：thr = max(absolute_db, 素材底噪 + floor_margin_db)
+    absolute_db: -60.0
+    floor_margin_db: 6.0
+    # 找不到气口时回退：保留原句末标点切点
+    fallback: keep_punctuation
+    # 画面变化但语音连续的"句内视觉切点"允许存在（参考片 2/9 = 22%），
+    # 但占比不得超过该上限，避免通篇跳切。
+    intra_sentence_cut_max_ratio: 0.30
+  # ---- R2 片段时长区间（参考片 11 段：5~10s 占 45%，中位 5.82s，区间 1.51~12.96s）----
+  # ⚠️ 2026-11-03 修正：原先按"10 段"标定 min_sec=1.7（最短段误记为 1.78s）。
+  #    复核发现参考片实为 **11 段**（漏检 49.24s 切点——帧差 5.1×中位，
+  #    Δα=0.515 单帧跳变，是一个 1.51s 的"提神快切"）。
+  #    真实最短段 1.51s → 下限须放宽到 1.5，否则会误判参考片自身的快切段。
+  clip_duration:
+    enabled: true
+    min_sec: 1.5                # 参考片最短段 1.51s；低于此判"碎切"
+    target_sec: 6.3             # 参考片中位
+    max_sec: 13.0               # 参考片最长段 12.97s；超过判"拖沓"
+    enforce_level: WARN         # WARN 不拦截（类目稀薄素材不应被一票否决）
+  # ---- R3 镜头景别（参考片 9/10 全身，span 中位 0.640、区间 0.473~0.996）----
+  # 判据用 **span**（头顶→踝 = 人物在画面中的完整可见高度），不用 body_h（肩→踝）——
+  # 后者受站姿/抬腿影响大，实测同一片段波动 ±0.08，会造成误判。
+  # 主体须完整入画，保证"上身效果"可判。
+  shot_framing:
+    enabled: true
+    min_body_height_ratio: 0.45     # 全身景别门槛（span 归一化跨度）
+    target_body_height_ratio: 0.60  # 参考片 span 中位 0.640；作为**下限**用（含 10% 容差）
+    full_body_min_ratio: 0.70       # 全身景别在成片中所占比例下限（参考片 100%）
+    enforce_level: WARN
+  # ---- R4 展示角度多样性（参考片 10 段 10 种角度，相邻不重）----
+  shot_variety:
+    enabled: true
+    min_distinct_angles: 3          # 成片至少 3 种不同展示角度
+    max_same_angle_consecutive: 1   # 同角度最多连续 1 段（即不允许连续 2 段同角度）
+    enforce_level: WARN
+  # ---- R5 语音密度（参考片 96.4%，几乎无冷场）----
+  speech_density:
+    enabled: true
+    min_ratio: 0.85             # 成片有声时长 / 总时长 下限
+    enforce_level: WARN
+  # ---- R6 卖点顺序可按品类覆写（参考片是 hook→fit→fabric→styling，与默认相反）----
+  # 半身裙卖点重心是"比例显瘦"而非面料质感：面料只占 14%。
+  # 顺序键沿用 build_plan 的漏斗类目；由 spec.options.funnel_order 覆写。
+  funnel_order_overridable: true
+  default_funnel_order: [hook, fabric, fit, styling]
+
+  # ---- R7 转场风格（2026-11-02 新增：参考成片实测 9/9 全硬切）----
+  # 实测证据（SSY410163_切片.mp4）：
+  #   · 9 个切点的 α(t) 演化均为**单帧跳变**（最大 Δα 0.41~0.90），
+  #     逐帧差分在切点处仅 1 帧尖峰（跳变值为片内中位的 14.1 倍）；
+  #   · 零个切点存在可被线性混合解释的中间帧 → **无任何叠化/转场**。
+  #   · 音频侧同步为硬接：切点处为 -82~-120dB 数字静音（跨fade 会抹平此特征）。
+  # 对照：本仓库默认 transition_effect = fade 0.25s（xfade+acrossfade），
+  #   与参考片的剪辑语言相反 → 见 docs/reference_cut_style_analysis.md 改进方案。
+  transition_style:
+    enabled: true
+    # hard_cut（参考片实测，纯硬切）| dissolve（叠化）| mixed（按 sell_point 决定）
+    mode: hard_cut
+    # dissolve 模式下的叠化时长区间（秒）。参考片为 0 → 用 0 表示硬切。
+    dissolve_sec: 0.0
+    dissolve_sec_max: 0.0
+    # 音频侧是否随视频做交叉淡化（acrossfade）。
+    # 参考片实测：硬切处是数字静音 → 不同步淡化（false）。
+    audio_crossfade: false
+    # 10ms 防爆音微淡化（D1 §1.5.3 / 改进 1 / C12）：消除硬切接缝处零交叉截断导致的 Click/Pop
+    micro_afade_sec: 0.01
+    # 硬切时是否在切点插入极短静音（"接缝静音"）。
+    # 参考片实测切点处为数字静音，但那是**拼接产物**而非有意设计，
+    # 故默认 false——不刻意制造静音，靠素材本身的自然气口。
+    insert_silence_gap: false
+    silence_gap_sec: 0.0
+    enforce_level: WARN
+
+  # ---- R8 音频风格（2026-11-02 新增：参考成片实测零 BGM、零音效、纯人声）----
+  # 实测证据：
+  #   · 频谱低频/中频比 -21.2dB（语音主导，BGM 会显著抬高该比值）；
+  #   · 句间空隙中位电平 -36.8dB，接近底噪；动态范围 14.9dB；
+  #   · 全片无 Boom/转场音效痕迹，无音乐床。
+  #   · 响度 I=-15.3 LUFS / LRA=1.5 LU / TP=-1.5dBFS（已做标准化）。
+  # 对照：本仓库默认混入 Sub-Bass Boom 重音 → 与参考片风格冲突。
+  audio_style:
+    enabled: true
+    # 是否叠加背景音乐（参考片无 → false）
+    bgm_enabled: false
+    # 是否叠加 Boom/转场音效（参考片无 → false）
+    boom_sfx_enabled: false
+    # 目标综合响度（EBU R128）。参考片 -15.3 LUFS。
+    target_lufs: -15.0
+    lufs_tolerance: 1.5
+    # 响度动态范围上限（LU）。参考片 1.5 LU——极窄，说明做过标准化压缩。
+    max_lra: 4.0
+    # 语音占比下限（有声时长/总时长）。参考片 96.4%。
+    min_speech_ratio: 0.85
+    # 切点是否允许音频断缝（参考片切点处有数字静音 → true）
+    allow_cut_audio_gap: true
+    enforce_level: WARN
+
+  # ---- R9 调色一致性（2026-11-02 新增：参考成片段间变异系数 0.8%~7.8%）----
+  # 实测证据（逐段取中位）：
+  #   R/G 白平衡 1.6% / B/G 1.1% / 饱和 9.9% / 亮度 3.7% / 对比 9.8%
+  #   → 参考片整片色调统一（做过统一调色或同机位同灯光）。
+  #   段间跳变会让"商品颜色"失真（观众分不清卡其/奶白），属带货硬伤。
+  color_consistency:
+    enabled: true
+    # 各指标的段间变异系数上限（%）
+    max_cv_white_balance: 8.0     # R/G、B/G
+    max_cv_saturation: 12.0
+    max_cv_brightness: 8.0
+    max_cv_contrast: 12.0
+    # 采样：每段取 N 帧中位
+    samples_per_clip: 3
+    enforce_level: WARN
+
+  # ---- R10 节奏与情绪曲线（2026-11-02 新增）----
+  # 实测证据（参考片 69.34s / 10 段）：
+  #   · 前 10s 切点最密（3 个）→ 钩子区快切抓人；
+  #   · 句长中位数由前段 2.84s 收紧至后段 1.44s（中 1/3 段 1.42s）；
+  #   · 语速 432 → 376 字/分（**变慢**），但句子变短 → 换气更密、更像真人对话；
+  #   · 10~20s 区段切点数为 0（最长单段 12.97s）→ 中段留给"比例显瘦"的核心论证。
+  # 即：节奏不是"越快越好"，而是**钩子快 → 中段慢 → 尾段再起**的三段式。
+  pacing_curve:
+    enabled: true
+    # 开场钩子区（0~10s）的切点密度下限（个/10s）
+    hook_cuts_per_10s_min: 2
+    # 开场区切点密度上限——过密会显得慌乱
+    hook_cuts_per_10s_max: 4
+    # 句长中位数区间（秒）：过短=碎，过长=闷
+    sentence_len_min: 1.2
+    sentence_len_max: 3.0
+    # 语速区间（字/分）
+    speech_rate_min: 300
+    speech_rate_max: 480
+    # 首尾段的句长收紧比（后 1/3 中位 / 前 1/3 中位），<1 表示后段更碎更快
+    tightening_ratio_max: 0.85
+    # 中段（25%~70%）允许的最长单段（秒）——核心论证需要留白
+    mid_section_max_clip: 13.0
+    # 钩子区的选段参数（供 build_plan 制造多个短切点，而非一个长段）
+    # 参考片钩子区段长 1.78/4.72/6.73s（0~10s 内 3 个切点）
+    hook_segment_sec: 4.0        # 钩子区单段目标时长
+    hook_target_sec: 10.0        # 钩子区累计目标时长（达到即停止继续切分）
+    # 时长离散度（σ / 极差比，2026-11-03，防平铺切片，参考片 σ=3.55s / 极差比 8.58）
+    min_duration_sigma: 2.2      # 片段时长标准差下限（秒）
+    min_duration_ratio: 4.0      # 最长段/最短段 时长比值下限
+    enforce_level: WARN
 
 # ============ 音频约束（V4）============
 audio:
@@ -306,6 +486,10 @@ asr_review:
   traditional_block: true
   cjk_min_ratio: 0.55        # 中文字符占比下限，低于记 WARN（疑似乱码）
   repeat_run_len: 5          # 连续重复字符阈值（"啊啊啊啊"判为噪声串）
+  # 2026-11-01：噪声句处理策略——个别噪声句**丢弃**而非阻断整个任务；
+  # 丢弃占比超此上限才判"系统性转录退化"并 BLOCK。
+  # 实测：6 段素材里 2 句口吃曾让整个 17 分钟任务被 A2_REPEAT_RUN 阻断。
+  drop_ratio_limit: 0.30
 
 # ============ 字幕禁用错词（ASR 同音错字黑名单，QC 断言）============
 subtitle_banned_tokens:
