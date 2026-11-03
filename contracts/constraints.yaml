@@ -277,6 +277,7 @@ video:
     # 参考片钩子区（0~10s）有 **3 个切点**，段长 1.78/4.72/6.73s。
     hook:              { min: 3,  max: 12 }
     fabric:            { min: 8,  max: 20 }
+    craft_detail:      { min: 8,  max: 20 }
     fit:               { min: 8,  max: 15 }
     styling:           { min: 15, max: 30 }
     decision_closing:  { min: 6,  max: 12 }
@@ -357,6 +358,11 @@ slicing_rules:
   # 顺序键沿用 build_plan 的漏斗类目；由 spec.options.funnel_order 覆写。
   funnel_order_overridable: true
   default_funnel_order: [hook, fabric, fit, styling]
+  # ---- 品类漏斗预设字典（2026-11-03 T7）----
+  funnel_orders:
+    skirt_dress: [hook, fit, craft_detail, styling, decision_closing]
+    coat_outerwear: [hook, fabric, fit, styling, decision_closing]
+    default: [hook, fabric, fit, styling, decision_closing]
 
   # ---- R7 转场风格（2026-11-02 新增：参考成片实测 9/9 全硬切）----
   # 实测证据（SSY410163_切片.mp4）：
@@ -452,6 +458,10 @@ slicing_rules:
     # 参考片钩子区段长 1.78/4.72/6.73s（0~10s 内 3 个切点）
     hook_segment_sec: 4.0        # 钩子区单段目标时长
     hook_target_sec: 10.0        # 钩子区累计目标时长（达到即停止继续切分）
+    # 提神快切档（2026-11-03 T4：1.5~2.8s，最少 1 段，打破开场均质化）
+    punch_min_sec: 1.5           # 提神快切单段时长下限（秒）
+    punch_max_sec: 2.8           # 提神快切单段时长上限（秒）
+    punch_min_count: 1           # 提神快切最少段数（个）
     # 时长离散度（σ / 极差比，2026-11-03，防平铺切片，参考片 σ=3.55s / 极差比 8.58）
     min_duration_sigma: 2.2      # 片段时长标准差下限（秒）
     min_duration_ratio: 4.0      # 最长段/最短段 时长比值下限

@@ -311,10 +311,11 @@ def trim_to_duration_window(dur: float, constraints: Dict[str, Any]) -> float:
 # ---------------------------------------------------------------- R3 景别
 
 def classify_framing(body_h: float, constraints: Dict[str, Any],
-                    span: float = None) -> str:
+                     span: float = None, ankles_in_frame: bool = True) -> str:
     """按人物可见高度判定景别：'full_body' / 'partial' / 'invalid'。
 
     span（头顶→踝）优先——实测同一片段 body_h 波动 ±0.08，span 稳定得多。
+    T6: 若脚踝出画（ankles_in_frame=False），强制降级为 partial，防止 span 外推误判。
     """
     sf = (constraints.get("slicing_rules", {}) or {}).get("shot_framing") or {}
     if not sf.get("enabled", True):
@@ -322,6 +323,8 @@ def classify_framing(body_h: float, constraints: Dict[str, Any],
     v = span if (span is not None and span > 0) else body_h
     if v is None or v <= 0:
         return "invalid"
+    if not ankles_in_frame:
+        return "partial"
     if v >= float(sf.get("min_body_height_ratio", 0.45)):
         return "full_body"
     return "partial"
@@ -424,23 +427,49 @@ def check_speech_density(speech_sec: float, total_sec: float,
 # ---------------------------------------------------------------- R6 漏斗顺序
 
 def resolve_funnel_order(spec: Dict[str, Any], constraints: Dict[str, Any]) -> List[str]:
-    """漏斗顺序：默认取 constraints，spec.options.funnel_order 可覆写（R6）。
+    """漏斗顺序：支持品类预设字典（T7），且 spec.options.funnel_order 可覆写（R6）。
 
-    参考片实测顺序为 hook→fit→fabric→styling（半身裙卖点重心是比例而非面料），
-    故顺序必须可按品类覆写，不能硬编码。
+    参考片实测顺序为 hook→fit→craft_detail→styling→decision_closing（半身裙卖点重心是比例而非面料），
+    故内置品类预设字典（skirt_dress / coat_outerwear / default），仍可被 spec.options.funnel_order 覆写。
     """
     rules = constraints.get("slicing_rules", {}) or {}
-    default = list(rules.get("default_funnel_order")
-                   or ["hook", "fabric", "fit", "styling"])
-    if not rules.get("funnel_order_overridable", True):
-        return default
     opts = (spec or {}).get("options", {}) or {}
     override = opts.get("funnel_order")
+
+    # T7 品类预设字典
+    funnel_orders = rules.get("funnel_orders") or {}
+    fo_skirt = funnel_orders.get("skirt_dress")
+    fo_coat = funnel_orders.get("coat_outerwear")
+    fo_default = funnel_orders.get("default")
+
+    cat_key = (spec or {}).get("category") or opts.get("category") or ((spec or {}).get("product") or {}).get("category")
+    if not cat_key and (spec or {}).get("product"):
+        title = f"{spec['product'].get('title_line1', '')} {spec['product'].get('title_line2', '')}"
+        if any(w in title for w in ("裙", "半裙", "半身裙", "连衣裙")):
+            cat_key = "skirt_dress"
+        elif any(w in title for w in ("大衣", "外套", "羽绒服", "风衣", "皮衣", "棉服", "西装")):
+            cat_key = "coat_outerwear"
+
+    if cat_key == "skirt_dress" and fo_skirt:
+        base_order = list(fo_skirt)
+    elif cat_key == "coat_outerwear" and fo_coat:
+        base_order = list(fo_coat)
+    elif cat_key and cat_key in funnel_orders:
+        base_order = list(funnel_orders[cat_key])
+    elif not cat_key and rules.get("default_funnel_order"):
+        base_order = list(rules.get("default_funnel_order"))
+    elif fo_default:
+        base_order = list(fo_default)
+    else:
+        base_order = list(rules.get("default_funnel_order")
+                          or ["hook", "fabric", "fit", "styling"])
+
+    if not rules.get("funnel_order_overridable", True):
+        return base_order
     if not override:
-        return default
-    order = [str(c) for c in override if str(c) in default]
-    # 未列出的类目按默认顺序补在后面，保证不漏类目
-    for c in default:
+        return base_order
+    order = [str(c) for c in override if str(c) in base_order or str(c) in ("hook", "fabric", "craft_detail", "fit", "styling", "decision_closing")]
+    for c in base_order:
         if c not in order:
             order.append(c)
     return order

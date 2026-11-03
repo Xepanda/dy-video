@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
+import statistics
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -68,26 +70,46 @@ def _fabric_block(frame) -> float:
 
 
 def frame_features(frame) -> Dict[str, Any]:
-    """单帧的画面特征（MediaPipe Pose + 人脸 + 织物色块）。"""
+    """单帧的画面特征（MediaPipe Pose + 人脸 + 织物色块 + 动态骨骼坐标）。"""
     from src.tools.detect_face import FaceAnalyzer, _load_pose_landmarks
     out = {"body_h": 0.0, "span": 0.0, "shoulder_w": 0.0, "face_area": 0.0,
-           "fabric_block": 0.0, "pose_ok": False, "face_ok": False}
+           "fabric_block": 0.0, "pose_ok": False, "face_ok": False,
+           "ankles_in_frame": True, "ankles_y": 0.0}
     try:
         lm = _load_pose_landmarks(frame)
     except Exception:
         lm = None
     if lm is not None:
         try:
-            sh = (lm[11].y + lm[12].y) / 2.0
-            ank = (lm[27].y + lm[28].y) / 2.0
+            sh_x = (lm[11].x + lm[12].x) / 2.0
+            sh_y = (lm[11].y + lm[12].y) / 2.0
+            ank_y = (lm[27].y + lm[28].y) / 2.0
             head_top = min(lm[0].y, lm[1].y)
             # body_h：肩→踝（躯干+腿的可见跨度）
-            out["body_h"] = float(abs(ank - sh))
+            out["body_h"] = float(abs(ank_y - sh_y))
             # span：头顶→踝 = 人物在画面中的**完整可见高度**（景别主判据）
             # 用 span 而非 body_h：后者受站姿/抬腿影响大，参考片实测波动 ±0.08。
-            out["span"] = float(abs(ank - head_top))
+            out["span"] = float(abs(ank_y - head_top))
             out["shoulder_w"] = float(abs(lm[11].x - lm[12].x))
             out["pose_ok"] = True
+
+            # T5 手腕相对躯干/肩中心归一化坐标供时序动作性计算
+            out["torso_xy"] = (float(sh_x), float(sh_y))
+            out["wrist_l_rel"] = (float(lm[15].x - sh_x), float(lm[15].y - sh_y))
+            out["wrist_r_rel"] = (float(lm[16].x - sh_x), float(lm[16].y - sh_y))
+
+            # T6 脚踝出画判定（防 MediaPipe 外推虚高导致半身/膝上景判全身）
+            ank_y_l, ank_y_r = float(lm[27].y), float(lm[28].y)
+            ank_vis_l = float(getattr(lm[27], "visibility", 1.0))
+            ank_vis_r = float(getattr(lm[28], "visibility", 1.0))
+            ankles_out = (
+                (ank_y_l > 1.0 and ank_y_r > 1.0) or
+                (ank_vis_l < 0.5 and ank_vis_r < 0.5) or
+                (ank_y > 1.0) or
+                (ank_y_l > 1.05 or ank_y_r > 1.05)
+            )
+            out["ankles_in_frame"] = not bool(ankles_out)
+            out["ankles_y"] = float(ank_y)
         except Exception:
             pass
     try:
@@ -112,7 +134,8 @@ def clip_features(video_path: str, st: float, end: float,
     dur = max(0.0, float(end) - float(st))
     if dur <= 0:
         return {"body_h": 0.0, "span": 0.0, "shoulder_w": 0.0, "face_area": 0.0,
-                "fabric_block": 0.0, "n_samples": 0, "pose_ok": False}
+                "fabric_block": 0.0, "wrist_motion": 0.0, "torso_motion": 0.0,
+                "ankles_in_frame": False, "n_samples": 0, "pose_ok": False}
     ts = [float(st) + dur * (i + 1) / (samples + 1) for i in range(samples)]
     rows: List[Dict[str, Any]] = []
     for t in ts:
@@ -122,15 +145,38 @@ def clip_features(video_path: str, st: float, end: float,
         rows.append(frame_features(fr))
     if not rows:
         return {"body_h": 0.0, "span": 0.0, "shoulder_w": 0.0, "face_area": 0.0,
-                "fabric_block": 0.0, "n_samples": 0, "pose_ok": False}
+                "fabric_block": 0.0, "wrist_motion": 0.0, "torso_motion": 0.0,
+                "ankles_in_frame": False, "n_samples": 0, "pose_ok": False}
 
     def med(k: str) -> float:
-        vals = sorted(float(r.get(k, 0.0)) for r in rows)
-        return round(vals[len(vals) // 2], 4)
+        vals = sorted(float(r.get(k, 0.0)) for r in rows if r.get(k) is not None)
+        return round(vals[len(vals) // 2], 4) if vals else 0.0
+
+    # T5: 计算跨采样帧的手部动态动作性（手腕相对躯干位移中位）
+    wrist_disps = []
+    torso_disps = []
+    valid_pose_rows = [r for r in rows if r.get("pose_ok") and "wrist_l_rel" in r]
+    if len(valid_pose_rows) >= 2:
+        for i in range(len(valid_pose_rows) - 1):
+            r1, r2 = valid_pose_rows[i], valid_pose_rows[i + 1]
+            dl = math.hypot(r2["wrist_l_rel"][0] - r1["wrist_l_rel"][0],
+                            r2["wrist_l_rel"][1] - r1["wrist_l_rel"][1])
+            dr = math.hypot(r2["wrist_r_rel"][0] - r1["wrist_r_rel"][0],
+                            r2["wrist_r_rel"][1] - r1["wrist_r_rel"][1])
+            wrist_disps.append(max(dl, dr))
+            dt = math.hypot(r2["torso_xy"][0] - r1["torso_xy"][0],
+                            r2["torso_xy"][1] - r1["torso_xy"][1])
+            torso_disps.append(dt)
+
+    wrist_motion = round(float(statistics.median(wrist_disps)), 4) if wrist_disps else 0.0
+    torso_motion = round(float(statistics.median(torso_disps)), 4) if torso_disps else 0.0
+    ankles_in = bool(sum(1 for r in rows if r.get("ankles_in_frame", True)) >= (len(rows) / 2.0))
 
     return {"body_h": med("body_h"), "span": med("span"),
             "shoulder_w": med("shoulder_w"),
             "face_area": med("face_area"), "fabric_block": med("fabric_block"),
+            "wrist_motion": wrist_motion, "torso_motion": torso_motion,
+            "ankles_in_frame": ankles_in,
             "n_samples": len(rows),
             "pose_ok": any(r.get("pose_ok") for r in rows),
             "face_ok": any(r.get("face_ok") for r in rows)}
@@ -167,6 +213,9 @@ def annotate_clips(clips: List[Dict[str, Any]], default_video: str,
         c["shoulder_w"] = feats.get("shoulder_w", 0.0)
         c["face_area"] = feats.get("face_area", 0.0)
         c["fabric_block"] = feats.get("fabric_block", 0.0)
+        c["wrist_motion"] = feats.get("wrist_motion", 0.0)
+        c["torso_motion"] = feats.get("torso_motion", 0.0)
+        c["ankles_in_frame"] = feats.get("ankles_in_frame", True)
         c["framing"] = _framing_of(c, feats)
     if cache_path and changed:
         try:
@@ -179,7 +228,7 @@ def annotate_clips(clips: List[Dict[str, Any]], default_video: str,
 
 
 def _framing_of(clip: Dict[str, Any], feats: Dict[str, Any]) -> str:
-    """按 body_h 判定景别（阈值与 constraints.slicing_rules.shot_framing 一致）。"""
+    """按 body_h / span 判定景别（阈值与 constraints.slicing_rules.shot_framing 一致）。"""
     import yaml
     thr = 0.50
     try:
@@ -193,6 +242,9 @@ def _framing_of(clip: Dict[str, Any], feats: Dict[str, Any]) -> str:
     bh = float(feats.get("span", 0.0) or feats.get("body_h", 0.0) or 0.0)
     if bh <= 0:
         return "invalid"
+    # T6 景别出画校验：脚踝出画时（如膝上/半身景），强制降级为 partial，防止 span 外推误判 full_body
+    if not feats.get("ankles_in_frame", True):
+        return "partial"
     return "full_body" if bh >= thr else "partial"
 
 

@@ -23,6 +23,7 @@ import os
 import sys
 import json
 import re
+import statistics
 import argparse
 from typing import List, Dict, Any, Tuple, Optional
 
@@ -70,6 +71,16 @@ STYLING_KEYWORDS = ["搭配", "穿搭", "裤子", "裤腿", "格子裤", "编织
 DECISION_CLOSING_KEYWORDS = ["纠结", "买哪个", "建议", "首选", "驼色", "白色", "买的人多",
                             "适合谁", "仙女", "推荐入", "闭眼入", "买它", "入哪个", "拍哪个",
                             "拍它", "哪款", "选哪个", "选色", "选哪个颜色", "显白", "百搭色"]
+CRAFT_DETAIL_KEYWORDS = ["做工", "手搓", "包边", "固定", "松紧", "自系", "容易松", "容易歪",
+                        "本布", "缝线", "走线", "细节", "工艺", "针法", "针脚", "拉链",
+                        "扣子", "纽扣", "内衬", "里布", "压线", "拷边"]
+
+# T7 品类漏斗预设字典（唯一事实源在 contracts/constraints.yaml，此处提供内置兜底）
+FUNNEL_ORDERS = {
+    "skirt_dress": ["hook", "fit", "craft_detail", "styling", "decision_closing"],
+    "coat_outerwear": ["hook", "fabric", "fit", "styling", "decision_closing"],
+    "default": ["hook", "fabric", "fit", "styling", "decision_closing"],
+}
 
 # 库存/促销/换款离场黑名单（正则，无时间窗；由旧 demo 黑名单泛化而来）
 # 2026-10-21 泛化验收修正：删除/收紧会误杀"穿搭/面料/版型"内容词的模式——
@@ -151,6 +162,8 @@ def _classify(text: str, prod_ctx: Dict[str, Any] = None) -> List[str]:
         cats.append("hook")
     if not is_pure_pants and any(k in text for k in FABRIC_KEYWORDS):
         cats.append("fabric")
+    if not is_pure_pants and any(k in text for k in CRAFT_DETAIL_KEYWORDS):
+        cats.append("craft_detail")
     if any(k in text for k in FIT_KEYWORDS):
         cats.append("fit")
     if any(k in text for k in STYLING_KEYWORDS):
@@ -203,9 +216,10 @@ def is_blacklisted(text: str, use_price: bool = True,
 # ---------------------------------------------------------------- 块构建
 
 def _segment_score(seg: Dict[str, Any], category: str, prod_ctx: Dict[str, Any] = None) -> float:
-    """段在指定类别下的得分：关键词命中数 × 时长权重 + 目标商品契合加权。"""
+    """段在指定类别下的得分：关键词命中数 × 时长权重 + 目标商品契合加权 + 手部动态动作性加权。"""
     kw_map = {
         "hook": HOOK_KEYWORDS, "fabric": FABRIC_KEYWORDS,
+        "craft_detail": CRAFT_DETAIL_KEYWORDS,
         "fit": FIT_KEYWORDS, "styling": STYLING_KEYWORDS,
         "decision_closing": DECISION_CLOSING_KEYWORDS,
     }
@@ -213,6 +227,17 @@ def _segment_score(seg: Dict[str, Any], category: str, prod_ctx: Dict[str, Any] 
     hits = sum(1 for k in kw_map.get(category, []) if k in text)
     dur = seg.get("duration", 0.0)
     score = hits * 2.0 + min(dur, 8.0) * 0.5
+
+    # T5: 做工与面料类目手部动态动作性加权（wrist_motion）
+    if category in ("fabric", "craft_detail") and seg.get("wrist_motion") is not None:
+        try:
+            wm = float(seg["wrist_motion"])
+            if wm >= 0.08:
+                score *= 1.30
+            elif wm < 0.03:
+                score *= 0.85
+        except Exception:
+            pass
 
     # 选色决策类目尾部加权（2026-11-03，D1 改进 3/8，D5 借鉴 5）
     if category == "decision_closing":
@@ -236,7 +261,7 @@ def _segment_score(seg: Dict[str, Any], category: str, prod_ctx: Dict[str, Any] 
             mentions_pants = len(re.findall(r"裤", text))
             has_top_kw = any(w in text for w in ("毛衣", "开衫", "针织", "衣服", "上衣", "大衣", "外套", "小香", "上身", "搭", "穿搭"))
             if mentions_pants >= 2 and not has_top_kw:
-                if category in ("hook", "fabric"):
+                if category in ("hook", "fabric", "craft_detail"):
                     score -= 50.0
                 else:
                     score -= 15.0
@@ -309,8 +334,12 @@ def build_blocks(segments: List[Dict[str, Any]],
         for s in b["segments"]:
             cats.update(_classify(s.get("text", ""), prod_ctx=prod_ctx))
         b["categories"] = sorted(cats)
-        b["scores"] = {c: round(_segment_score({"text": text_all, "duration": b["dur"]}, c, prod_ctx=prod_ctx), 2)
-                       for c in ("hook", "fabric", "fit", "styling", "decision_closing")}
+        wm = b.get("wrist_motion")
+        if wm is None:
+            seg_wms = [s["wrist_motion"] for s in b["segments"] if s.get("wrist_motion") is not None]
+            wm = float(statistics.median(seg_wms)) if seg_wms else None
+        b["scores"] = {c: round(_segment_score({"text": text_all, "duration": b["dur"], "wrist_motion": wm}, c, prod_ctx=prod_ctx), 2)
+                       for c in ("hook", "fabric", "craft_detail", "fit", "styling", "decision_closing")}
     blocks = [b for b in blocks if not b.get("_drop")]
     return blocks, rejected
 
@@ -364,6 +393,49 @@ def _hook_target_sec(constraints: Dict[str, Any]) -> float:
     except Exception:
         pass
     return 10.0
+
+
+def _hook_punch_params(constraints: Dict[str, Any]) -> Tuple[float, float, int]:
+    """R10 / T4：提神快切档参数（punch_min_sec, punch_max_sec, punch_min_count）。"""
+    try:
+        _rules = constraints.get("slicing_rules") or {}
+        _pc = _rules.get("pacing_curve") or {}
+        p_min = float(_pc.get("punch_min_sec", 1.5))
+        p_max = float(_pc.get("punch_max_sec", 2.8))
+        p_cnt = int(_pc.get("punch_min_count", 1))
+        return p_min, p_max, p_cnt
+    except Exception:
+        pass
+    return 1.5, 2.8, 1
+
+
+def _resolve_candidate_wrist_motion(b: Dict[str, Any], raw_video_path: Optional[str]) -> Optional[float]:
+    """获取候选块的手部动态动作性指标（wrist_motion）。
+
+    优先读取 block/segment 既有特征；若无且有真实源视频文件则提取采样帧；
+    若 pose 数据缺失则返回 None，确保候选评分安全保留，绝不误清零。
+    """
+    if "wrist_motion" in b and b["wrist_motion"] is not None:
+        return float(b["wrist_motion"])
+    segs = b.get("segments") or []
+    seg_wm = [s["wrist_motion"] for s in segs if "wrist_motion" in s and s["wrist_motion"] is not None]
+    if seg_wm:
+        return float(statistics.median(seg_wm))
+    vid = b.get("source_file") or raw_video_path
+    if vid and os.path.exists(vid):
+        try:
+            from src.tools.extract_shot_features import clip_features
+            st = float(b.get("start", 0.0))
+            en = float(b.get("end", st))
+            if en > st:
+                feats = clip_features(vid, st, en, samples=3)
+                wm = feats.get("wrist_motion")
+                b["wrist_motion"] = wm
+                b["ankles_in_frame"] = feats.get("ankles_in_frame", True)
+                return wm
+        except Exception:
+            pass
+    return None
 
 
 def _snap_end_to_sentence(segs: List[Dict[str, Any]], hard_end: float,
@@ -608,6 +680,7 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
 _CATEGORY_STICKER_TEXT = {
     "hook": "开场必看",
     "fabric": "面料细节",
+    "craft_detail": "做工细节",
     "fit": "版型显瘦",
     "styling": "一衣多穿",
     "decision_closing": "闭眼选色",
@@ -822,29 +895,39 @@ def build_plan(
         return got or None
 
     def quota(cat: str) -> Tuple[float, float]:
-        q = funnel_c.get(cat, {})
+        lookup_cat = "fabric" if (cat == "craft_detail" and "craft_detail" not in funnel_c) else cat
+        q = funnel_c.get(lookup_cat, {})
         return float(q.get("min", 0)), float(q.get("max", 0))
 
     order = ["hook", "fabric", "fit", "styling"]
     if "decision_closing" in funnel_c:
         order.append("decision_closing")
-    # R6（2026-11-01）：漏斗顺序可按品类覆写。
-    # 参考成片 SSY410163 的实测顺序是 hook→fit→fabric→styling（半身裙卖点重心
-    # 是"比例显瘦"而非面料质感，面料仅占 14%），与硬编码顺序相反。
-    # 故顺序取自 slicing_rules（可被 spec.options.funnel_order 覆写）。
+    # R6（2026-11-01）与 T7（2026-11-03）：品类漏斗预设字典与 spec 覆写机制。
     try:
         from src.tools.slicing_rules import load_slicing_rules, resolve_funnel_order
         _sr = load_slicing_rules(constraints)
         if _sr:
             _order = resolve_funnel_order(spec_data, _sr)
             if _order and _order != order:
-                meta["notes"].append(f"漏斗顺序按品类覆写: {' → '.join(order)} "
+                meta["notes"].append(f"漏斗顺序按品类预设/覆写: {' → '.join(order)} "
                                      f"→ {' → '.join(_order)}")
                 order = list(_order)
                 if "decision_closing" in funnel_c and "decision_closing" not in order:
                     order.append("decision_closing")
     except Exception as e:
-        print(f"[BUILD-PLAN][WARN] 切片规则解析失败，用默认漏斗顺序: {e}")
+        print(f"[BUILD-PLAN][WARN] 切片规则解析失败，用内置漏斗字典: {e}")
+        cat_key = (spec_data.get("category") or
+                   (spec_data.get("options") or {}).get("category") or
+                   (spec_data.get("product") or {}).get("category"))
+        if not cat_key and prod_ctx:
+            full_title = f"{prod_ctx.get('title_line1', '')} {prod_ctx.get('title_line2', '')}"
+            if any(w in full_title for w in ("裙", "半裙", "半身裙", "连衣裙")):
+                cat_key = "skirt_dress"
+            elif any(w in full_title for w in ("大衣", "外套", "羽绒服", "风衣", "皮衣", "棉服", "西装")):
+                cat_key = "coat_outerwear"
+        order = list(FUNNEL_ORDERS.get(cat_key) or FUNNEL_ORDERS["default"])
+        if "decision_closing" in funnel_c and "decision_closing" not in order:
+            order.append("decision_closing")
 
     # 按漏斗类别依次贪心选块（配额内取最高分；配额未满时按段边界修剪）
     chosen_by_cat: Dict[str, List[Dict[str, Any]]] = {}
@@ -854,27 +937,47 @@ def build_plan(
         if q_min <= 0:
             continue
         cands = [b for b in blocks
-                 if cat in b["categories"] and id(b) not in used_ids]
+                 if (cat in b["categories"] or (cat == "craft_detail" and "fabric" in b["categories"]))
+                 and id(b) not in used_ids]
+        # T5: 对做工与面料类目候选块执行手部动作性（wrist_motion）动态加权打分
+        if cat in ("fabric", "craft_detail"):
+            for b in cands:
+                wm = _resolve_candidate_wrist_motion(b, raw_video_path)
+                if wm is not None:
+                    base_sc = b["scores"].get(cat, 0.0)
+                    if wm >= 0.08:
+                        b["scores"][cat] = round(base_sc * 1.30, 2)
+                    elif wm < 0.03:
+                        b["scores"][cat] = round(max(1.0, base_sc * 0.85), 2)
         cands.sort(key=lambda b: b["scores"].get(cat, 0), reverse=True)
         picked: List[Dict[str, Any]] = []
         acc = 0.0
         for b in cands:
             if acc >= q_min and picked:
                 break
-            # R10（2026-11-02）：钩子区需要**多个切点**才能抓住停留。
-            # 参考片钩子区(0~10s)有 3 个切点、段长 1.78/4.72/6.73s——
-            # 即"短段快切"而非"一个长段"。
-            # 若钩子累计时长未达 hook_target_sec，把候选块按 hook_segment_sec
-            # **连续切出多段**（首个钩子块也要切，否则会被整块取走成为长段）。
-            # ⚠️ 余料不能只挂回块池——cands 已快照，本轮不会再消费它；
-            #    必须就地循环切分，才能真正产生多个切点。
+            # R10 / T4: 钩子区提神快切档（punch_sec 1.5~2.8s 与常规段交替）
             if cat == "hook" and acc < _hook_target_sec(constraints):
                 _cur = b
                 _guard = 0
+                p_min, p_max, p_cnt = _hook_punch_params(constraints)
+                punch_target = round((p_min + p_max) / 2.0, 2)    # 约 2.15s
+                standard_target = _hook_segment_sec(constraints)  # 默认 4.0s
                 while (_cur is not None and acc < _hook_target_sec(constraints)
                        and _guard < 6):
                     _guard += 1
-                    _want = min(_cur["dur"], _hook_segment_sec(constraints))
+                    # T4: 交替产出常规段（3.0~5.0s）与 punch 段（1.5~2.8s）
+                    # 确保开场至少有一段提神快切与一段常规呼吸段
+                    has_punch = any(p_min - 0.05 <= x["dur"] <= p_max + 0.05 for x in picked)
+                    has_std = any(x["dur"] >= 3.0 for x in picked)
+                    if not has_punch and len(picked) >= 1:
+                        _want = min(_cur["dur"], punch_target)
+                    elif not has_std and len(picked) >= 1:
+                        _want = min(_cur["dur"], standard_target)
+                    elif len(picked) % 2 == 1:
+                        _want = min(_cur["dur"], punch_target)
+                    else:
+                        _want = min(_cur["dur"], standard_target)
+
                     tb = _trim_block_to_duration(
                         _cur, _want, prefer_keywords=HOOK_KEYWORDS,
                         pauses=_pauses_for(_cur))
@@ -929,6 +1032,7 @@ def build_plan(
             return total
         rest = [b for b in blocks if id(b) not in used_ids]
         rest.sort(key=lambda b: b["scores"].get("styling", 0) + b["scores"].get("fabric", 0)
+                               + b["scores"].get("craft_detail", 0)
                                + b["scores"].get("decision_closing", 0),
                   reverse=True)
         # 需求 3：补齐时长也不得引入与商品无关的闲聊块——

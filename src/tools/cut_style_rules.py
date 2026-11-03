@@ -317,11 +317,13 @@ def measure_pacing(cuts: Sequence[float], segments: Sequence[Dict[str, Any]],
     mid_clips = [c for c in cuts if mid_start <= c <= mid_end]
 
     # 片段时长离散度测量（2026-11-03 改进方案：σ 与极差比）
+    # 片段时长离散度测量（2026-11-03 改进方案：σ 与极差比、提神快切档）
     sorted_cuts = sorted(c for c in cuts if 0.0 < c < total_sec)
     pts = [0.0] + sorted_cuts + [total_sec]
     clip_durs = [round(pts[i + 1] - pts[i], 3) for i in range(len(pts) - 1)] if total_sec > 0 else []
     sigma = statistics.pstdev(clip_durs) if len(clip_durs) >= 2 else 0.0
     ratio_disp = (max(clip_durs) / max(min(clip_durs), 1e-6)) if clip_durs else 1.0
+    punch_count = sum(1 for d in clip_durs if 1.45 <= d <= 2.85)
 
     return {
         "hook_window_sec": hook_window,
@@ -337,6 +339,7 @@ def measure_pacing(cuts: Sequence[float], segments: Sequence[Dict[str, Any]],
         "total_cuts": len(cuts),
         "duration_sigma": round(sigma, 2),
         "duration_ratio": round(ratio_disp, 2),
+        "punch_clips": punch_count,
     }
 
 
@@ -391,6 +394,14 @@ def check_pacing_curve(constraints: Dict[str, Any],
     if ratio_min > 0:
         if dr < ratio_min:
             issues.append(f"片段时长极差比 {dr:.2f} 低于下限 {ratio_min:.2f}（缺乏时长张力）")
+
+    pmin_count = int(sec.get("punch_min_count", 0) or 0)
+    p_min = float(sec.get("punch_min_sec", 1.5) or 1.5)
+    p_max = float(sec.get("punch_max_sec", 2.8) or 2.8)
+    if pmin_count > 0 and "punch_clips" in measured:
+        pc = int(measured.get("punch_clips", 0))
+        if pc < pmin_count:
+            issues.append(f"提神快切档（{p_min:.1f}~{p_max:.1f}s）{pc} 段低于下限 {pmin_count} 段")
 
     return {"id": "R10_pacing_curve", "passed": not issues,
             "level": _level(constraints, "pacing_curve"),

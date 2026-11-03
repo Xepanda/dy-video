@@ -695,6 +695,9 @@ requirements:
                       "slicing_rules.pacing_curve.mid_section_max_clip",
                       "slicing_rules.pacing_curve.hook_segment_sec",
                       "slicing_rules.pacing_curve.hook_target_sec",
+                      "slicing_rules.pacing_curve.punch_min_sec",
+                      "slicing_rules.pacing_curve.punch_max_sec",
+                      "slicing_rules.pacing_curve.punch_min_count",
                       "slicing_rules.pacing_curve.min_duration_sigma",
                       "slicing_rules.pacing_curve.min_duration_ratio",
                       "slicing_rules.pacing_curve.enforce_level"]
@@ -782,7 +785,10 @@ requirements:
                       "slicing_rules.speech_density.min_ratio",
                       "slicing_rules.speech_density.enforce_level",
                       "slicing_rules.funnel_order_overridable",
-                      "slicing_rules.default_funnel_order"]
+                      "slicing_rules.default_funnel_order",
+                      "slicing_rules.funnel_orders.skirt_dress",
+                      "slicing_rules.funnel_orders.coat_outerwear",
+                      "slicing_rules.funnel_orders.default"]
     qc_assertions: []
     code_symbols: ["evaluate_plan_slicing", "resolve_cut_params",
                    "check_clip_duration", "classify_framing", "check_shot_variety",
