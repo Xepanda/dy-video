@@ -181,6 +181,12 @@ class AgentDirector:
 
         路径可移植性（2026-10-24）：spec 里的路径统一经 path_resolver 解析，
         相对路径与"换机器后失效的旧绝对路径"都能自动定位到本机实际文件。
+
+        排除自身产物（2026-11-01）：交付物写入素材目录（`{project_id}.mp4`
+        / `.jpg` 等），与 raw_video_path 同目录。重跑时若不排除，
+        上一次的**成片**会被当成第 N+1 段原始素材重新摄入 →
+        素材清单污染（实测 6 段变 7 段，多出的正是上轮成片）。
+        故扫描时按 basename 过滤掉本任务的交付物与历史成片。
         """
         spec_dir = os.path.dirname(self.spec_path)
         spec_paths = self.spec.get("raw_video_paths") or []
@@ -188,16 +194,23 @@ class AgentDirector:
         for p in spec_paths:
             rp = resolve_path(p, spec_dir)
             if rp and os.path.exists(rp) and rp not in paths:
+                # 显式清单同样排除自身产物：resolved spec 由流水线生成并可能被
+                # 上一轮污染（含上轮成片），重跑时不应把它当原始素材。
+                if self._is_own_artifact(os.path.basename(rp)):
+                    continue
                 paths.append(rp)
         primary = self.spec.get("raw_video_path")
         if primary:
             primary_abs = resolve_path(primary, spec_dir) or os.path.abspath(primary)
             if os.path.isdir(primary_abs):
                 for name in sorted(os.listdir(primary_abs)):
-                    if name.lower().endswith(self.VIDEO_EXTS):
-                        ap = os.path.abspath(os.path.join(primary_abs, name))
-                        if ap not in paths:
-                            paths.append(ap)
+                    if not name.lower().endswith(self.VIDEO_EXTS):
+                        continue
+                    if self._is_own_artifact(name):
+                        continue
+                    ap = os.path.abspath(os.path.join(primary_abs, name))
+                    if ap not in paths:
+                        paths.append(ap)
             elif os.path.isfile(primary_abs):
                 if primary_abs not in paths:
                     paths.insert(0, primary_abs)
@@ -206,6 +219,8 @@ class AgentDirector:
                 if os.path.isdir(scan_dir):
                     for name in sorted(os.listdir(scan_dir)):
                         if not name.lower().endswith(self.VIDEO_EXTS):
+                            continue
+                        if self._is_own_artifact(name):
                             continue
                         ap = os.path.abspath(os.path.join(scan_dir, name))
                         if ap not in paths:
@@ -218,6 +233,175 @@ class AgentDirector:
             raise FileNotFoundError(
                 f"未找到任何可用的源视频素材（raw_video_path={self.spec.get('raw_video_path')}）")
         return paths
+
+    def _assign_sticker_sides(self, plan: Dict[str, Any]) -> None:
+        """为每个分镜挑选**不压脸**的挂角贴纸边（左/右）。
+
+        背景（2026-11-01）：挂角贴纸此前是**全局固定**位置（right, y=300），
+        而人脸位置逐镜不同——某镜模特偏右时贴纸正好压脸，
+        被 QC「叠加层人脸安全」判 BLOCK（实测 project-1 的 c03_fit）。
+
+        本方法与 Hook 卡避让（§11.2 #5 多帧采样取最高人脸顶）同源思路：
+        在该分镜的贴纸活跃时段内抽帧测人脸水平位置，
+        选离人脸更远的一侧；两侧都压则把贴纸整体下移到人脸下方。
+        结果写入 clip["sticker_side"] / clip["sticker_y"]，
+        装配器逐镜读取（原先只读全局配置）。
+        """
+        try:
+            import cv2
+            from src.tools.detect_face import FaceAnalyzer, _load_pose_landmarks
+        except Exception as e:
+            print(f"  [STICKER-SIDE] 人脸检测不可用，沿用默认边: {e}")
+            return
+        st_c = (self.constraints.get("video_sticker", {}) or {})
+        size = int(st_c.get("size", 220) or 220)
+        mx = int(st_c.get("margin_x", 40) or 40)
+        my = int(st_c.get("margin_y", 300) or 300)
+        default_side = str(st_c.get("side", "right") or "right")
+        fa = FaceAnalyzer()
+        out_w = 1080
+        for c in plan.get("clips", []):
+            src = c.get("source_file") or self.raw_video
+            st = float(c.get("st", 0.0))
+            dur = float(c.get("dur", 0.0))
+            if dur <= 0.2:
+                continue
+            # 贴纸活跃时段（与装配器一致：delay_ratio + hold_ratio）
+            delay_r = float(st_c.get("delay_ratio", 0.10) or 0.10)
+            hold_r = float(st_c.get("hold_ratio", 0.72) or 0.72)
+            t_in = st + dur * delay_r
+            t_out = min(st + dur * (delay_r + hold_r), st + dur - 0.05)
+
+            # 在活跃时段内多帧采样人脸 bbox（与 QC check_overlay_face_safety
+            # 同一口径：活跃时段内取样、算"贴纸矩形 vs 人脸 bbox"的间距）。
+            faces = []
+            span = max(0.1, t_out - t_in)
+            for k in range(3):
+                t = t_in + span * (k + 0.5) / 3.0
+                try:
+                    cap = cv2.VideoCapture(src)
+                    cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, t) * 1000)
+                    ok, fr = cap.read()
+                    cap.release()
+                    if not ok or fr is None:
+                        continue
+                    lm = _load_pose_landmarks(fr)
+                    if lm is None:
+                        continue
+                    face = fa.analyze(fr, pose_landmarks=lm)
+                    if not face or not face.get("face_detected"):
+                        continue
+                    bbox = face["face_bbox_norm"]
+                    fh, fw = fr.shape[:2]
+                    x_off = (fw - out_w) / 2.0 if fw > out_w else 0.0
+                    fx0 = (bbox[0] * fw - x_off) * (out_w / float(fw))
+                    fx1 = (bbox[2] * fw - x_off) * (out_w / float(fw))
+                    fy0 = bbox[1] * fh
+                    fy1 = bbox[3] * fh
+                    faces.append((fx0, fy0, fx1, fy1))
+                except Exception:
+                    continue
+            if not faces:
+                c["sticker_side"] = default_side
+                c["sticker_y"] = my
+                continue
+
+            def _gap(rect, face_rect):
+                """矩形间距（与 QC 的 _rect_overlap_gap 同一符号约定）。"""
+                ax0, ay0, ax1, ay1 = rect
+                bx0, by0, bx1, by1 = face_rect
+                dx = max(bx0 - ax1, ax0 - bx1)
+                dy = max(by0 - ay1, ay0 - by1)
+                if dx >= 0 and dy >= 0:
+                    return (dx * dx + dy * dy) ** 0.5
+                if dx < 0 and dy < 0:
+                    return -((min(ax1, bx1) - max(ax0, bx0)) *
+                             (min(ay1, by1) - max(ay0, by0))) ** 0.5
+                if dx < 0:
+                    return float(dy)
+                return float(dx)
+
+            # 候选：两侧 × 两档纵向位置，取"最坏帧间距最大"者
+            cands = []
+            for side in ("right", "left"):
+                sx = (out_w - size - mx) if side == "right" else mx
+                for sy in (my, my + 220):
+                    rect = (sx, sy, sx + size, sy + size)
+                    worst = min(_gap(rect, f) for f in faces)
+                    cands.append((worst, side, sx, sy))
+            cands.sort(key=lambda x: (-x[0], abs(x[3] - my)))
+            worst, side, sx, sy = cands[0]
+            c["sticker_side"] = side
+            c["sticker_y"] = int(sy)
+            _flag = "OK" if worst >= 30 else ("紧" if worst >= 0 else "压脸")
+            print(f"  [STICKER-SIDE] {c['id']}: 边={side} y={sy} "
+                  f"最坏帧人脸间距 {worst:.0f}px [{_flag}]")
+
+    def _detect_speech_pauses(self) -> dict:
+        """检测各源素材的语音气口（切片规则 R1 的数据源）。
+
+        背景（2026-11-01 参考成片实测）：人工切片的切点 **78% 落在**
+        −60dB 以下的近数字静音"气口"上（全片随机位置仅 0.52% → 富集 29 倍），
+        切点与 ASR 句末偏移中位 0.03s。即：切的是"字与字之间那一瞬空隙"。
+        本方法把每个源素材的气口列表算好缓存，供 build_plan 把裁剪点吸附到气口。
+
+        返回：{源文件绝对路径: [(气口时刻, dB), ...]}；失败时返回空 dict
+        （空 dict 时 build_plan 退回纯标点吸附，行为与改动前一致）。
+        """
+        rules = {}
+        try:
+            from src.tools.slicing_rules import load_slicing_rules
+            rules = load_slicing_rules(self.constraints)
+        except Exception as e:
+            print(f"  [PAUSES] 切片规则不可用，跳过气口检测: {e}")
+            return {}
+        cp = (rules.get("cut_on_speech_pause") or {}) if rules else {}
+        if not rules or not cp.get("enabled", True):
+            return {}
+        silence_db = float(cp.get("silence_db", -60.0))
+        min_sec = float(cp.get("min_silence_sec", 0.03))
+
+        from src.tools.detect_speech_pauses import detect_pauses
+        out = {}
+        for v in self.raw_videos:
+            cache_p = os.path.join(self.work_dir, "pauses",
+                                   os.path.splitext(os.path.basename(v))[0]
+                                   + ".pauses.json")
+            dips = None
+            try:
+                if os.path.exists(cache_p):
+                    with open(cache_p, "r", encoding="utf-8") as f:
+                        dips = [(float(a), float(b)) for a, b in
+                                (json.load(f).get("dips") or [])]
+                else:
+                    res = detect_pauses(v, silence_db, min_sec)
+                    dips = [(float(a), float(b)) for a, b in (res.get("dips") or [])]
+                    os.makedirs(os.path.dirname(cache_p), exist_ok=True)
+                    with open(cache_p, "w", encoding="utf-8") as f:
+                        json.dump(res, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                print(f"  [PAUSES] 气口检测失败 {os.path.basename(v)}"
+                      f"（不阻断，退回标点吸附）: {e}")
+                dips = None
+            if dips:
+                out[os.path.abspath(v)] = dips
+        print(f"  [PAUSES] 语音气口检测完成：{len(out)}/{len(self.raw_videos)} "
+              f"个源，共 {sum(len(x) for x in out.values())} 个气口"
+              f"（阈值 {silence_db} dB）")
+        return out
+
+    def _is_own_artifact(self, filename: str) -> bool:
+        """判断文件名是否为**本任务自己的产物**（不得再当原始素材摄入）。
+
+        覆盖：交付到素材目录的 `{pid}.mp4` / `{pid}.jpg`、
+        仓库 output 目录的历史副本 `{pid}_final.mp4` / `{pid}_cover.jpg`。
+        原始素材的文件名是「时间戳_时间戳.mp4」形态，与任务名无交集。
+        """
+        pid = str(self.project_id or "")
+        if not pid:
+            return False
+        stem = os.path.splitext(filename)[0]
+        return stem in {pid, f"{pid}_final", f"{pid}_cover"}
 
     def get_material_dir(self) -> str:
         """获取用户提供的素材所在目录（绝对路径）。
@@ -569,9 +753,12 @@ class AgentDirector:
                 verified_cache = os.path.join(self.work_dir, "whisper_segments.json")
             with open(verified_cache, "r", encoding="utf-8") as f:
                 segments = json.load(f)
+            # R1：检测各源语音气口，供 build_plan 把裁剪点吸附到气口
+            pauses_by_source = self._detect_speech_pauses()
             plan = build_plan(self.raw_video, segments, self.spec,
                               self.constraints, scene_cuts=scene_cuts,
-                              cache_key=ck, work_dir=self.work_dir)
+                              cache_key=ck, work_dir=self.work_dir,
+                              pauses_by_source=pauses_by_source)
             plan_source = "build_plan"
             plan_forced = False
             # 保留自动计划的分镜与包装配置（人工精修只改时间轴）
@@ -721,6 +908,48 @@ class AgentDirector:
         except Exception as e:
             print(f"  [VIOLATION] 处置准备失败（不阻断）: {e}")
 
+        # R3/R4（2026-11-01）：补齐分镜的画面特征（景别 / 展示角度签名）。
+        # 参考成片实测：9/10 段为全身景别（body_h 中位 0.556），
+        # 且 10 段呈现 10 种不同展示角度、相邻不重复——
+        # 此前的选段完全不感知画面，必然出现连续同质镜头。
+        try:
+            from src.tools.extract_shot_features import annotate_clips
+            annotate_clips(plan.get("clips", []), self.raw_video,
+                           work_dir=self.work_dir)
+            _fr = [c.get("framing") for c in plan.get("clips", [])]
+            print(f"  [SHOT-FEATURES] 分镜画面特征已补齐 "
+                  f"（全身景别 {_fr.count('full_body')}/{len(_fr)}）")
+        except Exception as e:
+            print(f"  [SHOT-FEATURES] 特征提取失败（不阻断）: {e}")
+
+        # 挂角贴纸逐镜避脸（QC「叠加层人脸安全」BLOCK 的正解）
+        try:
+            self._assign_sticker_sides(plan)
+        except Exception as e:
+            print(f"  [STICKER-SIDE] 避脸计算失败（不阻断）: {e}")
+
+        # 切片规则自检（R2~R6）：**必须在画面特征补齐之后**重算，
+        # 否则 R3（景别）/R4（角度）拿到的是无特征的空数据（实测误报 0% 全身）。
+        try:
+            from src.tools.slicing_rules import evaluate_plan_slicing
+            _sr = evaluate_plan_slicing(plan.get("clips", []), self.spec,
+                                       self.constraints)
+            plan["slicing_rules"] = _sr
+            # 清掉 build_plan 阶段的**过期**提示（当时尚无画面特征，R3/R4 会误报）
+            try:
+                _notes = plan.get("selection_meta", {}).get("notes")
+                if isinstance(_notes, list):
+                    plan["selection_meta"]["notes"] = [
+                        _n for _n in _notes
+                        if not str(_n).startswith("切片规则 ")]
+            except Exception:
+                pass
+            for _c in _sr.get("checks", []):
+                _m = "PASS" if _c.get("passed") else "WARN"
+                print(f"  [SLICING] [{_m}] {_c['id']}: {_c.get('detail')}")
+        except Exception as e:
+            print(f"  [SLICING][WARN] 规则自检失败（不阻断）: {e}")
+
         plan_path = os.path.join(self.work_dir, "plan.json")
         with open(plan_path, "w", encoding="utf-8") as f:
             json.dump(plan, f, ensure_ascii=False, indent=2)
@@ -782,6 +1011,9 @@ class AgentDirector:
                 overlay_meta_path=overlay_meta_path,
                 # 决策 6：参数类内容占比断言需要分镜表（I0 使能项）
                 plan_path=plan_path,
+                # 封面复测必须针对**实际交付**的候选：决策网关会逐个校验并
+                # 拒绝不合规项，实际交付项未必是 candidates[0]（2026-11-01 实测）。
+                chosen_cover_id=selected_cover.get("id"),
             )
             if ck:
                 from src.tools.stage_cache import save_stage

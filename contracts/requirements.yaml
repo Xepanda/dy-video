@@ -653,3 +653,158 @@ requirements:
       （self.cfg 命归为约束根，键路径差一段），故登记为 allow_dead。
       功能覆盖由 tests/test_product_image_adapter.py（10 项：四模式形态差异、
       留白、画布尺寸、羽化剖面、防 halo、白底去除）保证，改这些键会改变输出。
+
+  - id: R-S18
+    source: "[REF] SSY410163_蝴蝶结高腰A字半身裙_切片.mp4 剪辑风格实测（转场/音频/调色/节奏）"
+    title: 剪辑风格规则 R7~R10（硬切转场 / 零音效零BGM / 调色一致 / 节奏曲线）
+    level: WARN
+    status: implemented
+    constraint_keys: ["slicing_rules.transition_style.enabled",
+                      "slicing_rules.transition_style.mode",
+                      "slicing_rules.transition_style.dissolve_sec",
+                      "slicing_rules.transition_style.dissolve_sec_max",
+                      "slicing_rules.transition_style.audio_crossfade",
+                      "slicing_rules.transition_style.micro_afade_sec",
+                      "slicing_rules.transition_style.insert_silence_gap",
+                      "slicing_rules.transition_style.silence_gap_sec",
+                      "slicing_rules.transition_style.enforce_level",
+                      "slicing_rules.audio_style.enabled",
+                      "slicing_rules.audio_style.bgm_enabled",
+                      "slicing_rules.audio_style.boom_sfx_enabled",
+                      "slicing_rules.audio_style.target_lufs",
+                      "slicing_rules.audio_style.lufs_tolerance",
+                      "slicing_rules.audio_style.max_lra",
+                      "slicing_rules.audio_style.min_speech_ratio",
+                      "slicing_rules.audio_style.allow_cut_audio_gap",
+                      "slicing_rules.audio_style.enforce_level",
+                      "slicing_rules.color_consistency.enabled",
+                      "slicing_rules.color_consistency.max_cv_white_balance",
+                      "slicing_rules.color_consistency.max_cv_saturation",
+                      "slicing_rules.color_consistency.max_cv_brightness",
+                      "slicing_rules.color_consistency.max_cv_contrast",
+                      "slicing_rules.color_consistency.samples_per_clip",
+                      "slicing_rules.color_consistency.enforce_level",
+                      "slicing_rules.pacing_curve.enabled",
+                      "slicing_rules.pacing_curve.hook_cuts_per_10s_min",
+                      "slicing_rules.pacing_curve.hook_cuts_per_10s_max",
+                      "slicing_rules.pacing_curve.sentence_len_min",
+                      "slicing_rules.pacing_curve.sentence_len_max",
+                      "slicing_rules.pacing_curve.speech_rate_min",
+                      "slicing_rules.pacing_curve.speech_rate_max",
+                      "slicing_rules.pacing_curve.tightening_ratio_max",
+                      "slicing_rules.pacing_curve.mid_section_max_clip",
+                      "slicing_rules.pacing_curve.hook_segment_sec",
+                      "slicing_rules.pacing_curve.hook_target_sec",
+                      "slicing_rules.pacing_curve.punch_min_sec",
+                      "slicing_rules.pacing_curve.punch_max_sec",
+                      "slicing_rules.pacing_curve.punch_min_count",
+                      "slicing_rules.pacing_curve.min_duration_sigma",
+                      "slicing_rules.pacing_curve.min_duration_ratio",
+                      "slicing_rules.pacing_curve.enforce_level"]
+    qc_assertions: []
+    code_symbols: ["resolve_transition_style", "resolve_audio_style",
+                   "check_transition_style", "check_audio_style",
+                   "check_color_consistency", "check_pacing_curve",
+                   "measure_color_stats", "measure_pacing", "evaluate_style_plan"]
+    allow_dead: false
+    note: >-
+      2026-11-02 新增：补齐上一轮（切片边界/景别/文案对齐）未覆盖的四个维度。
+      实测证据（参考成片 SSY410163_切片.mp4）：
+      (1) 转场——9/9 切点均为**硬切**：α(t) 单帧跳变（最大 Δα 0.41~0.90），
+          逐帧差分在切点仅 1 帧尖峰（跳变值为片内中位的 14.1 倍），
+          零个切点存在可被线性混合解释的中间帧 → 无任何叠化；
+          音频侧亦为硬接（切点处 -82~-120dB 数字静音，acrossfade 会抹平该特征）。
+          本仓库原默认 transition_effect=fade 0.25s，与参考片剪辑语言相反。
+      (2) 音频——低频/中频比 -21.2dB（语音主导，无音乐床），
+          句间空隙中位 -36.8dB 接近底噪，动态范围 14.9dB，
+          I=-15.3 LUFS / LRA=1.5 LU / TP=-1.5dBFS → 纯现场人声裸轨、零音效。
+          本仓库原默认混入 Sub-Bass Boom 重音，与参考片冲突。
+      (3) 调色——逐段变异系数 R/G 0.8% / B/G 0.9% / 饱和 3.5% /
+          亮度 3.5% / 对比 7.8% → 整片色调统一。
+      (4) 节奏——钩子区(0~10s)切点最密(3 个)、中段最长单段 12.97s、
+          句长中位由前 1/3 的 2.34s 收紧至后 1/3 的 1.50s、
+          语速 416→376 字/分 → "钩子快 / 中段慢 / 尾段再起"三段式。
+      落地：contracts.slicing_rules 新增 transition_style / audio_style /
+      color_consistency / pacing_curve 四段（唯一事实源）；
+      执行载体 src/tools/cut_style_rules.py（规则引擎）；
+      接线点 src/core/video_assembler.py（转场时长/音频交叉淡化取自 R7，
+      Boom 音效改为可关闭——关闭时生成等长静音占位轨以保持滤镜链索引不变）。
+      验证：scripts/verify_cut_style.py 对参考成片与本仓库成片做同口径对照；
+      tests/test_cut_style_rules.py 覆盖四组判定与反向毒化。
+      证据详见 docs/reference_cut_style_analysis.md。
+
+  - id: R-S17
+    source: "[AUDIT] asr_review 噪声句丢弃占比上限"
+    title: ASR 门禁对个别噪声句应丢弃而非阻断整个任务（系统性退化仍阻断）"
+    level: INFO
+    status: implemented
+    constraint_keys: ["asr_review.drop_ratio_limit"]
+    qc_assertions: []
+    code_symbols: ["review", "enforce_review_gate"]
+    allow_dead: false
+    note: >-
+      2026-11-01：原实现对任何一条 A1_EMPTY/A2_REPEAT_RUN 直接 BLOCK，
+      导致 6 段素材里的 2 句口吃就让整个 17 分钟任务失败。改为：噪声句
+      标记进 dropped_indices 并在门禁出口剔除，丢弃占比超上限
+      （drop_ratio_limit，默认 0.30）才升级为 BLOCK（A2_DROP_RATIO_EXCEEDED）。
+      A5 密度校验仍负责拦截"提示词复读循环"式整体退化。
+      验证：tests/test_asr_review_gate.py 新增
+      case_isolated_noise_dropped_not_blocked（个别丢弃不阻断 / 全噪声阻断 /
+      50% 阻断，三项）。
+
+  - id: R-S16
+    source: "[REF] SSY410163_蝴蝶结高腰A字半身裙_切片.mp4 切片逻辑实测"
+    title: 切片规则 R1~R6（切点落句末 / 时长区间 / 景别 / 角度多样性 / 语音密度 / 顺序可覆写）
+    level: WARN
+    status: implemented
+    constraint_keys: ["slicing_rules.enabled",
+                      "slicing_rules.cut_on_speech_pause.enabled",
+                      "slicing_rules.cut_on_speech_pause.snap_tolerance_sec",
+                      "slicing_rules.cut_on_speech_pause.max_offset_from_sentence",
+                      "slicing_rules.cut_on_speech_pause.search_window_sec",
+                      "slicing_rules.cut_on_speech_pause.dip_threshold_db",
+                      "slicing_rules.cut_on_speech_pause.absolute_db",
+                      "slicing_rules.cut_on_speech_pause.floor_margin_db",
+                      "slicing_rules.cut_on_speech_pause.fallback",
+                      "slicing_rules.cut_on_speech_pause.intra_sentence_cut_max_ratio",
+                      "slicing_rules.clip_duration.enabled",
+                      "slicing_rules.clip_duration.min_sec",
+                      "slicing_rules.clip_duration.target_sec",
+                      "slicing_rules.clip_duration.max_sec",
+                      "slicing_rules.clip_duration.enforce_level",
+                      "slicing_rules.shot_framing.enabled",
+                      "slicing_rules.shot_framing.min_body_height_ratio",
+                      "slicing_rules.shot_framing.target_body_height_ratio",
+                      "slicing_rules.shot_framing.full_body_min_ratio",
+                      "slicing_rules.shot_framing.enforce_level",
+                      "slicing_rules.shot_variety.enabled",
+                      "slicing_rules.shot_variety.min_distinct_angles",
+                      "slicing_rules.shot_variety.max_same_angle_consecutive",
+                      "slicing_rules.shot_variety.enforce_level",
+                      "slicing_rules.speech_density.enabled",
+                      "slicing_rules.speech_density.min_ratio",
+                      "slicing_rules.speech_density.enforce_level",
+                      "slicing_rules.funnel_order_overridable",
+                      "slicing_rules.default_funnel_order",
+                      "slicing_rules.funnel_orders.skirt_dress",
+                      "slicing_rules.funnel_orders.coat_outerwear",
+                      "slicing_rules.funnel_orders.default"]
+    qc_assertions: []
+    code_symbols: ["evaluate_plan_slicing", "resolve_cut_params",
+                   "check_clip_duration", "classify_framing", "check_shot_variety",
+                   "check_speech_density", "resolve_funnel_order",
+                   "detect_pauses", "clip_features", "annotate_clips",
+                   "find_relative_dips", "snap_cut_to_pause"]
+    allow_dead: false
+    note: >-
+      2026-11-01 新增：把参考成片的切片规律提炼为可判定规则并落进
+      contracts.slicing_rules（唯一事实源）。执行载体 src/tools/slicing_rules.py
+      （规则引擎）+ detect_speech_pauses.py（语音气口）+ extract_shot_features.py
+      （画面特征）。接线点：build_plan（句末吸附容差 2.0s→0.45s、时长夹取、
+      漏斗顺序覆写）、agent_director（气口检测 + 画面特征标注）。
+      验证：参考成片自身 R2~R5 全 PASS（scripts/verify_slicing_rules.py）；
+      tests/test_slicing_rules.py 9 例（含毒化反向验证）。
+      关键实测修正：参考片切点处的 -120dB 是**拼接产物**而非选段信号，
+      真正可复现的规则是"切在 ASR 句末"；直播素材气口须用相对凹陷判据
+      （底噪 -42~-53dB，绝对阈值命中 0 处）。证据见
+      docs/reference_cut_analysis_SSY410163.md。

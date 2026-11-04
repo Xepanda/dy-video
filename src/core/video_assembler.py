@@ -174,6 +174,94 @@ def generate_cta_badge(text: str, out_path: str) -> str:
     return out_path
 
 
+def build_transition_chain(n_clips: int, trans_on: bool, trans_d: float,
+                           audio_xfade: bool,
+                           timeline: Dict[str, Any] = None,
+                           clip_ids: List[str] = None,
+                           micro_afade_sec: float = 0.0,
+                           ) -> Tuple[List[str], str, str]:
+    """构建切片间的转场/拼接滤镜链，返回 (滤镜片段, 视频末标签, 音频末标签)。
+
+    两种模式（2026-11-02，R7 转场风格）：
+      · **转场模式**（trans_on=True）：xfade 视频叠化 + acrossfade 音频交叉淡化。
+        audio_xfade=False 时音频侧改用 concat（保持语音连续但不做淡化）。
+      · **硬切模式**（trans_on=False）：用 concat 串接**全部**分镜。
+        当 micro_afade_sec > 0 时，在切片拼接点注入 10ms 微淡化（afade），
+        消除非零交叉截断引起的高频爆音（Click/Pop）。
+
+    ⚠️ 硬切分支的两个历史陷阱（都已修复，勿回退）：
+      1. 只接 `[0:v]`/`[0:a]` 而不串接第 2..N 段 → 成片只剩第 1 段。
+         此前 transition_effect 恒 enabled，该分支从未被执行，缺陷一直潜伏。
+      2. 音频链路误用 `null`（**视频**滤镜）→ ffmpeg 报
+         "Media type mismatch between Parsed_null_1(video) and Parsed_anull(audio)"。
+         音频侧只能用 `anull`，或干脆从 `0:a` 直接进 concat。
+
+    本函数是纯逻辑的（不碰文件系统），故可被单元测试直接覆盖——
+    滤镜链错误应在秒级暴露，而不是等 15 分钟的端到端流水线。
+    """
+    fc: List[str] = []
+    if n_clips <= 0:
+        return fc, "0:v", "0:a"
+    if n_clips == 1:
+        fc.append("[0:v]null[vbase]")
+        fc.append("[0:a]anull[abase]")
+        return fc, "vbase", "abase"
+
+    if trans_on and n_clips >= 2:
+        tl = timeline or {}
+        ids = clip_ids or []
+        c1 = ids[1] if len(ids) > 1 else None
+        off1 = float(tl.get(c1, {}).get("start", 0.0)) if c1 else 0.0
+        fc.append(f"[0:v][1:v]xfade=transition=fade:duration={trans_d:.3f}"
+                  f":offset={off1:.3f}[vx1]")
+        if audio_xfade:
+            fc.append(f"[0:a][1:a]acrossfade=d={trans_d:.3f}:c1=tri:c2=tri[ax1]")
+        else:
+            fc.append("[0:a][1:a]concat=n=2:v=0:a=1[ax1]")
+        for i in range(2, n_clips):
+            cid = ids[i] if len(ids) > i else None
+            off = float(tl.get(cid, {}).get("start", 0.0)) if cid else 0.0
+            fc.append(f"[vx{i - 1}][{i}:v]xfade=transition=fade:duration={trans_d:.3f}"
+                      f":offset={off:.3f}[vx{i}]")
+            if audio_xfade:
+                fc.append(f"[ax{i - 1}][{i}:a]acrossfade=d={trans_d:.3f}:c1=tri:c2=tri[ax{i}]")
+            else:
+                fc.append(f"[ax{i - 1}][{i}:a]concat=n=2:v=0:a=1[ax{i}]")
+        return fc, f"vx{n_clips - 1}", f"ax{n_clips - 1}"
+
+    # 硬切：concat 串接全部分镜（视频与音频各一条链）
+    # 若配置了 micro_afade_sec（如 10ms），对音频段注入微淡入淡出防爆音
+    tl = timeline or {}
+    ids = clip_ids or []
+    if micro_afade_sec > 0.0:
+        for i in range(n_clips):
+            cid = ids[i] if len(ids) > i else None
+            clip_info = tl.get(cid, {}) if cid else (tl.get(str(i), {}) or tl.get(i, {}))
+            if not clip_info and len(tl) == n_clips and not ids:
+                try:
+                    clip_info = list(tl.values())[i]
+                except Exception:
+                    clip_info = {}
+            dur = float(clip_info.get("dur", 0.0) or 0.0)
+            if dur <= 0.0 and clip_info.get("end") and clip_info.get("start"):
+                dur = float(clip_info["end"]) - float(clip_info["start"])
+            fade_d = min(micro_afade_sec, round(dur / 2.0, 3)) if dur > 0.0 else micro_afade_sec
+            fades = [f"afade=t=in:st=0:d={fade_d:.3f}"]
+            if dur > 0.0:
+                st_out = max(0.0, round(dur - fade_d, 3))
+                fades.append(f"afade=t=out:st={st_out:.3f}:d={fade_d:.3f}")
+            fc.append(f"[{i}:a]{','.join(fades)}[af{i}]")
+
+    cur_v = "0:v"
+    cur_a = "af0" if micro_afade_sec > 0.0 else "0:a"
+    for i in range(1, n_clips):
+        next_a = f"af{i}" if micro_afade_sec > 0.0 else f"{i}:a"
+        fc.append(f"[{cur_v}][{i}:v]concat=n=2:v=1:a=0[vx{i}]")
+        fc.append(f"[{cur_a}][{next_a}]concat=n=2:v=0:a=1[ax{i}]")
+        cur_v, cur_a = f"vx{i}", f"ax{i}"
+    return fc, cur_v, cur_a
+
+
 class VideoAssembler:
     def __init__(self, work_dir: str, constraints: Dict[str, Any] = None):
         self.work_dir = os.path.abspath(work_dir)
@@ -802,6 +890,34 @@ class VideoAssembler:
                     and str(trans_c.get("type", "fade")) != "none")
         trans_d = float(trans_c.get("duration_sec", 0.25) or 0.25) if trans_on else 0.0
         audio_xfade = bool(trans_c.get("audio_crossfade", True)) if trans_on else False
+        # R7（2026-11-02）：转场风格由 slicing_rules.transition_style 决定，
+        # 优先级高于旧的 transition_effect 段（后者仅作兼容回退）。
+        # 参考成片实测 9/9 全硬切（单帧 Δα 0.41~0.90，零叠化），
+        # 音频侧亦不同步 acrossfade（硬切处为数字静音）。
+        try:
+            from src.tools.cut_style_rules import (resolve_transition_style,
+                                                   resolve_audio_style)
+            _tstyle = resolve_transition_style(self.constraints)
+            _astyle = resolve_audio_style(self.constraints)
+        except Exception:
+            _tstyle = {}
+            _astyle = {}
+        if _tstyle.get("enabled"):
+            trans_d = float(_tstyle.get("video_transition_sec", 0.0) or 0.0)
+            audio_xfade = bool(_tstyle.get("audio_crossfade", False))
+            trans_on = trans_d > 0.0
+            print(f"[ASSEMBLER] 转场风格(R7): mode={_tstyle.get('mode')} "
+                  f"时长={trans_d:.2f}s 音频交叉淡化={audio_xfade}")
+        micro_afade_sec = float(_tstyle.get("micro_afade_sec", 0.0) or 0.0)
+        if not micro_afade_sec:
+            _sr_t = (self.constraints.get("slicing_rules", {}) or {}).get("transition_style", {}) or {}
+            micro_afade_sec = float(_sr_t.get("micro_afade_sec", 0.0) or 0.0)
+        # R8：Boom 音效开关（参考成片实测无音效）
+        boom_enabled = bool(_astyle.get("boom_sfx_enabled", True)) if _astyle else True
+        if _astyle:
+            print(f"[ASSEMBLER] 音频风格(R8): boom={boom_enabled} "
+                  f"bgm={bool(_astyle.get('bgm_enabled', False))} "
+                  f"目标响度={_astyle.get('target_lufs')} LUFS")
         fade_c = self.constraints.get("fade_effect", {}) or {}
         fade_in = float(fade_c.get("fade_in_sec", 0.3) or 0.0) if fade_c.get("enabled", True) else 0.0
         fade_out = float(fade_c.get("fade_out_sec", 0.3) or 0.0) if fade_c.get("enabled", True) else 0.0
@@ -857,8 +973,24 @@ class VideoAssembler:
             os.remove(ass_path)   # 防止上一轮残留的 ASS 被 QC 误读
 
         # 2. 合成 Boom 冲击音
+        # R8：参考成片实测**无任何音效**（纯现场人声裸轨）。
+        # 关闭时生成等长静音轨而非删输入——保持后续滤镜链的索引与结构完全不变，
+        # 避免"少一路输入"导致 amix 参数与 limiter 链错位。
         boom_wav = os.path.join(self.work_dir, "boom.wav")
-        generate_sub_bass_boom(boom_wav, duration=1.2)
+        if boom_enabled:
+            generate_sub_bass_boom(boom_wav, duration=1.2)
+        else:
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-y", "-f", "lavfi", "-i",
+                     "anullsrc=r=48000:cl=stereo", "-t", "1.2",
+                     "-c:a", "pcm_s16le", boom_wav],
+                    cwd=self.work_dir, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, timeout=60)
+                print("[ASSEMBLER] Boom 音效已按 R8 关闭（生成静音占位轨）")
+            except Exception as e:
+                print(f"[ASSEMBLER] 生成静音占位轨失败（{e}），回退到生成音效")
+                generate_sub_bass_boom(boom_wav, duration=1.2)
 
         # 3. 生成 Hook 卡片与 CTA 贴片
         hook_text = plan.get("hook_card", {}).get("text", "今晚必看爆款")
@@ -897,7 +1029,14 @@ class VideoAssembler:
 
         # 3.6 挂角利益点贴纸（按分镟时序出现/消失）
         sticker_c = self.constraints.get("video_sticker", {}) or {}
-        sticker_pngs: List[Tuple[str, float, float]] = []   # (png, t_in, t_out)
+        # (png, t_in, t_out, side, y)——side/y 由 agent_director 依人脸位置
+        # 逐镜计算（原先固定右侧，导致某些镜次挂角贴纸压脸）。
+        sticker_pngs: List[Tuple[str, float, float, str, int]] = []
+        # 贴纸几何默认值（§5.3 也要用，这里先定义好，避免前向引用）
+        sticker_size = int(sticker_c.get("size", 220) or 220)
+        sticker_mx = int(sticker_c.get("margin_x", 40) or 40)
+        sticker_my = int(sticker_c.get("margin_y", 300) or 300)
+        sticker_side = sticker_c.get("side", "right")
         if sticker_c.get("enabled", True) and text_on:
             fade_in_s = float(sticker_c.get("fade_in_sec", 0.35) or 0.35)
             fade_out_s = float(sticker_c.get("fade_out_sec", 0.35) or 0.35)
@@ -923,7 +1062,9 @@ class VideoAssembler:
                 except Exception as e:
                     print(f"[WARN] 挂角贴纸生成失败 {c['id']}（跳过）: {e}")
                     continue
-                sticker_pngs.append((png, t_in, t_out))
+                _side = str(c.get("sticker_side") or sticker_side)
+                _sy = int(c.get("sticker_y", sticker_my) or sticker_my)
+                sticker_pngs.append((png, t_in, t_out, _side, _sy))
             if sticker_pngs:
                 print(f"[ASSEMBLER] 挂角利益点贴纸: {len(sticker_pngs)} 个（带淡入淡出时序）")
 
@@ -971,31 +1112,21 @@ class VideoAssembler:
         inputs += ["-i", boom_wav]
 
         fc: List[str] = []
-        # —— 5.1 转场链（xfade / acrossfade）——
-        use_trans = trans_on and n_clips >= 2
-        if use_trans:
-            c0, c1 = plan["clips"][0]["id"], plan["clips"][1]["id"]
-            fc.append(f"[0:v][1:v]xfade=transition=fade:duration={trans_d:.3f}"
-                      f":offset={timeline[c1]['start']:.3f}[vx1]")
-            if audio_xfade:
-                fc.append(f"[0:a][1:a]acrossfade=d={trans_d:.3f}:c1=tri:c2=tri[ax1]")
-            else:
-                fc.append(f"[0:a][1:a]concat=n=2:v=0:a=1[ax1]")
-            for i in range(2, n_clips):
-                cid = plan["clips"][i]["id"]
-                fc.append(f"[vx{i - 1}][{i}:v]xfade=transition=fade:duration={trans_d:.3f}"
-                          f":offset={timeline[cid]['start']:.3f}[vx{i}]")
-                if audio_xfade:
-                    fc.append(f"[ax{i - 1}][{i}:a]acrossfade=d={trans_d:.3f}:c1=tri:c2=tri[ax{i}]")
-                else:
-                    fc.append(f"[ax{i - 1}][{i}:a]concat=n=2:v=0:a=1[ax{i}]")
-            cur_v, cur_a = f"vx{n_clips - 1}", f"ax{n_clips - 1}"
+        # —— 5.1 转场链（xfade / acrossfade | 硬切 concat）——
+        # 链构建抽成模块级函数 build_transition_chain，以便被单元测试直接覆盖
+        # （滤镜链错误必须在秒级暴露，而不是等端到端流水线）。
+        _ids = [c["id"] for c in plan["clips"]]
+        _chain, cur_v, cur_a = build_transition_chain(
+            n_clips, trans_on and n_clips >= 2, trans_d, audio_xfade,
+            timeline=timeline, clip_ids=_ids,
+            micro_afade_sec=micro_afade_sec)
+        fc += _chain
+        if trans_on and n_clips >= 2:
             print(f"[ASSEMBLER] 转场链: {n_clips} 切片 xfade/acrossfade "
                   f"{trans_d:.2f}s（音频交叉淡化={'on' if audio_xfade else 'off'}）")
         else:
-            fc.append("[0:v]null[vbase]")
-            fc.append("[0:a]null[abase]")
-            cur_v, cur_a = "vbase", "abase"
+            print(f"[ASSEMBLER] 转场链: {n_clips} 切片硬切拼接（concat"
+                  f"{f', micro_afade={micro_afade_sec:.3f}s' if micro_afade_sec > 0 else ''}）")
 
         # —— 5.2 字幕（plain 模式旁路）——
         if text_on:
@@ -1005,13 +1136,10 @@ class VideoAssembler:
 
         # —— 5.3 叠加层（贴纸 → 标识条 → Hook卡 → CTA）——
         in_idx = boom_idx
-        sticker_size = int(sticker_c.get("size", 220) or 220)
-        sticker_mx = int(sticker_c.get("margin_x", 40) or 40)
-        sticker_my = int(sticker_c.get("margin_y", 300) or 300)
-        sticker_side = sticker_c.get("side", "right")
+        # sticker_size / sticker_mx / sticker_my / sticker_side 已在 §3.6 定义
         fade_in_s = float(sticker_c.get("fade_in_sec", 0.35) or 0.35)
         fade_out_s = float(sticker_c.get("fade_out_sec", 0.35) or 0.35)
-        for (png, t_in, t_out) in sticker_pngs:
+        for (png, t_in, t_out, st_side, st_y) in sticker_pngs:
             in_idx += 1
             rel = os.path.basename(png)
             inputs += ["-loop", "1", "-framerate", str(FPS),
@@ -1022,10 +1150,10 @@ class VideoAssembler:
                 f"fade=t=out:st={max(t_in, t_out - fade_out_s):.3f}:d={fade_out_s:.3f}:alpha=1"
                 f"[stk{in_idx}]"
             )
-            sx = (OUT_W - sticker_size - sticker_mx) if sticker_side == "right" else sticker_mx
+            sx = (OUT_W - sticker_size - sticker_mx) if st_side == "right" else sticker_mx
             nxt = f"vstk{in_idx}"
             fc.append(
-                f"[{cur_v}][stk{in_idx}]overlay={sx}:{sticker_my}"
+                f"[{cur_v}][stk{in_idx}]overlay={sx}:{st_y}"
                 f":enable='between(t,{t_in:.3f},{t_out:.3f})':alpha=premultiplied[{nxt}]"
             )
             cur_v = nxt
@@ -1071,9 +1199,15 @@ class VideoAssembler:
             cur_v = "vfinal"
 
         # —— 5.5 音频混流 + 响度归一化 -—
+        if boom_enabled:
+            fc += [
+                f"[{boom_idx}:a]volume=0.45[boom_hit]",
+                f"[{cur_a}][boom_hit]amix=inputs=2:duration=first:weights='1.0 1.0'[amix]",
+            ]
+        else:
+            # Boom 关闭：直接旁路，保持 loudnorm/limiter 链完全一致
+            fc += [f"[{cur_a}]anull[amix]"]
         fc += [
-            f"[{boom_idx}:a]volume=0.45[boom_hit]",
-            f"[{cur_a}][boom_hit]amix=inputs=2:duration=first:weights='1.0 1.0'[amix]",
             f"[amix]loudnorm={loudnorm_params}[aloud]",
             f"[aloud]alimiter=limit={limiter_limit}:level=false[alim]",
             f"[alim]afade=t=out:st={max(0.0, total_dur - 0.25):.2f}:d=0.25[aout]",
@@ -1145,11 +1279,11 @@ class VideoAssembler:
                     "fade_in_sec": fade_in_s,
                     "fade_out_sec": fade_out_s,
                     "size": sticker_size,
-                    "side": sticker_side,
-                    "x": (OUT_W - sticker_size - sticker_mx) if sticker_side == "right" else sticker_mx,
-                    "y": sticker_my,
+                    "side": st_side,
+                    "x": (OUT_W - sticker_size - sticker_mx) if st_side == "right" else sticker_mx,
+                    "y": st_y,
                 }
-                for (png, t_in, t_out) in sticker_pngs
+                for (png, t_in, t_out, st_side, st_y) in sticker_pngs
             ],
             "zoom_events": [
                 {
@@ -1165,11 +1299,15 @@ class VideoAssembler:
             # 2026-10-27 新增：放大镟 / 转场 / 淡入淡出 / 违规处理
             "magnifier_events": magnifier_events,
             "transition": {
-                "applied": use_trans,
-                "type": "fade" if use_trans else "none",
-                "duration_sec": round(trans_d, 3) if use_trans else 0.0,
-                "audio_crossfade": audio_xfade if use_trans else False,
+                # use_trans 已随 R7 重构移入 build_transition_chain，
+                # 这里按"是否真的发生了视频叠化"来记录（硬切模式为 False）。
+                "applied": bool(trans_d > 0.0 and trans_on),
+                "type": "fade" if (trans_d > 0.0 and trans_on) else "none",
+                "duration_sec": round(trans_d, 3) if (trans_d > 0.0 and trans_on) else 0.0,
+                "audio_crossfade": bool(audio_xfade and trans_d > 0.0 and trans_on),
                 "n_clips": n_clips,
+                # R7 风格来源，便于人工复核成片属于哪种剪辑语言
+                "style_mode": (_tstyle.get("mode") if _tstyle else None),
             },
             "fade": {
                 "applied": bool(fade_in > 0 or fade_out > 0),

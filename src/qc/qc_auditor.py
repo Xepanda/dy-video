@@ -175,6 +175,7 @@ class QcAuditor:
         candidates_path: str = None,
         overlay_meta_path: str = None,
         plan_path: str = None,
+        chosen_cover_id: str = None,
     ) -> bool:
         print("\n=======================================================")
         print("启动自动化量化质检门禁 v2（constraints 驱动）...")
@@ -376,7 +377,8 @@ class QcAuditor:
 
         # ---- B12 封面宽占比复测（决策 1）----
         if candidates_path and os.path.exists(candidates_path):
-            self._audit_cover_width(candidates_path, self.constraints.get("cover", {}) or {})
+            self._audit_cover_width(candidates_path, self.constraints.get("cover", {}) or {},
+                                    chosen_cover_id=chosen_cover_id)
         else:
             # 缺候选清单时这 3 项原本"静默消失"（报告里查无此项，却也不是 SKIP）——
             # 与 plain over-skip 同类，统一显式记 SKIP 以计入覆盖率。
@@ -979,14 +981,32 @@ class QcAuditor:
             self._assert(False, "封面背景文字纯净度", f"OCR 检测异常: {e}",
                          metric_key="ocr.background_text_area_max")
 
-    def _audit_cover_width(self, candidates_path: str, cover_c: Dict[str, Any]) -> None:
-        """封面宽占比复测（决策 1，含 WARN 区间）。"""
+    def _audit_cover_width(self, candidates_path: str, cover_c: Dict[str, Any],
+                           chosen_cover_id: str = None) -> None:
+        """封面宽占比复测（决策 1，含 WARN 区间）。
+
+        审计对象必须是**实际交付的候选**，不能假定为 candidates[0]。
+        2026-11-01 实测（project-1）：候选池按 frontal_score 降序落盘，
+        但决策网关会逐个校验并**拒绝**不合规项（本次拒绝了 candidates[0]，
+        宽占比 0.341 低于 WARN 区间下界 0.36），最终交付的是 cand_01_201024
+        （宽占比 0.374，合规）。QC 若仍审 candidates[0]，会对一个
+        **从未出现在成片上**的候选做出 BLOCK 判定——误拦截合规成片。
+        故此处按 chosen_cover_id 定位实际交付项；缺省时回退 candidates[0]
+        （保持与旧调用方/单测的兼容）。
+        """
         with open(candidates_path, "r", encoding="utf-8") as f:
             candidates = json.load(f)
         if not candidates:
             self._assert(False, "封面宽占比复测", "候选清单为空")
             return
         chosen = candidates[0]  # 清单按分数降序，[0] 即 Agent 选定项
+        if chosen_cover_id:
+            matched = next((c for c in candidates if c.get("id") == chosen_cover_id), None)
+            if matched is not None:
+                chosen = matched
+            else:
+                print(f"  [QC][WARN] 指定封面候选 {chosen_cover_id} 不在候选清单中，"
+                      f"回退审计 candidates[0]（{chosen.get('id')}）")
         framing = chosen.get("framing", {}) or {}
         ratio = framing.get("achieved_width_ratio", 0.0)
         target = cover_c.get("person_width_ratio", 0.75)
@@ -1016,7 +1036,9 @@ class QcAuditor:
         # 衣着一致性复测（2026-10-24 接入）
         # 此前 detect_garment_match 的 check_constraints 被 import 却从未调用，
         # 阈值形同虚设。此处对 Agent 选定候选做独立复测。
-        self._audit_garment_match(candidates[0], self.constraints.get("garment_match", {}) or {})
+        # 与 _audit_cover_width 同理：审计对象取**实际交付**的候选，
+        # 而非假定 candidates[0]（网关可能已拒绝 [0] 并改选后续项）。
+        self._audit_garment_match(chosen, self.constraints.get("garment_match", {}) or {})
         # 放大后清晰度复测（C1 防糊脸硬门禁，v1.2）
         post_sharp = framing.get("post_scale_sharpness", 0)
         sharp_min = cover_c.get("sharpness_min", 200)

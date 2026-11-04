@@ -105,6 +105,13 @@ class AsrReviewGate:
     DEFAULT_WARN_RATIO_LIMIT = 0.35      # 逐条级 WARN 占比超此比例自动升级为 BLOCK
     DEFAULT_CJK_MIN_RATIO = 0.55
     DEFAULT_REPEAT_RUN_LEN = 5           # "啊啊啊啊" 连续同字符 >=5 判为噪声
+    # 可丢弃噪声句占比上限：超过则判为**系统性**退化（BLOCK）。
+    # 2026-11-01：原实现对**任何**一条噪声句直接 BLOCK，导致 6 段素材里的
+    # 2 句口吃（"呃呃呃呃…"）就让整个 17 分钟任务失败——门禁的本意是拦
+    # "提示词复读循环"这类**整体退化**（A5 密度校验已覆盖），不该因个别
+    # 噪声句把整任务毙掉。故改为：噪声句**丢弃**（不进后续流程），
+    # 只有丢弃占比超限才升级为 BLOCK。
+    DEFAULT_DROP_RATIO_LIMIT = 0.30
 
     def __init__(self, media_duration: float = None, constraints: Dict[str, Any] = None):
         c = ((constraints or {}).get("asr_review", {}) or {})
@@ -116,6 +123,7 @@ class AsrReviewGate:
         self.warn_ratio_limit = float(c.get("warn_ratio_limit", self.DEFAULT_WARN_RATIO_LIMIT))
         self.cjk_min_ratio = float(c.get("cjk_min_ratio", self.DEFAULT_CJK_MIN_RATIO))
         self.repeat_run_len = int(c.get("repeat_run_len", self.DEFAULT_REPEAT_RUN_LEN))
+        self.drop_ratio_limit = float(c.get("drop_ratio_limit", self.DEFAULT_DROP_RATIO_LIMIT))
         # A11 字形审计（2026-10-30）：残留繁体即拦截（归一应在进入门禁前完成）
         self.traditional_block = bool(c.get("traditional_block", True))
         # 自定义语义词
@@ -129,6 +137,8 @@ class AsrReviewGate:
         """
         findings: List[Dict[str, Any]] = []
         segs = list(segments or [])
+        # 可丢弃的噪声句下标（内容无语义价值，丢弃后不进后续流程）
+        droppable: set = set()
 
         def _add(code, level, idx, detail, excerpt=""):
             findings.append({"code": code, "level": level, "index": idx,
@@ -162,17 +172,22 @@ class AsrReviewGate:
 
             # A1 非空 / 有效文本
             if not text:
-                _add("A1_EMPTY", "BLOCK", i, "文本为空")
+                _add("A1_EMPTY", "WARN", i, "文本为空（噪声句，将被丢弃）")
+                droppable.add(i)
                 continue
             stripped = re.sub(r"[\s，,。.、！!？?；;：:~～…—\-]", "", text)
             if not stripped:
-                _add("A1_PUNCT_ONLY", "BLOCK", i, "仅含标点符号，无有效内容", text[:40])
+                _add("A1_PUNCT_ONLY", "WARN", i,
+                     "仅含标点符号，无有效内容（噪声句，将被丢弃）", text[:40])
+                droppable.add(i)
                 continue
 
             # A2 噪声串（重复同字符 / 纯拉丁乱码）
             if re.search(r"(.)\1{%d,}" % self.repeat_run_len, stripped):
-                _add("A2_REPEAT_RUN", "BLOCK", i,
-                     f"存在连续重复字符≥{self.repeat_run_len}（噪声串）", text[:40])
+                _add("A2_REPEAT_RUN", "WARN", i,
+                     f"存在连续重复字符≥{self.repeat_run_len}（噪声串，将被丢弃）",
+                     text[:40])
+                droppable.add(i)
                 continue
 
             # A9 乱码比例
@@ -284,6 +299,20 @@ class AsrReviewGate:
             _add("A8_LOW_SEMANTIC", "WARN", -1,
                  f"全篇商品语义词命中仅 {hits} 个，疑似非商品内容或识别失败")
 
+        # —— 噪声句丢弃占比（系统性退化判定）——
+        if droppable:
+            drop_ratio = len(droppable) / max(len(segs), 1)
+            if drop_ratio > self.drop_ratio_limit:
+                _add("A2_DROP_RATIO_EXCEEDED", "BLOCK", -1,
+                     f"噪声句占比 {drop_ratio:.2f} > 上限 {self.drop_ratio_limit}"
+                     f"（{len(droppable)}/{len(segs)} 句），判定为系统性转录退化")
+                # 同时把被丢弃句的**原始错误码**升级为 BLOCK，
+                # 保留"是哪一类问题"的信息（如 A1_EMPTY / A2_REPEAT_RUN），
+                # 便于按码定位（否则只剩聚合码，丢失可诊断性）。
+                for _f in findings:
+                    if _f["index"] in droppable and _f["level"] == "WARN":
+                        _f["level"] = "BLOCK"
+
         # —— 分级裁决 ——
         blocks = [f for f in findings if f["level"] == "BLOCK"]
         warns = [f for f in findings if f["level"] == "WARN"]
@@ -325,6 +354,10 @@ class AsrReviewGate:
             },
             "findings": findings,
             "failed_codes": sorted({f["code"] for f in blocks}),
+            # 需丢弃的噪声句下标（调用方据此过滤后再进后续流程）
+            "dropped_indices": sorted(droppable),
+            "dropped_count": len(droppable),
+            "drop_ratio": round(len(droppable) / max(len(segs), 1), 4),
         }
 
         if blocks:
@@ -376,6 +409,15 @@ def enforce_review_gate(segments, media_duration=None, constraints=None,
         os.makedirs(os.path.dirname(os.path.abspath(report_path)), exist_ok=True)
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
+    # 剔除噪声句（内容无语义价值，如口吃/空文本）——它们不该进入后续选段，
+    # 但也不该让整个任务失败（占比超限会在 review 内升级为 BLOCK）。
+    _drop = set(report.get("dropped_indices") or [])
+    if _drop:
+        kept = [s for i, s in enumerate(segments or []) if i not in _drop]
+        print(f"[ASR-REVIEW] 丢弃 {len(_drop)} 条噪声句"
+              f"（占比 {report.get('drop_ratio', 0):.1%}），"
+              f"保留 {len(kept)}/{len(segments or [])} 句")
+        return kept
     return segments
 
 
@@ -421,6 +463,14 @@ def wire_into_verifier() -> None:
                           f, ensure_ascii=False, indent=2)
         # 把审核结论并入校对报告，便于统一审计
         report["asr_review"] = review_report
+        # 剔除噪声句（与 enforce_review_gate 同一口径）
+        _drop = set((review_report or {}).get("dropped_indices") or [])
+        if _drop:
+            kept = [s for i, s in enumerate(segments or []) if i not in _drop]
+            print(f"[ASR-REVIEW] 丢弃 {len(_drop)} 条噪声句"
+                  f"（占比 {(review_report or {}).get('drop_ratio', 0):.1%}），"
+                  f"保留 {len(kept)}/{len(segments or [])} 句")
+            return kept, report
         return segments, report
 
     AsrContextVerifier.verify_and_correct = _patched

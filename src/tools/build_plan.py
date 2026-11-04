@@ -23,6 +23,7 @@ import os
 import sys
 import json
 import re
+import statistics
 import argparse
 from typing import List, Dict, Any, Tuple, Optional
 
@@ -67,6 +68,19 @@ STYLING_KEYWORDS = ["搭配", "穿搭", "裤子", "裤腿", "格子裤", "编织
                     "胃裤", "衬衫", "背心", "半裙", "长裙", "短裙", "皮衣", "长裤", "短裤",
                     "牛仔", "靴", "鞋子", "包", "帽子", "围巾", "配饰", "气质感", "百搭",
                     "搭白色", "黑色的"]
+DECISION_CLOSING_KEYWORDS = ["纠结", "买哪个", "建议", "首选", "驼色", "白色", "买的人多",
+                            "适合谁", "仙女", "推荐入", "闭眼入", "买它", "入哪个", "拍哪个",
+                            "拍它", "哪款", "选哪个", "选色", "选哪个颜色", "显白", "百搭色"]
+CRAFT_DETAIL_KEYWORDS = ["做工", "手搓", "包边", "固定", "松紧", "自系", "容易松", "容易歪",
+                        "本布", "缝线", "走线", "细节", "工艺", "针法", "针脚", "拉链",
+                        "扣子", "纽扣", "内衬", "里布", "压线", "拷边"]
+
+# T7 品类漏斗预设字典（唯一事实源在 contracts/constraints.yaml，此处提供内置兜底）
+FUNNEL_ORDERS = {
+    "skirt_dress": ["hook", "fit", "craft_detail", "styling", "decision_closing"],
+    "coat_outerwear": ["hook", "fabric", "fit", "styling", "decision_closing"],
+    "default": ["hook", "fabric", "fit", "styling", "decision_closing"],
+}
 
 # 库存/促销/换款离场黑名单（正则，无时间窗；由旧 demo 黑名单泛化而来）
 # 2026-10-21 泛化验收修正：删除/收紧会误杀"穿搭/面料/版型"内容词的模式——
@@ -148,10 +162,14 @@ def _classify(text: str, prod_ctx: Dict[str, Any] = None) -> List[str]:
         cats.append("hook")
     if not is_pure_pants and any(k in text for k in FABRIC_KEYWORDS):
         cats.append("fabric")
+    if not is_pure_pants and any(k in text for k in CRAFT_DETAIL_KEYWORDS):
+        cats.append("craft_detail")
     if any(k in text for k in FIT_KEYWORDS):
         cats.append("fit")
     if any(k in text for k in STYLING_KEYWORDS):
         cats.append("styling")
+    if any(k in text for k in DECISION_CLOSING_KEYWORDS):
+        cats.append("decision_closing")
     return cats
 
 
@@ -198,15 +216,40 @@ def is_blacklisted(text: str, use_price: bool = True,
 # ---------------------------------------------------------------- 块构建
 
 def _segment_score(seg: Dict[str, Any], category: str, prod_ctx: Dict[str, Any] = None) -> float:
-    """段在指定类别下的得分：关键词命中数 × 时长权重 + 目标商品契合加权。"""
+    """段在指定类别下的得分：关键词命中数 × 时长权重 + 目标商品契合加权 + 手部动态动作性加权。"""
     kw_map = {
         "hook": HOOK_KEYWORDS, "fabric": FABRIC_KEYWORDS,
+        "craft_detail": CRAFT_DETAIL_KEYWORDS,
         "fit": FIT_KEYWORDS, "styling": STYLING_KEYWORDS,
+        "decision_closing": DECISION_CLOSING_KEYWORDS,
     }
     text = seg.get("text", "")
-    hits = sum(1 for k in kw_map[category] if k in text)
+    hits = sum(1 for k in kw_map.get(category, []) if k in text)
     dur = seg.get("duration", 0.0)
     score = hits * 2.0 + min(dur, 8.0) * 0.5
+
+    # T5: 做工与面料类目手部动态动作性加权（wrist_motion）
+    if category in ("fabric", "craft_detail") and seg.get("wrist_motion") is not None:
+        try:
+            wm = float(seg["wrist_motion"])
+            if wm >= 0.08:
+                score *= 1.30
+            elif wm < 0.03:
+                score *= 0.85
+        except Exception:
+            pass
+
+    # 选色决策类目尾部加权（2026-11-03，D1 改进 3/8，D5 借鉴 5）
+    if category == "decision_closing":
+        has_decision_directive = False
+        if any(w in text for w in ("纠结", "买哪个", "建议", "驼色")):
+            score += 40.0
+            has_decision_directive = True
+        if any(w in text for w in ("仙女", "白色", "适合谁", "首选")):
+            score += 35.0
+            has_decision_directive = True
+        if hits > 0 and not has_decision_directive:
+            score += 20.0
 
     if prod_ctx:
         core_words = prod_ctx.get("core_words") or []
@@ -218,7 +261,7 @@ def _segment_score(seg: Dict[str, Any], category: str, prod_ctx: Dict[str, Any] 
             mentions_pants = len(re.findall(r"裤", text))
             has_top_kw = any(w in text for w in ("毛衣", "开衫", "针织", "衣服", "上衣", "大衣", "外套", "小香", "上身", "搭", "穿搭"))
             if mentions_pants >= 2 and not has_top_kw:
-                if category in ("hook", "fabric"):
+                if category in ("hook", "fabric", "craft_detail"):
                     score -= 50.0
                 else:
                     score -= 15.0
@@ -265,7 +308,16 @@ def build_blocks(segments: List[Dict[str, Any]],
         for s in sorted(grp, key=lambda x: x.get("start", 0.0)):
             st = s.get("start", 0.0)
             en = s.get("end", st)
-            if cur is not None and st - cur["end"] <= MERGE_GAP_SEC:
+            wm_split = False
+            if cur is not None:
+                cur_wms = [x["wrist_motion"] for x in cur["segments"] if x.get("wrist_motion") is not None]
+                s_wm = s.get("wrist_motion")
+                if (s_wm is not None) != bool(cur_wms):
+                    wm_split = True
+                elif s_wm is not None and cur_wms:
+                    if abs(s_wm - statistics.median(cur_wms)) >= 0.05:
+                        wm_split = True
+            if cur is not None and st - cur["end"] <= MERGE_GAP_SEC and not wm_split:
                 cur["end"] = max(cur["end"], en)
                 cur["segments"].append(s)
             else:
@@ -291,8 +343,13 @@ def build_blocks(segments: List[Dict[str, Any]],
         for s in b["segments"]:
             cats.update(_classify(s.get("text", ""), prod_ctx=prod_ctx))
         b["categories"] = sorted(cats)
-        b["scores"] = {c: round(_segment_score({"text": text_all, "duration": b["dur"]}, c, prod_ctx=prod_ctx), 2)
-                       for c in ("hook", "fabric", "fit", "styling")}
+        wm = b.get("wrist_motion")
+        if wm is None:
+            seg_wms = [s["wrist_motion"] for s in b["segments"] if s.get("wrist_motion") is not None]
+            wm = float(statistics.median(seg_wms)) if seg_wms else None
+        b["wrist_motion"] = wm
+        b["scores"] = {c: round(_segment_score({"text": text_all, "duration": b["dur"], "wrist_motion": wm}, c, prod_ctx=prod_ctx), 2)
+                       for c in ("hook", "fabric", "craft_detail", "fit", "styling", "decision_closing")}
     blocks = [b for b in blocks if not b.get("_drop")]
     return blocks, rejected
 
@@ -301,7 +358,13 @@ def build_blocks(segments: List[Dict[str, Any]],
 # ---------------------------------------------------------------- 句子边界对齐（2026-10-27 反馈驱动）
 
 SENT_END_CHARS = "。！？!?；;…"
-SNAP_TOLERANCE_SEC = 2.0
+# R1（2026-11-01，参考成片 SSY410163 实测）：切点与 ASR 句末的偏移中位 **0.03s**、
+# 最大 **0.37s**。旧值 2.0s 允许切点落到 2 秒外的另一句上（等于"切在别处"）。
+# 收敛到 0.45s：既覆盖真实分布（最大 0.37s + 余量），又杜绝跨句误切。
+SNAP_TOLERANCE_SEC = 0.45
+# 语音气口吸附窗口：气口只在句末附近 ±该窗口内用于精调。
+SNAP_PAUSE_WINDOW_SEC = 0.40
+SNAP_PAUSE_MAX_OFFSET_SEC = 0.45
 
 
 def _ends_with_sentence_punct(text: str) -> bool:
@@ -309,12 +372,104 @@ def _ends_with_sentence_punct(text: str) -> bool:
     return bool(t) and t[-1] in SENT_END_CHARS
 
 
+def _hook_segment_sec(constraints: Dict[str, Any]) -> float:
+    """R10：钩子区的单段目标时长（秒）——用于制造多个切点。
+
+    参考片钩子区段长 1.78 / 4.72 / 6.73s，中位 ≈ 4.7s；
+    取 4.0s 作为目标，短于普通段长，使钩子区能切出 2~3 个短段。
+    """
+    try:
+        _rules = constraints.get("slicing_rules") or {}
+        _pc = _rules.get("pacing_curve") or {}
+        v = _pc.get("hook_segment_sec")
+        if v:
+            return float(v)
+    except Exception:
+        pass
+    return 4.0
+
+
+def _hook_target_sec(constraints: Dict[str, Any]) -> float:
+    """R10：钩子区的累计目标时长（秒）——达到即停止继续切短段。
+
+    参考片钩子区覆盖 0~10s；本仓库钩子配额上限 12s，取 10s 作为目标。
+    """
+    try:
+        _rules = constraints.get("slicing_rules") or {}
+        _pc = _rules.get("pacing_curve") or {}
+        if not _pc.get("enabled", False):
+            return 0.0
+        v = _pc.get("hook_target_sec")
+        if v:
+            return float(v)
+    except Exception:
+        pass
+    return 10.0
+
+
+def _hook_punch_params(constraints: Dict[str, Any]) -> Tuple[float, float, int]:
+    """R10 / T4：提神快切档参数（punch_min_sec, punch_max_sec, punch_min_count）。"""
+    try:
+        _rules = constraints.get("slicing_rules") or {}
+        _pc = _rules.get("pacing_curve") or {}
+        if not _pc.get("enabled", False):
+            return 1.5, 2.8, 0
+        p_min = float(_pc.get("punch_min_sec", 1.5))
+        p_max = float(_pc.get("punch_max_sec", 2.8))
+        p_cnt = int(_pc.get("punch_min_count", 1))
+        return p_min, p_max, p_cnt
+    except Exception:
+        pass
+    return 1.5, 2.8, 0
+
+
+def _resolve_candidate_wrist_motion(b: Dict[str, Any], raw_video_path: Optional[str]) -> Optional[float]:
+    """获取候选块的手部动态动作性指标（wrist_motion）。
+
+    优先读取 block/segment 既有特征；若无且有真实源视频文件则提取采样帧；
+    若 pose 数据缺失则返回 None，确保候选评分安全保留，绝不误清零。
+    """
+    if "wrist_motion" in b and b["wrist_motion"] is not None:
+        return float(b["wrist_motion"])
+    segs = b.get("segments") or []
+    seg_wm = [s["wrist_motion"] for s in segs if "wrist_motion" in s and s["wrist_motion"] is not None]
+    if seg_wm:
+        return float(statistics.median(seg_wm))
+    vid = b.get("source_file") or raw_video_path
+    if vid and os.path.exists(vid):
+        try:
+            from src.tools.extract_shot_features import clip_features
+            st = float(b.get("start", 0.0))
+            en = float(b.get("end", st))
+            if en > st:
+                feats = clip_features(vid, st, en, samples=3)
+                if feats.get("pose_ok") and feats.get("wrist_motion") is not None:
+                    wm = feats.get("wrist_motion")
+                    b["wrist_motion"] = wm
+                    b["ankles_in_frame"] = feats.get("ankles_in_frame", False)
+                    return wm
+        except Exception:
+            pass
+    return None
+
+
 def _snap_end_to_sentence(segs: List[Dict[str, Any]], hard_end: float,
-                          tolerance: float = SNAP_TOLERANCE_SEC) -> float:
+                          tolerance: float = SNAP_TOLERANCE_SEC,
+                          pauses: List[Tuple[float, float]] = None) -> float:
     """把硬裁剪结束点吸附到最近的句子边界（段末标点），解决"对话从半句砍断"。
 
     只在 [hard_end - tolerance, hard_end + 0.2] 窗口内寻找候选（宁短勿长，
     保证成片总时长不低于 45s 下限）；找不到合格标点则保留原硬切点。
+
+    R1（2026-11-01，参考成片 SSY410163 实测）：
+      · **主判据 = ASR 句末**。9 个切点与最近句末偏移中位 0.03s / 最大 0.37s，
+        故容差由 2.0s 收紧到 0.45s（旧的 2.0s 会把切点落到 2 秒外的另一句上）。
+      · **辅助精调 = 语音气口**。pauses 传入该素材的相对凹陷列表
+        [(时刻, 凹陷深度dB)] 时，在句末候选附近 ±0.40s 内选更深的凹陷，
+        使切点落在"换气最充分"处；无可用凹陷则退回纯标点吸附（向后兼容）。
+      · ⚠️ 实测修正：参考成片切点处的 −120dB 是**拼接产物**（剪辑软件切音轨留下的缝），
+        不是选段信号——源侧凹陷在切点处与随机点无富集。故气口只作精调，
+        不承担"选段"职责（承担它的是 ASR 句末）。
     """
     best = None
     for s in segs:
@@ -324,11 +479,96 @@ def _snap_end_to_sentence(segs: List[Dict[str, Any]], hard_end: float,
         if hard_end - tolerance <= t <= hard_end + 0.2:
             if best is None or t > best:
                 best = t
-    return best if best is not None else hard_end
+    punct_end = best if best is not None else hard_end
+
+    if pauses:
+        try:
+            from src.tools.slicing_rules import snap_cut_to_pause
+            snapped = snap_cut_to_pause(punct_end, [], SNAP_PAUSE_WINDOW_SEC,
+                                        SNAP_PAUSE_MAX_OFFSET_SEC, dips=pauses)
+            if snapped is not None:
+                return snapped
+        except Exception:
+            pass
+    return punct_end
+
+
+def _split_long_block(block: Dict[str, Any], max_sec: float,
+                        min_sec: float = 1.7) -> List[Dict[str, Any]]:
+    """把超长块按 ASR 句末边界拆成多段（R2）。
+
+    参考成品 SSY410163 实测：最长段 12.97s，主体 5~10s——
+    人工剪辑不会让一个镜头/一个话题连续占 30s。
+    本函数按句末标点切分（保证不从半句断开），切点优先落在句末。
+    """
+    segs = sorted(block.get("segments", []) or [],
+                 key=lambda s: s.get("start", 0.0))
+    if not segs or block.get("dur", 0.0) <= max_sec:
+        return [block]
+
+    groups: List[List[Dict[str, Any]]] = []
+    cur: List[Dict[str, Any]] = []
+    for s in segs:
+        # 先判断"加入本句后是否超限"，超限则**在上一句末**断开——
+        # 若等超限才断，拆出的段仍会超限（实测 13.0s 上限切出 14.8s 的段）。
+        if cur and (s.get("end", 0.0) - cur[0].get("start", 0.0)) > max_sec:
+            groups.append(cur)
+            cur = []
+        cur.append(s)
+        grp_dur = cur[-1].get("end", 0.0) - cur[0].get("start", 0.0)
+        if grp_dur >= max_sec and _ends_with_sentence_punct(s.get("text", "")):
+            groups.append(cur)
+            cur = []
+    if cur:
+        groups.append(cur)
+
+    out: List[Dict[str, Any]] = []
+    for g in groups:
+        st = g[0].get("start", block.get("start", 0.0))
+        en = g[-1].get("end", st)
+        dur = en - st
+        if dur < min_sec and out:
+            # 尾段过短：把**上一段的最后一句**挪过来，而不是整段并入。
+            # 整段并入会让上一段重新超上限（实测 13.8s 的段因 1.5s 尾段被并回
+            # 而重新超限）；而"留一个 1.0s 碎段"同样是坏片（实测 project-1
+            # 切出 1.00s 的碎镜）。挪一句可让两段都落在区间内。
+            prev = out[-1]
+            if len(prev["segments"]) > 1:
+                moved = prev["segments"].pop()
+                g = [moved] + g
+                st = moved.get("start", st)
+                en = g[-1].get("end", en)
+                dur = en - st
+                prev["end"] = prev["segments"][-1].get("end", prev["end"])
+                prev["dur"] = round(prev["end"] - prev["start"], 2)
+                prev["text"] = "，".join(x.get("text", "")
+                                        for x in prev["segments"])
+            else:
+                # 上一段只有一句，挪不动 → 并入（接受轻微超限）
+                prev["end"] = en
+                prev["dur"] = round(en - prev["start"], 2)
+                prev["segments"] = prev["segments"] + g
+                prev["text"] = "，".join(x.get("text", "")
+                                         for x in prev["segments"])
+                continue
+        if dur < min_sec and not out:
+            continue
+        out.append({
+            "start": st, "end": en, "dur": round(dur, 2),
+            "segments": g,
+            "text": "，".join(x.get("text", "") for x in g),
+            "categories": block.get("categories", []),
+            "scores": block.get("scores", {}),
+            "source_file": block.get("source_file", ""),
+            "source_tag": block.get("source_tag", ""),
+            "_quota_cat": block.get("_quota_cat"),
+        })
+    return out or [block]
 
 
 def _trim_block_to_duration(block: Dict[str, Any], target: float,
-                            prefer_keywords: List[str] = None) -> Dict[str, Any]:
+                            prefer_keywords: List[str] = None,
+                            pauses: List[Tuple[float, float]] = None) -> Dict[str, Any]:
     """将 block 修剪到 target 时长。优先段边界对齐；无法对齐时硬时间裁剪兜底。
 
     prefer_keywords: 给定时不取块首，而是滑动窗口选取"关键词命中最多"的连续段
@@ -368,9 +608,16 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
             # （2026-10-27：裁剪点吸附句末标点，避免从半句砍断）
             win_st = kept[0].get("start", block["start"])
             win_en = kept[-1].get("end", win_st + target)
+            is_hc = False
             if win_en - win_st > target + 0.05:
-                win_en = _snap_end_to_sentence(kept, win_st + target)
+                win_en = _snap_end_to_sentence(kept, win_st + target, pauses=pauses)
+                cut_segs = [s for s in kept if s.get("start", 0) < win_en < s.get("end", 0)]
                 kept = [s for s in kept if s.get("start", 0) < win_en]
+                if cut_segs:
+                    s_cut = cut_segs[0]
+                    rest_tail = dict(s_cut, start=win_en, duration=round(s_cut.get("end", 0) - win_en, 2))
+                    rest = [rest_tail] + rest
+                    is_hc = True
             trimmed = {
                 "start": win_st,
                 "end": win_en,
@@ -381,6 +628,8 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
                 "source_file": block.get("source_file", ""),
                 "source_tag": block.get("source_tag", ""),
             }
+            if is_hc:
+                trimmed["_hard_cut"] = True
             if rest:
                 remainder = {
                     "start": rest[0].get("start", block["start"]),
@@ -413,9 +662,15 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
         # 策略 2：段边界无法满足（单段超长）→ 硬时间裁剪到 target
         # （2026-10-27：裁剪点吸附句末标点，保持对话完整）
         use_hard_cut = True
-        hard_end = _snap_end_to_sentence(segs, block["start"] + target)
+        hard_end = _snap_end_to_sentence(segs, block["start"] + target, pauses=pauses)
         kept = [s for s in segs if s.get("start", 0) < hard_end]
-        rest = [s for s in segs if s.get("start", 0) >= hard_end]
+        cut_segs = [s for s in segs if s.get("start", 0) < hard_end < s.get("end", 0)]
+        if cut_segs:
+            s_cut = cut_segs[0]
+            rest_tail = dict(s_cut, start=hard_end, duration=round(s_cut.get("end", 0) - hard_end, 2))
+            rest = [rest_tail] + [s for s in segs if s.get("start", 0) >= hard_end and s != s_cut]
+        else:
+            rest = [s for s in segs if s.get("start", 0) >= hard_end]
 
     def _mk(segs_subset, force_end=None):
         st = segs_subset[0].get("start", block["start"]) if segs_subset else block["start"]
@@ -431,6 +686,7 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
     if use_hard_cut:
         # 硬裁剪路径：结束于精确目标时刻（防呆：不得因 acc 被改写而误入段对齐路径）
         trimmed = _mk(kept, force_end=block["start"] + target)
+        trimmed["_hard_cut"] = True
     else:
         # 段对齐路径：结束于最后一个整段的段界（与 remainder 无缝衔接，无重叠）
         trimmed = _mk(kept)
@@ -438,10 +694,17 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
         # 缩短，会导致"修剪无进展→整块被丢弃→总时长跌破下限"。此处改用硬时间裁剪。
         # （2026-10-27：同样吸附句末标点）
         if trimmed["dur"] - target > 0.05:
-            hard_end = _snap_end_to_sentence(segs, block["start"] + target)
+            hard_end = _snap_end_to_sentence(segs, block["start"] + target, pauses=pauses)
             kept = [s for s in segs if s.get("start", 0) < hard_end]
-            rest = [s for s in segs if s.get("start", 0) >= hard_end]
+            cut_segs = [s for s in segs if s.get("start", 0) < hard_end < s.get("end", 0)]
+            if cut_segs:
+                s_cut = cut_segs[0]
+                rest_tail = dict(s_cut, start=hard_end, duration=round(s_cut.get("end", 0) - hard_end, 2))
+                rest = [rest_tail] + [s for s in segs if s.get("start", 0) >= hard_end and s != s_cut]
+            else:
+                rest = [s for s in segs if s.get("start", 0) >= hard_end]
             trimmed = _mk(kept, force_end=hard_end)
+            trimmed["_hard_cut"] = True
     if rest:
         remainder = _mk(rest)
         if remainder["dur"] >= MIN_BLOCK_SEC:
@@ -455,8 +718,10 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
 _CATEGORY_STICKER_TEXT = {
     "hook": "开场必看",
     "fabric": "面料细节",
+    "craft_detail": "做工细节",
     "fit": "版型显瘦",
     "styling": "一衣多穿",
+    "decision_closing": "闭眼选色",
 }
 # 面料/工艺类更具体的高频卖点短语（命中即优先用）
 _STICKER_PHRASES = [
@@ -587,10 +852,14 @@ def build_plan(
     scene_cuts: Optional[List[float]] = None,
     cache_key: str = None,
     work_dir: str = None,
+    pauses_by_source: Dict[str, List[Tuple[float, float]]] = None,
 ) -> Dict[str, Any]:
     """生成 plan.json（结构符合 contracts/plan.schema.json）。
 
     cache_key + work_dir 提供时启用阶段缓存（B13）。
+
+    pauses_by_source（2026-11-01 R1）：{源文件绝对路径: [(气口时刻, dB), ...]}，
+    用于把裁剪点吸附到语音气口（实测参考成片 78% 的切点落在近数字静音处）。
     """
     if cache_key and work_dir:
         from src.tools.stage_cache import load_stage
@@ -631,11 +900,72 @@ def build_plan(
     meta = {"funnel": {}, "rejected_count": len(rejected),
             "candidate_blocks": len(blocks), "notes": []}
 
+    # R1：句末吸附容差改为**约束驱动**（唯一事实源 = constraints.slicing_rules）。
+    # 参考成片实测偏移中位 0.03s / 最大 0.37s → 0.45s；旧的硬编码 2.0s 会跨句误切。
+    global SNAP_TOLERANCE_SEC, SNAP_PAUSE_WINDOW_SEC, SNAP_PAUSE_MAX_OFFSET_SEC
+    try:
+        from src.tools.slicing_rules import load_slicing_rules, resolve_cut_params
+        _cp = resolve_cut_params(load_slicing_rules(constraints))
+        SNAP_TOLERANCE_SEC = float(_cp["snap_tolerance_sec"])
+        SNAP_PAUSE_WINDOW_SEC = float(_cp["search_window_sec"])
+        SNAP_PAUSE_MAX_OFFSET_SEC = float(_cp["max_offset_from_sentence"])
+        meta["notes"].append(
+            f"句末吸附容差 {SNAP_TOLERANCE_SEC}s / 气口窗口 {SNAP_PAUSE_WINDOW_SEC}s"
+            f"（约束驱动）")
+    except Exception:
+        pass
+
+    def _pauses_for(block: Dict[str, Any]) -> Optional[List[Tuple[float, float]]]:
+        """取该块所属源素材的语音气口列表（R1）。"""
+        if not pauses_by_source:
+            return None
+        sf = block.get("source_file") or ""
+        if not sf:
+            return None
+        got = pauses_by_source.get(sf)
+        if not got:
+            # 归一化路径后再试一次（Windows 大小写/分隔符差异）
+            key = os.path.normcase(os.path.abspath(sf))
+            for k, v in (pauses_by_source or {}).items():
+                if os.path.normcase(os.path.abspath(k)) == key:
+                    got = v
+                    break
+        return got or None
+
     def quota(cat: str) -> Tuple[float, float]:
-        q = funnel_c.get(cat, {})
+        lookup_cat = "fabric" if (cat == "craft_detail" and "craft_detail" not in funnel_c) else cat
+        q = funnel_c.get(lookup_cat, {})
         return float(q.get("min", 0)), float(q.get("max", 0))
 
     order = ["hook", "fabric", "fit", "styling"]
+    if "decision_closing" in funnel_c:
+        order.append("decision_closing")
+    # R6（2026-11-01）与 T7（2026-11-03）：品类漏斗预设字典与 spec 覆写机制。
+    try:
+        from src.tools.slicing_rules import load_slicing_rules, resolve_funnel_order
+        _sr = load_slicing_rules(constraints)
+        if _sr:
+            _order = resolve_funnel_order(spec_data, constraints)
+            if _order and _order != order:
+                meta["notes"].append(f"漏斗顺序按品类预设/覆写: {' → '.join(order)} "
+                                     f"→ {' → '.join(_order)}")
+                order = list(_order)
+                if "decision_closing" in funnel_c and "decision_closing" not in order:
+                    order.append("decision_closing")
+    except Exception as e:
+        print(f"[BUILD-PLAN][WARN] 切片规则解析失败，用内置漏斗字典: {e}")
+        cat_key = (spec_data.get("category") or
+                   (spec_data.get("options") or {}).get("category") or
+                   (spec_data.get("product") or {}).get("category"))
+        if not cat_key and prod_ctx:
+            full_title = f"{prod_ctx.get('title_line1', '')} {prod_ctx.get('title_line2', '')}"
+            if any(w in full_title for w in ("裙", "半裙", "半身裙", "连衣裙")):
+                cat_key = "skirt_dress"
+            elif any(w in full_title for w in ("大衣", "外套", "羽绒服", "风衣", "皮衣", "棉服", "西装")):
+                cat_key = "coat_outerwear"
+        order = list(FUNNEL_ORDERS.get(cat_key) or FUNNEL_ORDERS["default"])
+        if "decision_closing" in funnel_c and "decision_closing" not in order:
+            order.append("decision_closing")
 
     # 按漏斗类别依次贪心选块（配额内取最高分；配额未满时按段边界修剪）
     chosen_by_cat: Dict[str, List[Dict[str, Any]]] = {}
@@ -645,13 +975,74 @@ def build_plan(
         if q_min <= 0:
             continue
         cands = [b for b in blocks
-                 if cat in b["categories"] and id(b) not in used_ids]
+                 if (cat in b["categories"] or (cat == "craft_detail" and "fabric" in b["categories"]))
+                 and id(b) not in used_ids]
+        # T5: 对做工与面料类目候选块执行手部动作性（wrist_motion）动态加权打分
+        # 仅当候选块此前未获得 wrist_motion（为 None）且能从源视频提取时，才基于实际特征重新计分，杜绝双重倍率叠加
+        if cat in ("fabric", "craft_detail"):
+            for b in cands:
+                if b.get("wrist_motion") is None:
+                    wm = _resolve_candidate_wrist_motion(b, raw_video_path)
+                    if wm is not None:
+                        b["wrist_motion"] = wm
+                        b["scores"][cat] = round(_segment_score(
+                            {"text": b.get("text", ""), "duration": b.get("dur", 0.0), "wrist_motion": wm},
+                            cat, prod_ctx=prod_ctx), 2)
         cands.sort(key=lambda b: b["scores"].get(cat, 0), reverse=True)
         picked: List[Dict[str, Any]] = []
         acc = 0.0
+        p_min, p_max, p_cnt = _hook_punch_params(constraints)
+        target_limit = min(_hook_target_sec(constraints), q_max) if (cat == "hook" and p_cnt > 0) else q_min
         for b in cands:
-            if acc >= q_min and picked:
+            if acc >= target_limit and picked:
                 break
+            # R10 / T4: 钩子区提神快切档（punch_sec 1.5~2.8s 与常规段交替）
+            if cat == "hook" and p_cnt > 0 and acc < _hook_target_sec(constraints):
+                _cur = b
+                _guard = 0
+                punch_target = round((p_min + p_max) / 2.0, 2)    # 约 2.15s
+                standard_target = _hook_segment_sec(constraints)  # 默认 4.0s
+                while (_cur is not None and acc < _hook_target_sec(constraints)
+                       and _guard < 6):
+                    _guard += 1
+                    # T4: 交替产出常规段（3.0~5.0s）与 punch 段（1.5~2.8s）
+                    # 确保开场至少有一段提神快切与一段常规呼吸段
+                    has_punch = any(p_min - 0.05 <= x["dur"] <= p_max + 0.05 for x in picked)
+                    has_std = any(x["dur"] >= 3.0 for x in picked)
+                    if not has_punch and len(picked) >= 1:
+                        _want = min(_cur["dur"], punch_target)
+                    elif not has_std and len(picked) >= 1:
+                        _want = min(_cur["dur"], standard_target)
+                    elif len(picked) % 2 == 1:
+                        _want = min(_cur["dur"], punch_target)
+                    else:
+                        if len(cands) == 1 and not has_punch and p_min + 1.2 <= _cur["dur"] < standard_target + 1.2:
+                            _want = punch_target
+                        else:
+                            _want = min(_cur["dur"], standard_target)
+
+                    _pk = HOOK_KEYWORDS if len(picked) == 0 else None
+                    tb = _trim_block_to_duration(
+                        _cur, _want, prefer_keywords=_pk,
+                        pauses=_pauses_for(_cur))
+                    if tb["dur"] < 1.0 or acc + tb["dur"] > q_max:
+                        break
+                    tb["_quota_cat"] = cat
+                    picked.append(tb)
+                    used_ids.add(id(_cur))
+                    acc += tb["dur"]
+                    _rem = tb.pop("remainder", None)
+                    if _rem is not None and _rem["dur"] >= 1.0:
+                        blocks.append(_rem)      # 余料也挂回池，供后续类别复用
+                    if tb.get("_hard_cut"):
+                        _cur = None
+                        break
+                    if _rem is None or _rem["dur"] < 1.0:
+                        _cur = None
+                        break
+                    _cur = _rem
+                if picked and picked[-1].get("_quota_cat") == cat:
+                    continue
             if acc + b["dur"] <= q_max:
                 picked.append(dict(b, _quota_cat=cat))
                 used_ids.add(id(b))
@@ -660,7 +1051,8 @@ def build_plan(
                 # 配额未满：从头部按段边界修剪；余料挂回池供后续类别复用
                 tb = _trim_block_to_duration(
                     b, q_max - acc,
-                    prefer_keywords=(HOOK_KEYWORDS if cat == "hook" else None))
+                    prefer_keywords=(HOOK_KEYWORDS if cat == "hook" else None),
+                    pauses=_pauses_for(b))
                 if tb["dur"] >= 1.0:
                     tb["_quota_cat"] = cat
                     picked.append(tb)
@@ -687,7 +1079,9 @@ def build_plan(
         if total >= dur_min:
             return total
         rest = [b for b in blocks if id(b) not in used_ids]
-        rest.sort(key=lambda b: b["scores"].get("styling", 0) + b["scores"].get("fabric", 0),
+        rest.sort(key=lambda b: b["scores"].get("styling", 0) + b["scores"].get("fabric", 0)
+                               + b["scores"].get("craft_detail", 0)
+                               + b["scores"].get("decision_closing", 0),
                   reverse=True)
         # 需求 3：补齐时长也不得引入与商品无关的闲聊块——
         # 块文本若不含任何漏斗类目关键词（categories 为空）则跳过；
@@ -700,9 +1094,17 @@ def build_plan(
             if total >= dur_min:
                 break
             need = dur_min - total
-            tb = _trim_block_to_duration(b, min(b["dur"], need + 2.0))
+            tb = _trim_block_to_duration(b, min(b["dur"], need + 2.0),
+                                        pauses=_pauses_for(b))
             if tb["dur"] >= 1.0:
-                ordered.append(tb)
+                # 保持 decision_closing 在尾端
+                closing_indices = [idx for idx, blk in enumerate(ordered)
+                                   if blk.get("_quota_cat") == "decision_closing"
+                                   or blk.get("categories") == ["decision_closing"]]
+                if closing_indices:
+                    ordered.insert(closing_indices[0], tb)
+                else:
+                    ordered.append(tb)
                 used_ids.add(id(b))
                 total = round(total + tb["dur"], 2)
         return total
@@ -713,21 +1115,32 @@ def build_plan(
     else:
         meta["notes"].append(f"配额补齐后总时长 {total}s")
 
-    # 时长超出：从尾部（穿搭层）逐块修剪/丢弃（带无进展保护，防死循环）
+    # 时长超出：从尾部逐块修剪/丢弃（优先保住 decision_closing，带无进展保护）
     guard = 0
     while total > dur_max and ordered_blocks and guard < 50:
         guard += 1
-        last = ordered_blocks[-1]
         excess = total - dur_max
-        if last["dur"] - excess >= 1.0:
-            tb = _trim_block_to_duration(last, last["dur"] - excess)
-            new_total = round(total - last["dur"] + tb["dur"], 2)
+        target_idx = -1
+        # 若尾部为 decision_closing 且削减后会低于其配额，优先修剪之前的穿搭块
+        closing_min = float(funnel_c.get("decision_closing", {}).get("min", 6.0) or 6.0)
+        if (len(ordered_blocks) > 1 and
+            ordered_blocks[-1].get("_quota_cat") == "decision_closing" and
+            ordered_blocks[-1]["dur"] - excess < closing_min):
+            non_closing = [k for k, blk in enumerate(ordered_blocks)
+                           if blk.get("_quota_cat") != "decision_closing"]
+            if non_closing:
+                target_idx = non_closing[-1]
+        target_block = ordered_blocks[target_idx]
+        if target_block["dur"] - excess >= 1.0:
+            tb = _trim_block_to_duration(target_block, target_block["dur"] - excess,
+                                        pauses=_pauses_for(target_block))
+            new_total = round(total - target_block["dur"] + tb["dur"], 2)
             if new_total < total - 0.05:  # 有实质进展才接受
-                ordered_blocks[-1] = tb
+                ordered_blocks[target_idx] = tb
                 total = new_total
                 continue
-        # 无进展 → 丢弃尾块
-        ordered_blocks.pop()
+        # 无进展 → 丢弃该块
+        ordered_blocks.pop(target_idx)
         total = round(sum(b["dur"] for b in ordered_blocks), 2)
 
     # 修剪后若跌破时长下限 → 再补一次（修剪与补齐存在先后依赖）
@@ -737,6 +1150,33 @@ def build_plan(
 
     meta["total_duration"] = total
     meta["target_range"] = [dur_min, dur_max]
+
+    # R2（2026-11-01）：片段时长区间约束。
+    # 参考成片 SSY410163 实测：5~10s 占 60%，中位 6.29s，最长 12.97s。
+    # 此处只做"标记 + 修剪提示"，不改变总时长（总时长由 duration_range 主导）——
+    # 过短片段（碎切）与过长片段（拖沓）记入 meta，交由 Agent 决策与 QC 复核。
+    _sr_rules = {}
+    try:
+        from src.tools.slicing_rules import load_slicing_rules
+        _sr_rules = load_slicing_rules(constraints)
+    except Exception:
+        _sr_rules = {}
+    _cd = (_sr_rules.get("clip_duration") or {}) if _sr_rules else {}
+    _cd_min = float(_cd.get("min_sec", 0) or 0)
+    _cd_max = float(_cd.get("max_sec", 1e9))
+    _cd_target = float(_cd.get("target_sec", 0) or 0)
+
+    # R2（2026-11-01）：超长块按句末边界拆分，避免单段拖沓（参考片最长 12.97s）。
+    if _cd_max < 1e9:
+        _split_blocks: List[Dict[str, Any]] = []
+        for _b in ordered_blocks:
+            _split_blocks.extend(_split_long_block(_b, _cd_max, _cd_min))
+        if len(_split_blocks) != len(ordered_blocks):
+            meta["notes"].append(
+                f"R2 超长块拆分：{len(ordered_blocks)} → {len(_split_blocks)} 段"
+                f"（上限 {_cd_max}s）")
+            ordered_blocks = _split_blocks
+            total = round(sum(b["dur"] for b in ordered_blocks), 2)
 
     # 生成 clips
     clips = []
@@ -780,6 +1220,13 @@ def build_plan(
         if b.get("source_file"):
             clip["source_file"] = b["source_file"]
             clip["source_tag"] = b.get("source_tag", "")
+        for feat_k in ("wrist_motion", "ankles_in_frame", "span", "body_h", "framing"):
+            if b.get(feat_k) is not None:
+                clip[feat_k] = b[feat_k]
+        # R2：时长区间标记（供 Agent 决策与 QC 复核；不改时长本身）
+        if _cd_min or _cd_max < 1e9:
+            clip["duration_in_range"] = bool(
+                _cd_min <= clip["dur"] <= _cd_max)
         clips.append(clip)
 
     if not clips:
@@ -845,6 +1292,21 @@ def build_plan(
 
     options = spec_data.get("options", {}) or {}
     sources_in_plan = sorted({c["source_file"] for c in clips if c.get("source_file")})
+
+    # 切片规则自检报告（R1~R6）——写入 plan 供 Agent 复核与 QC 断言消费
+    # 注：此处为**初值**。画面特征（R3/R4）由 agent_director 在 plan 落盘前补齐，
+    # 故完整判定由 director 侧重算并覆盖（见 AgentDirector.run_director_workflow）。
+    _slicing_report = {}
+    try:
+        from src.tools.slicing_rules import evaluate_plan_slicing
+        _slicing_report = evaluate_plan_slicing(
+            clips, spec_data, constraints)
+        for _c in _slicing_report.get("checks", []):
+            if not _c.get("passed"):
+                meta["notes"].append(
+                    f"切片规则 {_c['id']} 未通过（WARN）：{_c.get('detail')}")
+    except Exception as e:
+        print(f"[BUILD-PLAN][WARN] 切片规则评估失败（不阻断）: {e}")
     plan = {
         "project_id": spec_data.get("project_id", "demo"),
         "raw_video_path": os.path.abspath(raw_video_path),
@@ -859,6 +1321,7 @@ def build_plan(
         "cta": {"text": _derive_cta_text(spec_data), "dur": 2.5},
         "boom": {"volume": 0.45, "file": "boom.wav"},
         "subtitles": {"keywords": options.get("highlight_keywords", [])},
+        "slicing_rules": _slicing_report,
         "selection_meta": meta,
     }
     if cache_key and work_dir:

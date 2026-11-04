@@ -78,8 +78,21 @@ def _ffprobe_ok(video_path: str) -> dict:
 
 
 def collect_source_videos(spec: dict, spec_dir: str) -> list:
-    """按契约优先级收集直播素材（返回绝对路径列表，顺序稳定）。"""
+    """按契约优先级收集直播素材（返回绝对路径列表，顺序稳定）。
+
+    排除本任务自身的产物（2026-11-01）：交付物写入素材目录
+    （`{project_id}.mp4` / `.jpg`），与 raw_video_path 同目录。
+    重跑时若不排除，上一轮的**成片**会被当成第 N+1 段原始素材重新摄入
+    → 素材清单污染（实测 6 段变 7 段，多出的正是上轮成片）。
+    """
     paths = []
+    pid = str(spec.get("project_id") or "")
+
+    def _is_own_artifact(name: str) -> bool:
+        if not pid:
+            return False
+        stem = os.path.splitext(name)[0]
+        return stem in {pid, f"{pid}_final", f"{pid}_cover"}
 
     # 1) 显式列表优先
     for p in spec.get("raw_video_paths") or []:
@@ -93,7 +106,7 @@ def collect_source_videos(spec: dict, spec_dir: str) -> list:
         primary_abs = resolve_path(primary, spec_dir) or os.path.abspath(primary)
         if os.path.isdir(primary_abs):
             for name in sorted(os.listdir(primary_abs)):
-                if name.lower().endswith(VIDEO_EXTS):
+                if name.lower().endswith(VIDEO_EXTS) and not _is_own_artifact(name):
                     ap = os.path.abspath(os.path.join(primary_abs, name))
                     if ap not in paths:
                         paths.append(ap)
