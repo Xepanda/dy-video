@@ -199,6 +199,8 @@ class AgentDirector:
                 if self._is_own_artifact(os.path.basename(rp)):
                     continue
                 paths.append(rp)
+        if paths:
+            return paths
         primary = self.spec.get("raw_video_path")
         if primary:
             primary_abs = resolve_path(primary, spec_dir) or os.path.abspath(primary)
@@ -306,6 +308,41 @@ class AgentDirector:
                 c["sticker_y"] = my
                 continue
 
+            # 镜像分镜（effect=hflip）：成片画面左右翻转，人脸水平位置随之互换。
+            # 若仍按源帧人脸位置选贴纸边，选出的"安全侧"在成片上正好压脸
+            # （2026-11-04 project-4 实测：c07_fit 源帧间距 357px 判 OK，
+            #  成片 QC「叠加层人脸安全」却判 BLOCK 压脸）。
+            # 采样人脸 bbox 按成片画幅左右镜像后再参与避让计算，保证判定对象
+            # 与实际交付对象一致（§11.2 #4）。注意必须是「替换」而非「并集」：
+            # 并集会把源帧里并不存在的人脸也算进去，两侧都被判为压脸，
+            # 反而选不出安全位置。镜像若因遮挡覆盖率不足被装配器放弃，
+            # QC 的成片级人脸安全复检会兜底拦截（当前任务 mirror_abandoned=0）。
+            if str(c.get("effect") or "") == "hflip":
+                faces = [
+                    (out_w - fx1, fy0, out_w - fx0, fy1)
+                    for (fx0, fy0, fx1, fy1) in faces
+                ]
+
+            # 推镜分镜（zoom>1）：装配器用 zoompan 以「水平居中 + y_anchor」裁剪后
+            # 放大，源帧人脸 bbox 在成片里会被放大并平移。挂角贴纸是成片坐标系里的
+            # 固定矩形，若按未推镜的源帧判定，选出的"安全侧"推镜后可能正好压脸
+            # （2026-11-04 project-4 v2 实测：c08_styling zoom=1.3 源帧判 right OK，
+            #  成片 QC「叠加层人脸安全」却判 BLOCK 压脸 38px）。
+            # 按 zoompan 同款公式把人脸映射到成片坐标系；推镜是缓入的，因此同时
+            # 保留「未推镜」与「推镜完成」两种真实形态，取最坏帧间距最大者。
+            z = float(c.get("zoom", 1.0) or 1.0)
+            if z > 1.0:
+                zc = (self.constraints.get("zoom_effect", {}) or {})
+                ya = float(c.get("y_anchor", zc.get("y_anchor", 0.35)) or 0.35)
+                out_h = 1920
+                x_c = out_w * (1.0 - 1.0 / z) / 2.0
+                y_c = out_h * ya * (1.0 - 1.0 / z)
+                faces = faces + [
+                    ((fx0 - x_c) * z, (fy0 - y_c) * z,
+                     (fx1 - x_c) * z, (fy1 - y_c) * z)
+                    for (fx0, fy0, fx1, fy1) in faces
+                ]
+
             def _gap(rect, face_rect):
                 """矩形间距（与 QC 的 _rect_overlap_gap 同一符号约定）。"""
                 ax0, ay0, ax1, ay1 = rect
@@ -321,16 +358,24 @@ class AgentDirector:
                     return float(dy)
                 return float(dx)
 
-            # 候选：两侧 × 两档纵向位置，取"最坏帧间距最大"者
-            cands = []
-            for side in ("right", "left"):
-                sx = (out_w - size - mx) if side == "right" else mx
-                for sy in (my, my + 220):
+            # 先在默认挂角高度上择优；只有确实"紧/压脸"（<30px）才允许整体下移。
+            # 不能一味取"离脸最远"——那会把所有贴纸推到画面中部，破坏挂角版式。
+            # 下移时取满足安全间距且 y 最小者，尽量贴近原始挂角位置。
+            def _best_at(sy):
+                opts = []
+                for side in ("right", "left"):
+                    sx = (out_w - size - mx) if side == "right" else mx
                     rect = (sx, sy, sx + size, sy + size)
-                    worst = min(_gap(rect, f) for f in faces)
-                    cands.append((worst, side, sx, sy))
-            cands.sort(key=lambda x: (-x[0], abs(x[3] - my)))
-            worst, side, sx, sy = cands[0]
+                    opts.append((min(_gap(rect, f) for f in faces), side, sx, sy))
+                return max(opts, key=lambda x: x[0])
+
+            best = _best_at(my)
+            if best[0] < 30:
+                lowered = [_best_at(sy) for sy in (my + 220, my + 440, my + 660)]
+                safe = [x for x in lowered if x[0] >= 30]
+                if safe:
+                    best = min(safe, key=lambda x: x[3])
+            worst, side, sx, sy = best
             c["sticker_side"] = side
             c["sticker_y"] = int(sy)
             _flag = "OK" if worst >= 30 else ("紧" if worst >= 0 else "压脸")

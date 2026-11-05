@@ -627,6 +627,7 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
                 "categories": block["categories"], "scores": block["scores"],
                 "source_file": block.get("source_file", ""),
                 "source_tag": block.get("source_tag", ""),
+                "_quota_cat": block.get("_quota_cat"),
             }
             if is_hc:
                 trimmed["_hard_cut"] = True
@@ -640,6 +641,7 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
                     "categories": block["categories"], "scores": block["scores"],
                     "source_file": block.get("source_file", ""),
                     "source_tag": block.get("source_tag", ""),
+                    "_quota_cat": block.get("_quota_cat"),
                 }
                 if remainder["dur"] >= MIN_BLOCK_SEC:
                     trimmed["remainder"] = remainder
@@ -681,7 +683,8 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
                 "text": "，".join(s.get("text", "") for s in segs_subset),
                 "categories": block["categories"], "scores": block["scores"],
                 "source_file": block.get("source_file", ""),
-                "source_tag": block.get("source_tag", "")}
+                "source_tag": block.get("source_tag", ""),
+                "_quota_cat": block.get("_quota_cat")}
 
     if use_hard_cut:
         # 硬裁剪路径：结束于精确目标时刻（防呆：不得因 acc 被改写而误入段对齐路径）
