@@ -237,9 +237,10 @@ def case_source_scan_excludes_own_artifacts():
 
 
 def case_explicit_raw_video_paths_strict_isolation():
-    """用例8：显式 raw_video_paths 强隔离（不得回退扫描目录多摄入同目录无关素材）。"""
+    """用例8：显式 raw_video_paths 强隔离（入口与导演双层防御，杜绝目录穿透与静默回退）。"""
     import tempfile
     import shutil
+    from scripts.generate_from_job_spec import collect_source_videos as entry_collect
     from src.agent.agent_director import AgentDirector
 
     tmpdir = tempfile.mkdtemp(prefix="dy_strict_iso_")
@@ -253,24 +254,58 @@ def case_explicit_raw_video_paths_strict_isolation():
             with open(f, "wb") as fp:
                 fp.write(b"\x00")
 
-        d = AgentDirector.__new__(AgentDirector)
-        d.project_id = "test_iso"
-        d.spec_path = os.path.join(tmpdir, "spec.json")
-        d.VIDEO_EXTS = AgentDirector.VIDEO_EXTS
-        d.spec = {
+        spec = {
             "project_id": "test_iso",
             "raw_video_path": tmpdir,
             "raw_video_paths": [f_target1, f_target2],
         }
 
+        # 1. 验证上游入口 scripts/generate_from_job_spec.py
+        entry_res = entry_collect(spec, tmpdir)
+        entry_base = [os.path.basename(p) for p in entry_res]
+        assert len(entry_res) == 2, f"入口层必须严格隔离为 2 段，实得 {len(entry_res)} 段: {entry_base}"
+        assert "20261023_target1.mp4" in entry_base
+        assert "20261023_target2.mp4" in entry_base
+        assert "20261018_alien1.mp4" not in entry_base, "入口层泄漏摄入了非本品素材 alien1"
+
+        # 2. 验证入口层在显式路径全部失效时必须报错，严禁静默回退
+        bad_spec = {
+            "project_id": "test_iso",
+            "raw_video_path": tmpdir,
+            "raw_video_paths": [os.path.join(tmpdir, "non_existent_1.mp4")],
+        }
+        raised = False
+        try:
+            entry_collect(bad_spec, tmpdir)
+        except FileNotFoundError:
+            raised = True
+        assert raised, "入口层在显式路径全部失效时未抛出 FileNotFoundError，存在静默回退风险"
+
+        # 3. 验证下游导演 AgentDirector._collect_source_videos
+        d = AgentDirector.__new__(AgentDirector)
+        d.project_id = "test_iso"
+        d.spec_path = os.path.join(tmpdir, "spec.json")
+        d.VIDEO_EXTS = AgentDirector.VIDEO_EXTS
+        d.spec = spec
+
         collected = d._collect_source_videos()
         collected_base = [os.path.basename(p) for p in collected]
-        assert len(collected) == 2, f"必须严格隔离为 2 段，实际获得 {len(collected)} 段: {collected_base}"
+        assert len(collected) == 2, f"导演层必须严格隔离为 2 段，实际获得 {len(collected)} 段: {collected_base}"
         assert "20261023_target1.mp4" in collected_base
         assert "20261023_target2.mp4" in collected_base
-        assert "20261018_alien1.mp4" not in collected_base, "泄漏摄入了非本品素材 alien1"
-        assert "20261018_alien2.mp4" not in collected_base, "泄漏摄入了非本品素材 alien2"
-        print("[PASS] 用例8 显式 raw_video_paths 严格隔离（未泄漏摄入同目录非目标素材）")
+        assert "20261018_alien1.mp4" not in collected_base, "导演层泄漏摄入了非本品素材 alien1"
+        assert "20261018_alien2.mp4" not in collected_base, "导演层泄漏摄入了非本品素材 alien2"
+
+        # 4. 验证导演层在显式路径全部失效时同样抛错
+        d.spec = bad_spec
+        d_raised = False
+        try:
+            d._collect_source_videos()
+        except FileNotFoundError:
+            d_raised = True
+        assert d_raised, "导演层在显式路径全部失效时未抛出 FileNotFoundError"
+
+        print("[PASS] 用例8 显式 raw_video_paths 双层严格隔离（入口+导演强隔离，杜绝静默回退）")
     finally:
         import shutil
         shutil.rmtree(tmpdir, ignore_errors=True)

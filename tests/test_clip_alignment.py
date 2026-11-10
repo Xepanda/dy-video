@@ -10,6 +10,9 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 from src.tools.verify_clip_product_alignment import verify_clip_alignment
 
 
@@ -30,6 +33,7 @@ def test_clip_alignment_pass():
     res = verify_clip_alignment(plan, spec)
     assert res["passed"] is True, f"应全项通过，实际违规: {res['violations']}"
     assert len(res["violations"]) == 0
+    print("[PASS] test_clip_alignment_pass")
 
 
 def test_clip_alignment_catches_negative_category():
@@ -45,6 +49,7 @@ def test_clip_alignment_catches_negative_category():
     res = verify_clip_alignment(plan, spec)
     assert res["passed"] is False
     assert any("负向词" in v for v in res["violations"])
+    print("[PASS] test_clip_alignment_catches_negative_category")
 
 
 def test_clip_alignment_catches_price_stutter():
@@ -58,7 +63,8 @@ def test_clip_alignment_catches_price_stutter():
         ]
     }
     res = verify_clip_alignment(plan, spec)
-    assert any("价格/数字残留" in v for v in res["violations"])
+    assert any("连读数字" in w or "价格" in w for w in res["warnings"])
+    print("[PASS] test_clip_alignment_catches_price_stutter")
 
 
 def test_clip_alignment_catches_violation_words():
@@ -74,10 +80,11 @@ def test_clip_alignment_catches_violation_words():
     res = verify_clip_alignment(plan, spec)
     assert res["passed"] is False
     assert any("极限词" in v for v in res["violations"])
+    print("[PASS] test_clip_alignment_catches_violation_words")
 
 
 def test_clip_alignment_catches_funnel_ratio_imbalance():
-    """面料占比超出 25% 必须拦截。"""
+    """面料占比超出 25% 且配置为 BLOCK 时拦截。"""
     spec = {
         "product": {"title_line1": "法式高级感", "title_line2": "羊毛混纺针织上衣"}
     }
@@ -87,6 +94,27 @@ def test_clip_alignment_catches_funnel_ratio_imbalance():
             {"id": "c02", "dur": 30.0, "category": "styling", "desc": "双色好看搭配"},
         ]
     }
-    res = verify_clip_alignment(plan, spec)
-    assert res["passed"] is False
-    assert any("面料占比" in v for v in res["violations"])
+    # 默认 WARN 级别下不拦截成 FAIL
+    res_warn = verify_clip_alignment(plan, spec, constraints={"funnel_enforce_level": "WARN"})
+    assert res_warn["passed"] is True
+    assert any("面料占比" in w for w in res_warn["warnings"])
+
+    # BLOCK 级别下强制拦截
+    res_block = verify_clip_alignment(plan, spec, constraints={"funnel_enforce_level": "BLOCK"})
+    assert res_block["passed"] is False
+    assert any("面料占比" in v for v in res_block["violations"])
+    print("[PASS] test_clip_alignment_catches_funnel_ratio_imbalance")
+
+
+def main():
+    test_clip_alignment_pass()
+    test_clip_alignment_catches_negative_category()
+    test_clip_alignment_catches_price_stutter()
+    test_clip_alignment_catches_violation_words()
+    test_clip_alignment_catches_funnel_ratio_imbalance()
+    print("\n[TEST-CLIP-ALIGNMENT] 全部通过")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -94,11 +94,19 @@ def collect_source_videos(spec: dict, spec_dir: str) -> list:
         stem = os.path.splitext(name)[0]
         return stem in {pid, f"{pid}_final", f"{pid}_cover"}
 
-    # 1) 显式列表优先
-    for p in spec.get("raw_video_paths") or []:
-        rp = resolve_path(p, spec_dir)
-        if rp and os.path.exists(rp) and os.path.isfile(rp):
-            paths.append(os.path.abspath(rp))
+    # 1) 显式列表优先（强隔离：存在显式清单时立即返回，绝不穿透扫描目录；全部失效时显式报错）
+    explicit_paths = spec.get("raw_video_paths")
+    if explicit_paths:
+        for p in explicit_paths:
+            rp = resolve_path(p, spec_dir)
+            if rp and os.path.exists(rp) and os.path.isfile(rp) and not _is_own_artifact(os.path.basename(rp)):
+                ap = os.path.abspath(rp)
+                if ap not in paths:
+                    paths.append(ap)
+        if not paths:
+            raise FileNotFoundError(
+                f"契约显式指定的 raw_video_paths 全部无法定位或不存在: {explicit_paths}")
+        return paths
 
     # 2) raw_video_path：目录 → 扫描；文件 → 单源
     primary = spec.get("raw_video_path")

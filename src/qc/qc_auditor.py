@@ -145,6 +145,160 @@ class QcAuditor:
                      metric_key="video.funnel.fabric",
                      measured=round(ratio, 4), threshold=self.FABRIC_RATIO_MAX)
 
+    def _audit_product_anchor(self, plan_path: str = None,
+                              ass_path: str = None) -> None:
+        """C5~C9 商品锚点门禁（BLOCK）：分镜级商品主体一致性、必备卖点
+        覆盖率、他品词零命中、源覆盖、选段可追溯。
+
+        唯一真值源 = plan.json 的 product_anchor 段（由商品锚点契约注入）。
+        未启用契约时记 SKIP 并披露，不伪装成 PASS。
+        """
+        names = [
+            "C5 分镜级商品主体一致性", "C6 必备卖点覆盖率",
+            "C7 成片字幕他品词零命中", "C8 素材源覆盖与单源占比",
+            "C9 选段可追溯率",
+            "C10 视觉禁入源零命中", "C11 同源重复画面零命中",
+        ]
+        if not plan_path or not os.path.exists(plan_path):
+            for n in names:
+                self._skip(n, "未提供 plan.json（分镜表），无法做分镜级判定")
+            return
+        try:
+            with open(plan_path, "r", encoding="utf-8") as f:
+                plan = json.load(f)
+        except Exception as e:  # noqa: BLE001
+            for n in names:
+                self._skip(n, f"plan.json 读取失败: {str(e)[:60]}")
+            return
+        pa = plan.get("product_anchor") or {}
+        if not pa.get("enabled"):
+            for n in names:
+                self._skip(n, "本次未启用商品锚点契约（无分镜级主体断言）")
+            return
+
+        clips = plan.get("clips") or []
+        if not clips:
+            self._assert(False, names[0], "plan.json 无分镜", level="BLOCK")
+            return
+
+        # C5 / M02：每个分镜 MUST 标记本品
+        bad = [str(c.get("id")) for c in clips
+               if c.get("product_tag") != "本品"]
+        ratio = (len(clips) - len(bad)) / len(clips)
+        self._assert(not bad, names[0],
+                     f"{len(clips) - len(bad)}/{len(clips)} 分镜标记本品"
+                     + (f"；异常 {bad[:5]}" if bad else ""),
+                     level="BLOCK", metric_key="product_anchor.M02",
+                     measured=round(ratio, 4), threshold=1.0)
+
+        # C6 / M03：7 类必备卖点 ≥6 类，且 P0 四类全覆盖
+        levels = pa.get("selling_point_levels") or {}
+        p0 = [k for k, v in levels.items() if v == "P0"]
+        pts = set()
+        for c in clips:
+            p = c.get("selling_point") or []
+            pts.update(p if isinstance(p, list) else [p])
+        covered = len(pts & set(levels))
+        miss_p0 = [k for k in p0 if k not in pts]
+        self._assert(covered >= 6 and not miss_p0, names[1],
+                     f"覆盖 {covered}/{len(levels)} 类（{sorted(pts & set(levels))}）；"
+                     f"P0 缺失 {miss_p0 or '无'}",
+                     level="BLOCK", metric_key="product_anchor.M03",
+                     measured=covered, threshold=f"≥6 且 P0 {len(p0)}/{len(p0)}")
+
+        # C7 / M06：烧录字幕他品词零命中
+        neg = [str(w) for w in (pa.get("negative_terms") or [])]
+        txt = ""
+        if ass_path and os.path.exists(ass_path):
+            with open(ass_path, "r", encoding="utf-8-sig", errors="ignore") as f:
+                for line in f:
+                    if line.startswith("Dialogue:"):
+                        parts = line.split(",", 9)
+                        if len(parts) > 9:
+                            txt += parts[9]
+        hits = [w for w in neg if w in txt]
+        self._assert(not hits, names[2],
+                     f"字幕 {len(txt)} 字，他品词命中 {hits or '0 处'}",
+                     level="BLOCK", metric_key="product_anchor.M06",
+                     measured=len(hits), threshold=0)
+
+        # C8 / M05：源数 ≥3、单源占比 ≤40%
+        gates = pa.get("gates") or {}
+        max_ratio = float(gates.get("max_single_source_ratio", 0.40) or 0.40)
+        min_src = int(gates.get("min_source_count", 3) or 3)
+        total = sum(float(c.get("dur", 0) or 0) for c in clips) or 1.0
+        acc: Dict[str, float] = {}
+        for c in clips:
+            k = os.path.basename(str(c.get("source_file") or "?"))
+            acc[k] = acc.get(k, 0.0) + float(c.get("dur", 0) or 0)
+        ratios = {k: round(v / total, 4) for k, v in acc.items()}
+        worst = max(ratios.values()) if ratios else 1.0
+        self._assert(len(ratios) >= min_src and worst <= max_ratio, names[3],
+                     f"{len(ratios)} 源；单源最大 {worst:.1%}（上限 {max_ratio:.0%}）",
+                     level="BLOCK", metric_key="product_anchor.M05",
+                     measured=round(worst, 4), threshold=max_ratio)
+
+        # C9 / M11：每个分镜可回溯到 eligible_windows 白名单
+        traced = sum(1 for c in clips if c.get("source_block_id"))
+        self._assert(traced == len(clips), names[4],
+                     f"{traced}/{len(clips)} 分镜携带 source_block_id",
+                     level="BLOCK", metric_key="product_anchor.M11",
+                     measured=round(traced / len(clips), 4), threshold=1.0)
+
+        # C10 / V-01 / M13：目视复核判定为他款展示的源，成片分镜零命中。
+        # 有些他款同为「上装」，口播仍含毛衣/上衣等本品词，文本通道
+        # 无法区分（v3 首版 45~59s 白色翻领外套即由此漏入），故以
+        # forbidden_windows 视觉结论做整段硬排除并在此复检。
+        fw_ranges = []
+        for f in (pa.get("forbidden_windows") or []):
+            if not isinstance(f, dict):
+                continue
+            m = str(f.get("source_contains") or "")
+            if not m:
+                continue
+            rgs = f.get("time_ranges") or []
+            if not rgs:
+                fw_ranges.append((m, -1.0, float("inf")))
+                continue
+            for rg in rgs:
+                try:
+                    a, b = float(rg[0]), float(rg[1])
+                    fw_ranges.append((m, min(a, b), max(a, b)))
+                except (TypeError, ValueError, IndexError):
+                    continue
+        bad_src = []
+        for c in clips:
+            sf = str(c.get("source_file") or "")
+            st = float(c.get("st", c.get("start", 0)) or 0)
+            en = float(c.get("end", 0) or 0)
+            if any(m in sf and min(en, b) - max(st, a) > 0.5
+                   for m, a, b in fw_ranges):
+                bad_src.append(str(c.get("id")))
+        self._assert(not bad_src, names[5],
+                     f"视觉禁入区间 {len(fw_ranges)} 段；命中分镜 {bad_src or '0 个'}",
+                     level="BLOCK", metric_key="product_anchor.M13",
+                     measured=len(bad_src), threshold=0)
+
+        # C11 / V-02 / M12：同源时间窗重叠 >0.5s 判定为重复画面。
+        # v3 首版 c07_fit / c08_fit 同属 w002 且源窗 63.46-69.9 与
+        # 65.14-69.9 高度重叠，QC 全物理指标 PASS 却出现重复静止画面。
+        dup = []
+        for i, x in enumerate(clips):
+            for y in clips[i + 1:]:
+                if str(x.get("source_file") or "") != str(y.get("source_file") or ""):
+                    continue
+                ov = (min(float(x.get("end", 0) or 0),
+                          float(y.get("end", 0) or 0))
+                      - max(float(x.get("st", x.get("start", 0)) or 0),
+                            float(y.get("st", y.get("start", 0)) or 0)))
+                if ov > 0.5:
+                    dup.append(f"{x.get('id')}~{y.get('id')}({ov:.1f}s)")
+        self._assert(not dup, names[6],
+                     f"同源重叠分镜对 {len(dup)} 组"
+                     + (f"：{dup[:3]}" if dup else ""),
+                     level="BLOCK", metric_key="product_anchor.M12",
+                     measured=len(dup), threshold=0)
+
     def _assert(self, condition: bool, name: str, detail: str,
                 level: str = "BLOCK", metric_key: str = "",
                 measured: Any = None, threshold: Any = None) -> None:
@@ -243,6 +397,9 @@ class QcAuditor:
 
         # ---- B6.5 参数类内容占比（决策 6：≤25%，I0 使能项）----
         self._audit_fabric_ratio(plan_path)
+        # ---- C5~C9 商品锚点门禁（project-4 v2 规范，分镜级内容正确性）----
+        # 此前 38 项断言全是物理指标，导致「QC 全绿」与「主角搞反」同时成立。
+        self._audit_product_anchor(plan_path, ass_path)
 
         # ---- B7~B9 字幕断言 ----
         if not self.subtitles_active:

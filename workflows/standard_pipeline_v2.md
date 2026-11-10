@@ -91,8 +91,8 @@ S6 交付签署（manifest + QC 报告 + 说明书）
 5. **违规词三通道处理准备**（v1.4）：`apply_violation_handling.py` 计算
    逐分镜消音时段 + OCR 打码区域 + 字幕命中清单 → `violation_handling.json`；
 6. **分镜品类与语义对齐核验**（2026-11 新增）：`verify_clip_product_alignment`
-   排查异品类负向词、口误数字与极限词，核验面料≤25%、Hook≥10%、Fit≥15%、Styling≥25%、Closing≥10% 硬配比；
-7. **挂角贴纸逐镜避脸**：考虑 hflip 镜像变换与 zoompan 推镜放大对人脸坐标的映射，安全间距 <30px 时纵向步进下移（`my + 220`, `my + 440`）；
+   排查异品类负向词、口误数字与极限词，按 `contracts/constraints.yaml` 动态校验漏斗区间与配比（遵循 `funnel_enforce_level` 执行 WARN 提示或 BLOCK 门禁）；
+7. **挂角贴纸逐镜避脸**：考虑 hflip 镜像变换与 zoompan 推镜放大对人脸坐标的映射，安全间距 <30px 时纵向步进下移（`my + 220`, `my + 440`, `my + 660`）；
 8. **计划过网关**后落盘 `plan.json`（分镜/特效/放大镜/违规处理参数一体）。
 
 ## 5. S3 封面渲染（全幅底图 + 自然叠加）

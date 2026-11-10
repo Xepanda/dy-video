@@ -22,7 +22,7 @@
 | 版本 | 文件 | 时长 | 裤装内容 | 状态 |
 | :--- | :--- | ---: | :--- | :--- |
 | **v1** | `output/project-4/_v1_rejected/project-4_v1.mp4` | 62.65s | **有**：8/10 分镜来自第 5 段裤装场，约 30s 讲「库长 83848586 / 毛泥裤 / 膝盖 / 加 100 条」 | 已废弃、备份保留 |
-| **v2（当前主路径）** | `C:\Users\ePanda\Desktop\project-4\project-4.mp4`（与 `output/project-4/`、`hero_only/`、兼容副本四份 MD5 一致） | **64.22s** | **无** | 已交付 |
+| **v2（当前主路径）** | `output/project-4/project-4.mp4`（与桌面 `<desktop>/project-4/`、`hero_only/`、兼容副本四份 MD5 一致） | **64.22s** | **无** | 已交付 |
 
 当前版复核证据（本次按每 2 秒密集抽 32 帧复算，取代上一版 10 帧抽样的结论）：
 
@@ -169,7 +169,7 @@ WARN 不拦截；没有准入白名单；阶段间不传递商品标签；S4 组
 product:
   id: project-4
   name: "法式高级感羊毛混纺针织上衣"
-  anchor_image: "C:/Users/ePanda/Desktop/project-4/封面图.png"
+  anchor_image: "data/work_dirs/project-4/封面图.png"
   allowed_category: ["针织上衣", "毛衣", "上装"]
   forbidden_category: ["裤装", "棉服", "大衣", "外套", "鞋包"]
   visual_traits:

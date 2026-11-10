@@ -94,7 +94,7 @@ v1 的 `asr_verification_report.json` 里 52 处 diff 几乎全是去空格；�
 ### 5.1 S0 素材准入重做（核心）
 
 - 对全量 ASR 按 10s 窗口统计「他品词（裤/库长/膝盖/棉服…）」与「主品词（毛衣/羊毛/混纺/纱线/领形…）」，并抽帧确认画面。
-- 裁出 4 个纯主商品连续窗口，共 322s，落到 `C:\Users\ePanda\Desktop\project-4\hero_only\`：
+- 裁出 4 个纯主商品连续窗口，共 322s，落到 `output/project-4/hero_only/`（及工作区 `<desktop>/project-4/hero_only/`）：
 
   | 新素材 | 源切片 | 源时间窗 | 时长 |
   | :--- | :--- | :--- | :--- |
@@ -147,7 +147,7 @@ QC 之外增加**逐分镜商品主体验收**：10 个时间点抽帧目视 + �
 
 ### 8.1 交付主路径
 
-`C:\Users\ePanda\Desktop\project-4\project-4.mp4`（已覆盖 v1）；
+`output/project-4/project-4.mp4` 与桌面交付路径 `<desktop>/project-4/project-4.mp4`（已覆盖 v1）；
 `output/project-4/project-4.mp4` / `project-4_final.mp4` / 素材目录 `hero_only/project-4.mp4` 四份 MD5 一致（`44264ce7…`）。封面 `project-4.jpg` / `project-4_cover.jpg` 三份一致。
 
 ### 8.2 物理参数
@@ -189,8 +189,8 @@ S1.5 一致性预检 `PASS / 0 WARN`：C1 关键词 10/10、C2 商品名词 1/1�
 
 | 路径 | 变更 |
 | :--- | :--- |
-| `C:\Users\ePanda\Desktop\project-4\hero_only\*.mp4` | 新建：4 段主商品精选切片（322s） |
-| `C:\Users\ePanda\Desktop\project-4\project-4_job_spec.prepared_v2.json` | 新建：指向 hero_only 的契约 + 真实主商品关键词 |
+| `output/project-4/hero_only/*.mp4` | 新建：4 段主商品精选切片（322s） |
+| `data/work_dirs/project-4/project-4_job_spec.prepared_v2.json` | 新建：指向 hero_only 的契约 + 真实主商品关键词 |
 | `src/core/asr_agent_verifier.py` | 新增 11 条领域错词规则（Agent 复核结论固化） |
 | `src/agent/agent_director.py` | `_assign_sticker_sides` 增加 zoom 感知与条件式下移（v1 已修 hflip，v2 再修 zoom） |
 | `docs/project-4_root_cause_and_fix.md` | 新建：本文档 |
@@ -199,3 +199,67 @@ S1.5 一致性预检 `PASS / 0 WARN`：C1 关键词 10/10、C2 商品名词 1/1�
 | `output/project-4/_v1_rejected/` | v1 成片与决策产物备份（未删除） |
 
 原始 6 段素材、`封面图.png`、`project-4_job_spec.json`（原始规范）、`project-4_job_spec.prepared.json`（v1 修正版）均保持未改动。
+
+---
+
+## 9. v3 → v4：视觉通道复核与选段守卫闭环（2026-11-05）
+
+### 9.1 v3 首版的问题：QC 全绿但主角仍不搭
+
+v3 首版成片 59.80s，物理参数与 43 项 QC 全 PASS（含新增 C5–C9），但 **2 秒网格抽帧** 在 45–59s 发现：
+白色翻领纽扣外套、彩色款推荐等他款展示；`c07_fit` / `c08_fit` 时间窗高度重叠造成重复画面。
+
+| 根因 | 说明 |
+| :--- | :--- |
+| 文本通道盲区 | 他款同为「上装」，口播仍含「毛衣/上衣」等本品正例词，`label_text()` 无法区分；带帽款 `w002`、白翻领款 `w039` 因此进入白名单 |
+| 窗口身份判重失效 | `_key()` 用 `(window_id, 源, start)`，而配额修剪产生的余料副本 `start` 不同 → 同一 `w002` 被当成两个窗口分别选入 `c07_fit` / `c08_fit` |
+| 无分镜级视觉断言 | QC 只查物理指标与文本词表，「画面里到底是哪件衣服」无人复核 |
+| 视觉结论未回写 | 2s 网格判定只存在于对话，未进入契约，下次跑必然复发 |
+
+### 9.2 v4 修复（策略 → 契约 → 代码 → 门禁 → 验收）
+
+1. **契约层**：`contracts/product_anchor_project-4.yaml`
+   - 新增 `negative_terms` 视觉复核补录词：有帽子 / 帽子的 / 夹容 / 七个颜色的拉毛 / 推荐白色 / 白色的毛衣 / 搭毛衣外套。
+   - 新增 `forbidden_windows`，支持两种粒度：**无 `time_ranges` = 整源硬排除**（带帽七色拉毛款源、白色翻领外套源）；**有 `time_ranges` = 仅排除源内区间**（S4 源 128–145s 黑裤版型特写 w032/w033；S3 源 15–30s 豹纹保温杯 w016）。每条附判定理由，可追溯。
+   - 保留 7 类必备卖点、P0 四类、gates 与 clip_schema 不变。
+2. **选段器**：`src/tools/product_anchor.py`
+   - `build_eligible_windows()` 消费 `forbidden_windows`：句级 + 窗口级双重复查；`meta` 落盘禁入区间与剔除句数。
+   - `_key()` 改为 `window_id` 唯一身份；候选集按窗口去重并保留「最完整」副本（时长最长、起始最早）。
+   - 新增 `_overlap_sec()` / `_conflicts()`：同源重叠 >0.5s 一律不选，覆盖卖点补齐、参数替换、单源替换、最终把关全路径。
+   - 重写第 5 步单源收敛：旧实现硬性要求「替换后 ≤61s」，但 7 类卖点 + Hook 基础组装已达 62.4s，任何替换都不可能满足 → `repl=None` 直接放弃，C8 单源 47.7% 被 BLOCK。新实现遍历全部可行替换，按「单源最大占比 → 总长」择优，同时守住卖点覆盖/P0/参数占比/Hook/源数/无重叠，最终 `w025 → w018`，单源降至 35.1%、总长 61.08s。
+3. **门禁层**：`src/qc/qc_auditor.py` 新增 C10（视觉禁入区间零命中）、C11（同源重复画面零命中）两条 BLOCK；`scripts/audit_product_anchor.py` 的 `audit_plan()` 同步新增 M12/M13，S6 独立复算可阻断交付。
+4. **plan 注入**：`src/tools/build_plan.py` 把 `forbidden_windows` / `visual_excluded_sources` 写入 `plan["product_anchor"]`，供 QC C10 读取。
+5. **视觉验收**：34 个白名单窗口逐窗抽帧预检（排除黑裤、水杯等），新版 8 个候选再抽 16 帧复核；成片按 2s 网格抽 31 帧拼图验收。
+
+### 9.3 v4 最终验收
+
+| 项目 | 结果 |
+| :--- | :--- |
+| 成片 | `61.266667 s`（规范 48–62s），1080×1920 / H.264 High / yuv420p / 60fps / AAC-LC 48kHz 立体声 |
+| 响度 | −14.46 LUFS，True Peak −1.38 dBTP，LRA 2.20 LU；`ffmpeg -xerror` 全片解码 `DECODE_OK` |
+| QC | **45 项 / 43 PASS / 2 WARN / 0 BLOCK FAIL**；C5–C11 全 PASS（C8 单源 35.1%、C10/C11 命中 0） |
+| 锚点审计 | `all_gates_passed=True`：M01=0、M02=1、M03=7/7（P0 4/4）、M05 4 源 / 35.1%、M06=0、M10=True、M11=1、M12=[]、M13=[] |
+| 选段 | 8 分镜 / 4 源 / 单源最大 35.1% / Hook 主体明确 / 参数类（QC 口径）13.7% / 无同源重叠 |
+| 视觉 | 31 帧 2s 网格：0–30s 本品上身与挂拍、32–60s 本品与同款黑色配色 + 尺码表；无白色翻领外套、无带帽款、无黑裤特写、无重复静止画面 |
+| 成片 ASR 复检 | V1 字幕-原声相似度 0.764（PASS），V2/V3/V4/V5 全 PASS |
+
+2 条 WARN 均不拦截：封面人像宽占比 0.404（版式为底部商品名预留空间）、`transition:on` 被 R7 `hard_cut` 覆盖为硬切。
+
+### 9.4 已知限制（如实披露）
+
+- `src/tools/product_anchor.py` 与 `contracts/product_anchor_project-4.yaml` **不在** `src/tools/stage_cache.py::_CODE_FINGERPRINT_FILES` 中，改契约/选段规则不会自动失效 plan 缓存。本次重跑前已手动清除 `plan_*.json` / `final_video_*.json` / `qc_*.json`（保留 ASR/story/scenes/cover 缓存）；后续改契约须同样处理，建议后续把这两项纳入指纹。
+- `asr_verification_report.json` 非流水线自动产物：本次用 6 源逐源 whisper 缓存（745 句、90 处 diff）经同一确定性词表引擎补生成。汇总为一次审查时触发 `WARN_RATIO_ESCALATED`，属合并口径差异；流水线按逐源审查，6/6 通过，结论不受影响（报告内 `_delivery_note` 已注明）。
+- `output/project-4/asr_review/asr_correction_decisions.json` 为 v2 的 14 条历史语义决策；v4 流水线使用同一确定性词表引擎，未引入新决策。
+- `README` 的历史兼容副本 `project-4_final.mp4` / `project-4_cover.jpg` 采用「仅当不存在才写」策略，本次已 `cp -f` 同步，MD5 与主交付一致。
+
+### 9.5 v4 修改/新增文件
+
+| 路径 | 变更 |
+| :--- | :--- |
+| `contracts/product_anchor_project-4.yaml` | 新增视觉复核词表、`forbidden_windows`（整源 + 源内 time_ranges） |
+| `src/tools/product_anchor.py` | 消费禁入区间、窗口身份去重、同源重叠守卫、单源收敛重写、M12/M13 审计 |
+| `src/tools/build_plan.py` | plan 注入 forbidden_windows / visual_excluded_sources |
+| `src/qc/qc_auditor.py` | 新增 C10/C11 BLOCK 门禁 |
+| `scripts/audit_product_anchor.py` | 文档字符串补充 M12/M13 |
+| `output/project-4/*`、桌面 `project-4*` | 同步为 v4 验收版（成片、封面、兼容副本、QC、审计、人工复核） |
+| `logs/project-4_v4_precheck/`、`logs/project-4_v4_final/` | 34 窗预检拼图与 31 帧成片验收拼图 |

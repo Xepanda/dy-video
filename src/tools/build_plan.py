@@ -898,10 +898,54 @@ def build_plan(
     dur_max = max(dur_min + 1.0, dur_max - DURATION_SAFETY_MARGIN_SEC)
 
     prod_ctx = _extract_product_context(spec_data)
-    blocks, rejected = build_blocks(segments, constraints, prod_ctx=prod_ctx)
+
+    # —— 商品锚点契约（project-4 v2 规范 P0，可选接入）——
+    # spec.options.product_anchor 存在时，改用「句级三分类 → 3~12s 窗口白名单」
+    # 取代原 build_blocks（后者把 729 句合并成 27 个 30~100s 巨型块，粒度
+    # 过粗，既无法判定关键片段，也会因夹带他品词整块丢弃可用素材）。
+    anchor = None
+    anchor_windows: List[Dict[str, Any]] = []
+    anchor_meta: Dict[str, Any] = {}
+    try:
+        from src.tools.product_anchor import load_anchor, build_eligible_windows
+        anchor = load_anchor(spec_data)
+    except Exception as e:  # noqa: BLE001
+        print(f"[BUILD-PLAN][WARN] 商品锚点加载失败，退回原选段逻辑: {e}")
+    if anchor:
+        # CTA/现货 类必备卖点此前被 INVENTORY_PATTERNS 整体拉黑（G-02）。
+        # 锚点模式只保留换款/离场过滤；价格检测仍由 find_price_matches 承担。
+        constraints = dict(constraints or {})
+        _bl = dict(constraints.get("blacklist") or {})
+        _bl["inventory"] = []
+        if not _bl.get("changover"):
+            _bl["changover"] = list(CHANGEOVER_PATTERNS)
+        constraints["blacklist"] = _bl
+        anchor_windows, anchor_meta = build_eligible_windows(
+            segments, anchor, work_dir=work_dir)
+        for w in anchor_windows:
+            cats = set()
+            for s in w["segments"]:
+                cats.update(_classify(str(s.get("text", "")), prod_ctx=prod_ctx))
+            w["categories"] = sorted(cats)
+            w["scores"] = {
+                c: round(_segment_score(
+                    {"text": w["text"], "duration": w["dur"],
+                     "wrist_motion": w.get("wrist_motion")}, c,
+                    prod_ctx=prod_ctx), 2)
+                for c in ("hook", "fabric", "craft_detail", "fit",
+                          "styling", "decision_closing")
+            }
+        blocks, rejected = list(anchor_windows), []
+    else:
+        blocks, rejected = build_blocks(segments, constraints, prod_ctx=prod_ctx)
 
     meta = {"funnel": {}, "rejected_count": len(rejected),
             "candidate_blocks": len(blocks), "notes": []}
+    if anchor:
+        meta["notes"].append(
+            f"商品锚点白名单 {len(blocks)} 窗 / "
+            f"{anchor_meta.get('eligible_total_sec', 0):.1f}s"
+            f"（句级三分类 + 换款区间硬排除）")
 
     # R1：句末吸附容差改为**约束驱动**（唯一事实源 = constraints.slicing_rules）。
     # 参考成片实测偏移中位 0.03s / 最大 0.37s → 0.45s；旧的硬编码 2.0s 会跨句误切。
@@ -1181,6 +1225,49 @@ def build_plan(
             ordered_blocks = _split_blocks
             total = round(sum(b["dur"] for b in ordered_blocks), 2)
 
+    # —— 商品锚点守卫（K-05 卖点清单 / K-06 Hook 主体 / M05 单源上限 / C5）——
+    # 修剪（_trim_block_to_duration / R2 拆分）会重建 dict 并丢失窗口字段，
+    # 故按**修剪后的真实文本**重新打标，保证标签反映成片实际内容。
+    anchor_stats: Dict[str, Any] = {}
+    if anchor:
+        from src.tools.product_anchor import enforce_selection, label_text
+
+        def _find_window_id(b: Dict[str, Any]) -> str:
+            sf = str(b.get("source_file") or "")
+            bs, be = float(b.get("start", 0)), float(b.get("end", 0))
+            best, best_ov = "", 0.0
+            for w in anchor_windows:
+                if str(w.get("source_file") or "") != sf:
+                    continue
+                ov = min(be, float(w["end"])) - max(bs, float(w["start"]))
+                if ov > best_ov:
+                    best, best_ov = str(w["window_id"]), ov
+            return best
+
+        def _relabel(b: Dict[str, Any]) -> None:
+            lab = label_text(b.get("text", ""), anchor)
+            a = dict(b.get("_anchor") or {})
+            a.update({
+                "product_tag": lab["product_tag"],
+                "selling_points": lab["selling_points"],
+                "hero_hits": lab["hero_hits"],
+                "other_hits": lab["other_hits"],
+                "subject_clear": lab["subject_clear"],
+            })
+            a["window_id"] = (a.get("window_id") or b.get("window_id")
+                              or _find_window_id(b))
+            a["reason"] = a.get("reason") or "商品锚点白名单窗口"
+            b["_anchor"] = a
+
+        for _b in list(blocks) + list(ordered_blocks):
+            _relabel(_b)
+        ordered_blocks, anchor_stats = enforce_selection(
+            ordered_blocks, blocks, anchor, log=lambda m: print(m))
+        total = round(sum(b["dur"] for b in ordered_blocks), 2)
+        meta["total_duration"] = total
+        meta["product_anchor"] = anchor_meta
+        meta["anchor_selection"] = anchor_stats
+
     # 生成 clips
     clips = []
     for i, b in enumerate(ordered_blocks):
@@ -1218,6 +1305,7 @@ def build_plan(
             "effect": "none",
             "category": cat,
             "desc": (b.get("text", "")[:24] + "…") if len(b.get("text", "")) > 24 else b.get("text", ""),
+            "full_text": b.get("text", ""),
         }
 
         if b.get("source_file"):
@@ -1230,6 +1318,19 @@ def build_plan(
         if _cd_min or _cd_max < 1e9:
             clip["duration_in_range"] = bool(
                 _cd_min <= clip["dur"] <= _cd_max)
+        # clip_schema（v2 规范 §2.4）：每个分镜 MUST 可回溯到白名单窗口
+        if anchor:
+            a = b.get("_anchor") or {}
+            clip.update({
+                "source_block_id": a.get("window_id", ""),
+                "product_tag": a.get("product_tag", "本品"),
+                "selling_point": a.get("selling_points", []),
+                "selection_reason": a.get("reason", ""),
+                "text_hero": a.get("hero_hits", []),
+                "text_other": a.get("other_hits", []),
+                "visual_hero": None, "visual_other": None,
+                "ocr_hero": None, "ocr_other": None,
+            })
         clips.append(clip)
 
     if not clips:
@@ -1326,6 +1427,26 @@ def build_plan(
         "subtitles": {"keywords": options.get("highlight_keywords", [])},
         "slicing_rules": _slicing_report,
         "selection_meta": meta,
+        "product_anchor": {
+            "enabled": bool(anchor),
+            "anchor_path": anchor_meta.get("anchor_path", ""),
+            "eligible_windows": anchor_meta.get("eligible_windows", 0),
+            "eligible_total_sec": anchor_meta.get("eligible_total_sec", 0),
+            "windows_by_selling_point": anchor_meta.get("windows_by_selling_point", {}),
+            "negative_terms": ((anchor or {}).get("product", {})
+                               .get("negative_terms", [])),
+            # 视觉通道复核结论（V-01）：整段硬排除的源，QC C10 按此复检
+            "forbidden_windows": ((anchor or {}).get("product", {})
+                                  .get("forbidden_windows", []) or []),
+            "visual_excluded_sources": anchor_meta.get(
+                "visual_excluded_sources", []),
+            "selling_point_levels": {
+                k: (v or {}).get("level", "")
+                for k, v in ((anchor or {}).get("selling_points") or {}).items()
+            },
+            "gates": (anchor or {}).get("gates", {}),
+            "selection": anchor_stats,
+        },
     }
     if cache_key and work_dir:
         from src.tools.stage_cache import save_stage

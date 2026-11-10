@@ -189,17 +189,18 @@ class AgentDirector:
         故扫描时按 basename 过滤掉本任务的交付物与历史成片。
         """
         spec_dir = os.path.dirname(self.spec_path)
-        spec_paths = self.spec.get("raw_video_paths") or []
-        paths = []
-        for p in spec_paths:
-            rp = resolve_path(p, spec_dir)
-            if rp and os.path.exists(rp) and rp not in paths:
-                # 显式清单同样排除自身产物：resolved spec 由流水线生成并可能被
-                # 上一轮污染（含上轮成片），重跑时不应把它当原始素材。
-                if self._is_own_artifact(os.path.basename(rp)):
-                    continue
-                paths.append(rp)
-        if paths:
+        paths: List[str] = []
+        explicit_paths = self.spec.get("raw_video_paths")
+        if explicit_paths:
+            for p in explicit_paths:
+                rp = resolve_path(p, spec_dir)
+                if rp and os.path.exists(rp) and rp not in paths:
+                    if self._is_own_artifact(os.path.basename(rp)):
+                        continue
+                    paths.append(rp)
+            if not paths:
+                raise FileNotFoundError(
+                    f"契约显式指定的 raw_video_paths 全部无法定位或不存在: {explicit_paths}")
             return paths
         primary = self.spec.get("raw_video_path")
         if primary:
@@ -994,6 +995,21 @@ class AgentDirector:
                 print(f"  [SLICING] [{_m}] {_c['id']}: {_c.get('detail')}")
         except Exception as e:
             print(f"  [SLICING][WARN] 规则自检失败（不阻断）: {e}")
+
+        # 分镜品类与语义对齐门禁（S2 步骤 6 接线：2026-11 新增）
+        try:
+            from src.tools.verify_clip_product_alignment import verify_clip_alignment
+            alignment_report = verify_clip_alignment(
+                plan, self.spec, constraints=self.constraints, work_dir=self.work_dir
+            )
+            plan["alignment_report"] = alignment_report
+            for _c in alignment_report.get("checks", []):
+                _st = _c.get("status", "PASS")
+                print(f"  [ALIGNMENT] [{_st}] {_c.get('name')}: {_c.get('detail')}")
+            if not alignment_report.get("passed"):
+                print(f"  [ALIGNMENT][BLOCK-WARN] 分镜对齐检出违规: {alignment_report.get('violations')}")
+        except Exception as e:
+            print(f"  [ALIGNMENT][WARN] 对齐核验失败（不阻断）: {e}")
 
         plan_path = os.path.join(self.work_dir, "plan.json")
         with open(plan_path, "w", encoding="utf-8") as f:
