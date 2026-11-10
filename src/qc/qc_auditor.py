@@ -299,6 +299,38 @@ class QcAuditor:
                      level="BLOCK", metric_key="product_anchor.M12",
                      measured=len(dup), threshold=0)
 
+    def _audit_clip_alignment(self, plan_path: str = None) -> None:
+        """分镜品类与语义对齐门禁（BLOCK）：核验 plan.json 的 alignment_report 或执行对齐核验。"""
+        name = "分镜品类与语义对齐门禁"
+        if not plan_path or not os.path.exists(plan_path):
+            self._skip(name, "未提供 plan.json，无法进行分镜对齐核验",
+                       metric_key="clip_alignment.passed")
+            return
+        try:
+            with open(plan_path, "r", encoding="utf-8") as f:
+                plan = json.load(f)
+        except Exception as e:
+            self._skip(name, f"读取 plan.json 失败: {str(e)[:60]}",
+                       metric_key="clip_alignment.passed")
+            return
+
+        rep = plan.get("alignment_report")
+        if not rep:
+            try:
+                from src.tools.verify_clip_product_alignment import verify_clip_alignment
+                rep = verify_clip_alignment(plan, getattr(self, "spec", {}), constraints=self.constraints)
+            except Exception as e:
+                self._skip(name, f"动态对齐核验失败: {str(e)[:60]}",
+                           metric_key="clip_alignment.passed")
+                return
+
+        passed = bool(rep.get("passed", True))
+        violations = rep.get("violations", [])
+        detail = "分镜品类与语义对齐全部通过" if passed else f"违规项: {violations}"
+        self._assert(passed, name, detail, level="BLOCK",
+                     metric_key="clip_alignment.passed",
+                     measured=len(violations), threshold=0)
+
     def _assert(self, condition: bool, name: str, detail: str,
                 level: str = "BLOCK", metric_key: str = "",
                 measured: Any = None, threshold: Any = None) -> None:
@@ -400,6 +432,8 @@ class QcAuditor:
         # ---- C5~C9 商品锚点门禁（project-4 v2 规范，分镜级内容正确性）----
         # 此前 38 项断言全是物理指标，导致「QC 全绿」与「主角搞反」同时成立。
         self._audit_product_anchor(plan_path, ass_path)
+        # ---- C12 分镜品类与语义对齐门禁（BLOCK 级分镜内容合法性）----
+        self._audit_clip_alignment(plan_path)
 
         # ---- B7~B9 字幕断言 ----
         if not self.subtitles_active:

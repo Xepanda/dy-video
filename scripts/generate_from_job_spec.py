@@ -154,6 +154,20 @@ def build_resolved_spec(spec: dict, videos: list, texts: dict) -> dict:
     # split_strategy=force_off → 确保不注入 split_pairs（强制关闭分屏）
     if str(options.get("split_strategy") or "").lower() == "force_off":
         options.pop("split_pairs", None)
+    # 若存在 product_anchor 契约，解析并自动注入 asr_homophones
+    anchor_rel = options.get("product_anchor")
+    if anchor_rel and "asr_homophones" not in resolved:
+        full_anchor = anchor_rel if os.path.isabs(anchor_rel) else os.path.join(PROJECT_ROOT, anchor_rel)
+        if os.path.exists(full_anchor):
+            try:
+                import yaml
+                with open(full_anchor, "r", encoding="utf-8") as f:
+                    yd = yaml.safe_load(f) or {}
+                ah = yd.get("asr_homophones") or (yd.get("product", {}) or {}).get("asr_homophones")
+                if isinstance(ah, dict):
+                    resolved["asr_homophones"] = ah
+            except Exception:
+                pass
     return resolved
 
 

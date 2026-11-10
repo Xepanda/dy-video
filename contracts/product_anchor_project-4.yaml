@@ -15,7 +15,7 @@
 product:
   id: project-4
   name: "法式高级感羊毛混纺针织上衣"
-  anchor_image: "data/work_dirs/project-4/封面图.png"
+  anchor_image: null  # 可选视觉参考图（待视觉通道接线）
   allowed_category: ["针织上衣", "毛衣", "上装"]
   forbidden_category: ["裤装", "棉服", "大衣", "外套", "鞋包"]
   visual_traits:

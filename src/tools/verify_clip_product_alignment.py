@@ -58,10 +58,12 @@ def _load_yaml_constraints() -> Dict[str, Any]:
 
 def infer_product_category(title: str) -> str:
     """根据商品名推断品类大类（top / bottom / other）。"""
+    if not title:
+        return "other"
     title_lower = title.lower()
-    if any(k in title_lower for k in ("上衣", "毛衣", "针织", "衫", "t恤", "卫衣", "开衫")):
+    if any(k in title_lower for k in ("上衣", "毛衣", "针织", "衫", "t恤", "卫衣", "开衫", "外套", "西装", "风衣", "大衣", "羽绒", "棉服", "马甲", "背心", "吊带")):
         return "top"
-    if any(k in title_lower for k in ("裤", "裙", "半裙", "短裤", "长裤")):
+    if any(k in title_lower for k in ("裤", "裙", "半裙", "短裤", "长裤", "牛仔", "阔腿", "西裤", "打底裤", "休闲裤")):
         return "bottom"
     return "other"
 
@@ -125,15 +127,38 @@ def verify_clip_alignment(
                     pass
 
     product_info = spec_data.get("product", {})
-    title = f"{product_info.get('title_line1', '')} {product_info.get('title_line2', '')}".strip()
+    if isinstance(product_info, dict):
+        title = f"{product_info.get('title_line1', '')} {product_info.get('title_line2', '')}".strip()
+        if not title:
+            title = str(product_info.get("name") or product_info.get("title") or "")
+    elif isinstance(product_info, str):
+        title = product_info
+    else:
+        title = ""
     if not title:
-        title = spec_data.get("title", "")
+        title = str(spec_data.get("title") or spec_data.get("product_name") or "")
 
     cat = infer_product_category(title)
-    # 负向词优选：用户指定 > spec 指定 > 品类兜底
+
+    # 负向词优选：用户指定 > spec 指定 > 锚点契约(唯一真值源) > 品类兜底
     neg_terms = custom_negative_terms
     if not neg_terms:
         neg_terms = spec_data.get("options", {}).get("negative_keywords")
+    if not neg_terms:
+        neg_terms = spec_data.get("negative_terms") or (spec_data.get("product", {}) or {}).get("negative_terms")
+    if not neg_terms:
+        # 尝试从 options.product_anchor 加载契约 negative_terms
+        anchor_path = spec_data.get("options", {}).get("product_anchor")
+        if anchor_path:
+            full_ap = anchor_path if os.path.isabs(anchor_path) else os.path.join(PROJECT_ROOT, anchor_path)
+            if os.path.exists(full_ap):
+                try:
+                    import yaml
+                    with open(full_ap, "r", encoding="utf-8") as f:
+                        yd = yaml.safe_load(f) or {}
+                    neg_terms = yd.get("negative_terms") or (yd.get("product", {}) or {}).get("negative_terms")
+                except Exception:
+                    pass
     if not neg_terms:
         neg_terms = CATEGORY_NEGATIVE_TERMS.get(cat, [])
 
@@ -238,19 +263,43 @@ def verify_clip_alignment(
         })
 
     # 4. 漏斗时长与配比合规性（契约动态核验，遵循 funnel_enforce_level）
-    funnel_cfg = constraints.get("funnel", {}) or {}
-    enforce_level = str(constraints.get("funnel_enforce_level", "WARN")).upper()
+    # 支持 video.funnel / video.funnel_enforce_level（标准契约层级）与顶层兼容
+    video_cfg = constraints.get("video", {}) or {}
+    funnel_cfg = video_cfg.get("funnel") or constraints.get("funnel", {}) or {}
+    enforce_level = str(
+        video_cfg.get("funnel_enforce_level") or
+        constraints.get("funnel_enforce_level", "WARN")
+    ).upper()
     total_dur = sum(float(c.get("dur", 0.0)) for c in clips)
 
     cat_durs: Dict[str, float] = {}
-    for c in clips:
-        k = c.get("category", "other")
-        cat_durs[k] = cat_durs.get(k, 0.0) + float(c.get("dur", 0.0))
+    for i, c in enumerate(clips):
+        dur = float(c.get("dur", 0.0))
+        # 1. 黄金开场 Hook 判定：is_hook 为 True、或 category 为 hook、或（首镜且未显式指定 fabric/fit 等正文类目）
+        if c.get("is_hook") or c.get("category") == "hook" or (i == 0 and c.get("category") not in ("fabric", "fit", "craft_detail", "decision_closing")):
+            k = "hook"
+        # 2. 尾段促单 Closing 判定：末镜且包含 CTA 卖点/话术，或 category 为 closing/decision_closing
+        elif (i == len(clips) - 1) and (
+            c.get("category") in ("decision_closing", "closing")
+            or "cta" in c.get("selling_point", [])
+            or any(w in c.get("desc", "") or w in c.get("full_text", "") for w in ("1号", "链接", "拍", "上车", "车", "下单", "秒杀"))
+        ):
+            k = "decision_closing"
+        else:
+            k = c.get("category", "styling")
+            if k == "closing":
+                k = "decision_closing"
+        cat_durs[k] = cat_durs.get(k, 0.0) + dur
 
     funnel_notes = []
     # 核对秒数区间
     for cat_name, interval in funnel_cfg.items():
         if isinstance(interval, dict):
+            # craft_detail 与 fabric 为品类互斥项（上衣/毛衣主讲 fabric，裙装专场主讲 craft_detail）
+            if cat_name == "craft_detail" and cat_durs.get("fabric", 0) > 0:
+                continue
+            if cat_name == "fabric" and cat_durs.get("craft_detail", 0) > 0 and cat_durs.get("fabric", 0) == 0:
+                continue
             c_min = float(interval.get("min", 0))
             c_max = float(interval.get("max", 9999))
             act = cat_durs.get(cat_name, 0.0)
@@ -260,7 +309,8 @@ def verify_clip_alignment(
                 funnel_notes.append(f"{cat_name}={act:.1f}s > 上限 {c_max}s")
 
     # 兜底核对：面料占比防堆砌上限 25%
-    fabric_ratio = cat_durs.get("fabric", 0.0) / max(0.1, total_dur)
+    fabric_dur = cat_durs.get("fabric", 0.0) + cat_durs.get("craft_detail", 0.0)
+    fabric_ratio = fabric_dur / max(0.1, total_dur)
     if fabric_ratio > 0.2501:
         funnel_notes.append(f"面料占比 {fabric_ratio:.1%} > 上限 25.0%")
 

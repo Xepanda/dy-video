@@ -996,20 +996,19 @@ class AgentDirector:
         except Exception as e:
             print(f"  [SLICING][WARN] 规则自检失败（不阻断）: {e}")
 
-        # 分镜品类与语义对齐门禁（S2 步骤 6 接线：2026-11 新增）
-        try:
-            from src.tools.verify_clip_product_alignment import verify_clip_alignment
-            alignment_report = verify_clip_alignment(
-                plan, self.spec, constraints=self.constraints, work_dir=self.work_dir
-            )
-            plan["alignment_report"] = alignment_report
-            for _c in alignment_report.get("checks", []):
-                _st = _c.get("status", "PASS")
-                print(f"  [ALIGNMENT] [{_st}] {_c.get('name')}: {_c.get('detail')}")
-            if not alignment_report.get("passed"):
-                print(f"  [ALIGNMENT][BLOCK-WARN] 分镜对齐检出违规: {alignment_report.get('violations')}")
-        except Exception as e:
-            print(f"  [ALIGNMENT][WARN] 对齐核验失败（不阻断）: {e}")
+        # 分镜品类与语义对齐门禁（S2 步骤 6 接线：2026-11 新增，BLOCK 门禁）
+        from src.tools.verify_clip_product_alignment import verify_clip_alignment
+        alignment_report = verify_clip_alignment(
+            plan, self.spec, constraints=self.constraints, work_dir=self.work_dir
+        )
+        plan["alignment_report"] = alignment_report
+        for _c in alignment_report.get("checks", []):
+            _st = _c.get("status", "PASS")
+            print(f"  [ALIGNMENT] [{_st}] {_c.get('name')}: {_c.get('detail')}")
+        if not alignment_report.get("passed"):
+            _v = alignment_report.get("violations", [])
+            print(f"  [ALIGNMENT][BLOCK] 分镜对齐检出违规 (BLOCK): {_v}")
+            raise RuntimeError(f"分镜品类与语义对齐门禁拦截 (BLOCK): {_v}")
 
         plan_path = os.path.join(self.work_dir, "plan.json")
         with open(plan_path, "w", encoding="utf-8") as f:

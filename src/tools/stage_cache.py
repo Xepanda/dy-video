@@ -49,6 +49,9 @@ _CODE_FINGERPRINT_FILES = [
     # 不进指纹就会出现"改了开关仍命中旧成片"的陈旧缓存。
     "contracts/features.yaml",
     "src/tools/assemble_video_tool.py",
+    # 2026-11 新增：商品锚点与分镜对齐工具纳入代码指纹
+    "src/tools/product_anchor.py",
+    "src/tools/verify_clip_product_alignment.py",
 ]
 
 
@@ -99,9 +102,24 @@ def compute_pipeline_key(
     """
     constraints_path = constraints_path or os.path.join(PROJECT_ROOT, "contracts", "constraints.yaml")
     videos = [video_path] if isinstance(video_path, str) else list(video_path)
+
+    # 若 spec 中引用了 product_anchor 契约，自动将其纳入流水线指纹（改契约自动失效旧缓存）
+    merged_extras = list(extra_files or [])
+    if spec_path and os.path.exists(spec_path):
+        try:
+            with open(spec_path, "r", encoding="utf-8") as f:
+                _sp = json.load(f)
+            _pa = (_sp.get("options", {}) or {}).get("product_anchor")
+            if _pa:
+                _pa_abs = _pa if os.path.isabs(_pa) else os.path.join(PROJECT_ROOT, _pa)
+                if os.path.exists(_pa_abs) and _pa_abs not in merged_extras:
+                    merged_extras.append(_pa_abs)
+        except Exception:
+            pass
+
     h = hashlib.sha256()
     h.update(b"dy-live-pipeline-key-v3")
-    for p in videos + [spec_path, constraints_path] + list(extra_files or []):
+    for p in videos + [spec_path, constraints_path] + merged_extras:
         if p and os.path.exists(p):
             h.update(os.path.basename(p).encode("utf-8"))
             h.update(_sha256_file(p).encode("ascii"))

@@ -86,17 +86,18 @@ STATIC_DOMAIN_HOMOPHONES = [
     (r"烏超所知|乌超所知", "物超所值", "成语口误【物超所值】"),
     (r"吃马合适", "尺码合适", "尺码用语【尺码合适】"),
     (r"好样毛", "羊毛", "面料材质【羊毛】"),
-    # —— 2026-11-04 project-4：agent 逐源语义复核结论固化（羊毛混纺针织上衣专场）——
-    # 口径：只修正同音/近音错字，不改写句子结构、不把其他品类话术改成本品话术。
-    # 依据见 docs/project-4_root_cause_and_fix.md 与 asr_correction_decisions.json。
-    # 增加上下文守卫，避免在跨品类通用场景误伤日常词汇（如“吃鲜货”、“买气球”）。
-    (r"浑坊|浑仿|混坊", "混纺", "面料成分【羊毛混纺】"),
+    # 服装通用带货词汇（增加上下文守卫，避免误伤工业板材或生鲜食品）
+    (r"(?<=[衣服装裙裤件套领袖身码尺廓款这那其个的好])板型|板型(?=[很超更极好显修显包])", "版型", "服装版型语境【版型】"),
+    (r"(?<=[拍抢要买有发都是])[先鲜]货|[先鲜]货(?=[在仓发车直秒走])", "现货", "库存话术【现货】"),
+    (r"在藏|在舱", "在仓", "库存话术【现货在仓】"),
+]
+
+# 羊毛混纺/针织专场专属同音词规则（按品类/契约按需启用，避免跨项目全局误伤）
+KNITWEAR_DOMAIN_HOMOPHONES = [
+    (r"(?<=[羊绵棉毛绒丝麻布线衣料])(?:浑[坊仿]|混坊)|(?:浑[坊仿]|混坊)(?=[面料纱衫衣裤裙织成分])", "混纺", "面料成分【羊毛混纺】"),
     (r"颜麦色|颜麦(?=[色调系配])", "燕麦色", "主推色【燕麦色】"),
     (r"刹线|杀线|沙线", "纱线", "针织工艺【纱线细腻】"),
     (r"(?<=[不难防抗易会超])气球|气球(?=[毛针织磨穿洗])", "起球", "针织抗起球卖点【不易起球】"),
-    (r"板型", "版型", "服装版型语境【版型】"),
-    (r"(?<=[拍抢要买有发都是])[先鲜]货|[先鲜]货(?=[在仓发车直秒走])", "现货", "库存话术【现货】"),
-    (r"在藏|在舱", "在仓", "库存话术【现货在仓】"),
     (r"毛泥裤", "毛呢裤", "裤装面料【毛呢裤】（仅纠错，不改变品类）"),
     (r"库长", "裤长", "裤装尺码【裤长】（仅纠错，不改变品类）"),
     (r"棉浮", "棉服", "服装品类【棉服】（仅纠错，不改变品类）"),
@@ -104,7 +105,7 @@ STATIC_DOMAIN_HOMOPHONES = [
     (r"Smart穿到", "S码穿到", "尺码介绍【S码穿到】"),
     (r"1号练[接结]|灵界鸡", "1号链接", "商品链接话术【1号链接】"),
     (r"牌现货", "拍现货", "带货话术【拍现货】"),
-    (r"全民扣衣|扣小衣", "扣1", "互动促单话术【扣1】"),
+    (r"(?<=[想要拍喜欢大家姐妹老粉主播一起])(?:全民扣衣|扣小衣)|(?:全民扣衣|扣小衣)(?=[的们去吧啦])", "扣1", "互动促单话术【扣1】"),
 ]
 
 
@@ -132,6 +133,38 @@ class AsrContextVerifier:
             f"码数、卡码、YYDS、螺纹T、编织裤、老钱风、休闲松弛、{kw_str}。"
         )
         return prompt
+
+    def _load_contract_homophones(self) -> Dict[str, str]:
+        """从多种契约源动态加载项目专属同音词映射（支持顶层与嵌套结构）：
+        1. spec.options.product_anchor 指定的 YAML 契约
+        2. spec.product.asr_homophones
+        3. spec.asr_homophones
+        """
+        homophones: Dict[str, str] = {}
+        # 1. options.product_anchor
+        opts = self.spec.get("options", {}) or {}
+        anchor_rel = opts.get("product_anchor")
+        if anchor_rel:
+            p = anchor_rel if os.path.isabs(anchor_rel) else os.path.join(PROJECT_ROOT, anchor_rel)
+            if os.path.exists(p):
+                try:
+                    import yaml
+                    with open(p, "r", encoding="utf-8") as f:
+                        yd = yaml.safe_load(f) or {}
+                    ah = yd.get("asr_homophones") or (yd.get("product", {}) or {}).get("asr_homophones")
+                    if isinstance(ah, dict):
+                        homophones.update(ah)
+                except Exception:
+                    pass
+        # 2. spec.product.asr_homophones
+        prod_ah = (self.spec.get("product", {}) or {}).get("asr_homophones")
+        if isinstance(prod_ah, dict):
+            homophones.update(prod_ah)
+        # 3. spec.asr_homophones
+        top_ah = self.spec.get("asr_homophones")
+        if isinstance(top_ah, dict):
+            homophones.update(top_ah)
+        return homophones
 
     def verify_and_correct(
         self,
@@ -405,11 +438,17 @@ class AsrContextVerifier:
 
         # 动态根据当前任务契约构建规则
         active_rules = list(STATIC_DOMAIN_HOMOPHONES)
-        # 支持从任务契约 spec (或 product_anchor) 注入专属同音词规则
-        spec_homophones = self.spec.get("asr_homophones")
-        if isinstance(spec_homophones, dict):
-            for k, v in spec_homophones.items():
-                active_rules.insert(0, (re.escape(k), v, f"任务契约注入同音词【{k} -> {v}】"))
+
+        # 1. 契约注入同音词（支持从 spec、spec.product、options.product_anchor 自动提取）
+        contract_homophones = self._load_contract_homophones()
+        for k, v in contract_homophones.items():
+            active_rules.insert(0, (re.escape(k), v, f"任务契约注入同音词【{k} -> {v}】"))
+
+        # 2. 针织/毛衣专场按品类自动启用专属同音词库
+        if any(kw in self.product_name for kw in ("针织", "毛衣", "羊毛", "混纺", "羊绒")):
+            for pat, repl, reason in KNITWEAR_DOMAIN_HOMOPHONES:
+                active_rules.append((pat, repl, f"针织专场动态同音词【{reason}】"))
+
         if "半岛棉" in self.product_name:
             active_rules.insert(0, (r"半导棉|半导|半刀棉", "半岛棉", "商品标题核心面料【半岛棉】匹配"))
 
