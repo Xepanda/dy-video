@@ -57,15 +57,21 @@ def _load_constraints(path: str = None) -> Dict[str, Any]:
 # ---------------------------------------------------------------- 文本归一化
 
 _STRIP_RE = re.compile(r"[\s，,。.、！!？?；;：:~～…—\-*#\u3000]+")
+# ASS 内联样式 override block（如 {\c&H0000E6FF&} / {\c&H00FFFFFF&}）。
+# 关键词高亮会在字幕里插入成对的着色标签；它们不是可见文字，若不剥离，
+# 标签中的 c/H/十六进制串会被当成实义字符参与相似度计算，把字幕虚增一倍、
+# 把「字幕-原声一致性」误判为 BLOCK（实测 26 个标签使 324 字变 714 字、
+# 相似度 0.774 → 0.483）。2026-11-05 修复。
+_ASS_OVERRIDE_RE = re.compile(r"\{[^}]*\}")
 
 
 def _normalize_text(text: str) -> str:
-    """归一化：去空白/标点/屏蔽符，仅留实义字符（中文+字母数字）。
+    """归一化：先剥离 ASS 内联样式标签，再去空白/标点/屏蔽符，仅留实义字符。
 
-    字幕里的 `***` 屏蔽符与标点都会参与相似度计算前剥除，
-    避免屏蔽处理被误判为"字幕与原声不符"。
+    字幕里的 `***` 屏蔽符、关键词高亮标签与标点都在相似度计算前剥除，
+    避免排版标记被误判为"字幕与原声不符"。
     """
-    return _STRIP_RE.sub("", text or "")
+    return _STRIP_RE.sub("", _ASS_OVERRIDE_RE.sub("", text or ""))
 
 
 def _read_ass_texts(ass_path: str) -> List[Dict[str, Any]]:

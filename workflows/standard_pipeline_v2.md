@@ -48,7 +48,7 @@ S6 交付签署（manifest + QC 报告 + 说明书）
 
 - **输入**：`job_spec.json`（品牌/商品/素材/时长/关键词/分屏策略）。
 - **执行**：`python scripts/generate_from_job_spec.py --spec job_spec.json`
-  1. 素材收集：`raw_video_paths` 显式列表优先；否则 `raw_video_path` 目录扫描（按名排序）；
+  1. 素材收集：`raw_video_paths` 显式列表优先（强隔离：存在显式清单时立即返回，绝不穿透回退扫描目录，杜绝同目录无关素材污染）；否则 `raw_video_path` 目录扫描（按名排序，排除自身产物）；
   2. ffprobe 逐段校验（分辨率/帧率/时长/音轨）；
   3. 商品图存在校验（缺失走占位兜底并显式提示）；
   4. 文案派生：Hook 卡/CTA 严格取自商品名（零硬编码，`split_strategy=force_off` 时不注入分屏配对）；
@@ -90,7 +90,9 @@ S6 交付签署（manifest + QC 报告 + 说明书）
    每条成片 ≤2 个，Pose 不可用退兜底位；
 5. **违规词三通道处理准备**（v1.4）：`apply_violation_handling.py` 计算
    逐分镜消音时段 + OCR 打码区域 + 字幕命中清单 → `violation_handling.json`；
-6. **计划过网关**后落盘 `plan.json`（分镜/特效/放大镜/违规处理参数一体）。
+6. **分镜品类与语义对齐门禁**（2026-11 新增）：S2 阶段执行 `verify_clip_product_alignment`，排查异品类负向词、口误数字与极限词，按 `contracts/constraints.yaml` 动态校验漏斗区间与配比（遵循 `funnel_enforce_level` 执行 WARN 提示或 BLOCK 门禁，违规即阻断流水线），核验结果写入 `plan.alignment_report` 并由 S5 质检执行 C12 BLOCK 门禁复核；
+7. **挂角贴纸逐镜避脸**：考虑 hflip 镜像变换与 zoompan 推镜放大对人脸坐标的映射，安全间距 <30px 时纵向步进下移（`my + 220`, `my + 440`, `my + 660`）；
+8. **计划过网关**后落盘 `plan.json`（分镜/特效/放大镜/违规处理参数一体）。
 
 ## 5. S3 封面渲染（全幅底图 + 自然叠加）
 
