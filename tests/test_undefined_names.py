@@ -155,6 +155,24 @@ def _analyze_function(parent: Scope, node):
     parent.children.append(sub)
 
 
+def _analyze_class(parent: Scope, node: ast.ClassDef):
+    for item in node.body:
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            parent.bind(item.name)
+            _analyze_function(parent, item)
+        elif isinstance(item, ast.ClassDef):
+            parent.bind(item.name)
+            _analyze_class(parent, item)
+        elif isinstance(item, ast.Assign):
+            for t in item.targets:
+                _bind_target(parent, t)
+            _analyze_node(parent, item.value)
+        elif isinstance(item, ast.AnnAssign):
+            _bind_target(parent, item.target)
+            if item.value is not None:
+                _analyze_node(parent, item.value)
+
+
 def _module_scope(tree: ast.Module) -> Scope:
     scope = Scope(None)
     for node in tree.body:
@@ -163,6 +181,7 @@ def _module_scope(tree: ast.Module) -> Scope:
             _analyze_function(scope, node)
         elif isinstance(node, ast.ClassDef):
             scope.bind(node.name)
+            _analyze_class(scope, node)
         elif isinstance(node, ast.Assign):
             for t in node.targets:
                 _bind_target(scope, t)
@@ -218,8 +237,12 @@ def main() -> int:
         "src/tools/slicing_rules.py",
         "src/tools/build_plan.py",
         "src/agent/agent_director.py",
+        "src/core/asr_agent_verifier.py",
         "src/core/asr_review_gate.py",
         "src/core/plan_compiler.py",
+        "src/tools/product_anchor.py",
+        "src/tools/verify_clip_product_alignment.py",
+        "src/qc/qc_auditor.py",
     ]
 
     # —— 自验证：先证明检查器确实能抓到问题，否则它毫无价值 ——

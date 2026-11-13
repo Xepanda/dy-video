@@ -33,6 +33,10 @@ import re
 import time
 from typing import List, Dict, Any, Tuple, Optional
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 # 核心女装直播带货垂直领域同音/近音/错别字纠错库
 STATIC_DOMAIN_HOMOPHONES = [
     # (匹配正则, 纠正结果, 纠错依据)

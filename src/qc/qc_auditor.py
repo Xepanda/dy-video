@@ -71,8 +71,9 @@ def _load_constraints(path: str = None) -> Dict[str, Any]:
 class QcAuditor:
     """constraints 驱动的分级质检门禁。"""
 
-    def __init__(self, constraints: Dict[str, Any] = None):
+    def __init__(self, constraints: Dict[str, Any] = None, spec: Dict[str, Any] = None):
         self.constraints = constraints or _load_constraints()
+        self.spec = spec or {}
         # 统一开关：plain 模式下字幕/文字类断言无对象，统一记 SKIP（不是 PASS）
         try:
             from src.tools.feature_flags import features_of
@@ -317,8 +318,21 @@ class QcAuditor:
         rep = plan.get("alignment_report")
         if not rep:
             try:
+                # 强化降级路径：支持从 plan 所在目录或 auditor 实例中解析 spec 与 work_dir
+                plan_dir = os.path.dirname(os.path.abspath(plan_path))
+                spec = getattr(self, "spec", None)
+                if not spec or not isinstance(spec, dict):
+                    for spec_name in ("spec.json", "job_spec.resolved.json", "job_spec.json"):
+                        sp = os.path.join(plan_dir, spec_name)
+                        if os.path.exists(sp):
+                            with open(sp, "r", encoding="utf-8") as sf:
+                                spec = json.load(sf)
+                            break
+                spec = spec or {}
                 from src.tools.verify_clip_product_alignment import verify_clip_alignment
-                rep = verify_clip_alignment(plan, getattr(self, "spec", {}), constraints=self.constraints)
+                rep = verify_clip_alignment(
+                    plan, spec, constraints=self.constraints, work_dir=plan_dir
+                )
             except Exception as e:
                 self._skip(name, f"动态对齐核验失败: {str(e)[:60]}",
                            metric_key="clip_alignment.passed")
@@ -362,7 +376,10 @@ class QcAuditor:
         overlay_meta_path: str = None,
         plan_path: str = None,
         chosen_cover_id: str = None,
+        spec: Dict[str, Any] = None,
     ) -> bool:
+        if spec:
+            self.spec = spec
         print("\n=======================================================")
         print("启动自动化量化质检门禁 v2（constraints 驱动）...")
         print("=======================================================")

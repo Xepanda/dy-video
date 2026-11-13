@@ -951,6 +951,10 @@ def _compose_by_selling_points(
                 if (len(_points(trial) & set(sp_def)) < 6
                         or (set(p0) - _points(trial))):
                     continue
+                if _worst_ratio(trial) > max_ratio + 1e-6:
+                    continue
+                if len({_src(x) for x in trial}) < min_sources:
+                    continue
                 ratio2 = (sum(_dur(x) for x in trial if x.get("_qc_fabric"))
                           / t2)
                 if best is None or ratio2 < best[0]:

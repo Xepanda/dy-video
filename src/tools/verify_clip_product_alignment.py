@@ -282,7 +282,10 @@ def verify_clip_alignment(
         elif (i == len(clips) - 1) and (
             c.get("category") in ("decision_closing", "closing")
             or "cta" in c.get("selling_point", [])
-            or any(w in c.get("desc", "") or w in c.get("full_text", "") for w in ("1号", "链接", "拍", "上车", "车", "下单", "秒杀"))
+            or any(w in (c.get("desc", "") + c.get("full_text", "")) for w in (
+                "1号", "链接", "去拍", "赶紧拍", "拍下", "下单", "秒杀", "小黄车",
+                "上车", "购物车", "带走", "加购", "拍它", "先到先得", "现货"
+            ))
         ):
             k = "decision_closing"
         else:
@@ -308,8 +311,8 @@ def verify_clip_alignment(
             elif act > c_max:
                 funnel_notes.append(f"{cat_name}={act:.1f}s > 上限 {c_max}s")
 
-    # 兜底核对：面料占比防堆砌上限 25%
-    fabric_dur = cat_durs.get("fabric", 0.0) + cat_durs.get("craft_detail", 0.0)
+    # 兜底核对：面料占比防堆砌上限 25%（口径与 QC._audit_fabric_ratio 一致，仅统计 fabric 类目）
+    fabric_dur = cat_durs.get("fabric", 0.0)
     fabric_ratio = fabric_dur / max(0.1, total_dur)
     if fabric_ratio > 0.2501:
         funnel_notes.append(f"面料占比 {fabric_ratio:.1%} > 上限 25.0%")

@@ -160,6 +160,64 @@ def test_asr_non_knitwear_no_miscorrection():
     print("[PASS] test_asr_non_knitwear_no_miscorrection")
 
 
+def test_asr_contract_homophones_dynamic_loading():
+    """验证 spec 含 options.product_anchor 时动态加载同音词，无 NameError 且成功注入映射。"""
+    from src.core.asr_agent_verifier import AsrContextVerifier
+
+    spec = {
+        "options": {"product_anchor": "contracts/product_anchor_project-4.yaml"},
+        "product": {"title_line1": "法式高级感", "title_line2": "羊毛混纺针织上衣"}
+    }
+    verifier = AsrContextVerifier(spec)
+    contract_homophones = verifier._load_contract_homophones()
+    assert isinstance(contract_homophones, dict)
+    assert len(contract_homophones) >= 10
+    assert contract_homophones.get("浑坊") == "混纺"
+    assert contract_homophones.get("刹线") == "纱线"
+
+    raw_subs = [
+        {"start": 0.0, "end": 2.0, "text": "这件毛衣是浑坊面料刹线很好"}
+    ]
+    corrected, report = verifier.verify_and_correct(raw_subs)
+    assert "混纺" in corrected[0]["text"]
+    assert "纱线" in corrected[0]["text"]
+    print("[PASS] test_asr_contract_homophones_dynamic_loading")
+
+
+def test_qc_clip_alignment_fallback_and_block():
+    """验证 QcAuditor 独立调用无 alignment_report 的 plan.json 时的降级核验与 BLOCK 阻断。"""
+    import json
+    import tempfile
+    from src.qc.qc_auditor import QcAuditor
+
+    with tempfile.TemporaryDirectory() as td:
+        # 创建带有违规（负向词）且未包含 alignment_report 的 plan.json
+        bad_plan = {
+            "clips": [
+                {"id": "c01", "dur": 60.0, "category": "hook", "desc": "这款搭配皮裤和毛呢裤"}
+            ]
+        }
+        spec = {
+            "product": {"title_line1": "法式高级感", "title_line2": "羊毛混纺针织上衣"}
+        }
+        plan_p = os.path.join(td, "plan.json")
+        spec_p = os.path.join(td, "spec.json")
+        with open(plan_p, "w", encoding="utf-8") as f:
+            json.dump(bad_plan, f)
+        with open(spec_p, "w", encoding="utf-8") as f:
+            json.dump(spec, f)
+
+        auditor = QcAuditor()
+        auditor._audit_clip_alignment(plan_p)
+        assert auditor.report["all_passed"] is False
+        c12 = [c for c in auditor.report["checks"] if c.get("metric_key") == "clip_alignment.passed"]
+        assert len(c12) == 1
+        assert c12[0]["status"] == "FAIL"
+        assert c12[0]["level"] == "BLOCK"
+        assert "皮裤" in str(c12[0]["detail"]) or "负向词" in str(c12[0]["detail"])
+    print("[PASS] test_qc_clip_alignment_fallback_and_block")
+
+
 def main():
     test_clip_alignment_pass()
     test_clip_alignment_catches_negative_category()
@@ -168,6 +226,8 @@ def main():
     test_clip_alignment_catches_funnel_ratio_imbalance()
     test_clip_alignment_nested_constraints_hierarchy()
     test_asr_non_knitwear_no_miscorrection()
+    test_asr_contract_homophones_dynamic_loading()
+    test_qc_clip_alignment_fallback_and_block()
     print("\n[TEST-CLIP-ALIGNMENT] 全部通过")
     return 0
 
