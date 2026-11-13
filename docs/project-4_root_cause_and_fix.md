@@ -263,3 +263,49 @@ v3 首版成片 59.80s，物理参数与 43 项 QC 全 PASS（含新增 C5–C9�
 | `scripts/audit_product_anchor.py` | 文档字符串补充 M12/M13 |
 | `output/project-4/*`、桌面 `project-4*` | 同步为 v4 验收版（成片、封面、兼容副本、QC、审计、人工复核） |
 | `logs/project-4_v4_precheck/`、`logs/project-4_v4_final/` | 34 窗预检拼图与 31 帧成片验收拼图 |
+
+---
+
+## 10. v5：X1 硬阻塞修复与 PR #15 合入前闭环（2026-11-13）
+
+### 10.1 问题定位
+
+PR #15 第三次更新（head `69c562c`）引入 `_load_contract_homophones()`，其中引用了未定义的 `PROJECT_ROOT`。带 `options.product_anchor` 的 spec 在 S1 逐源 ASR 阶段会抛 `NameError`，而 CI 全绿未覆盖该分支：新增单测使用的 spec 不含 `product_anchor`，`test_undefined_names.py` 也未把该模块纳入检查。
+
+第四次核查时确认修复只存在于本地工作区（9 个未提交文件），**从未提交或推送**，远端 head 与两天前完全一致。这是「修复已做但 PR 仍会崩」的根因。
+
+### 10.2 落地修复（提交 `55ac356`）
+
+| 路径 | 变更 |
+| :--- | :--- |
+| `src/core/asr_agent_verifier.py` | 定义 `PROJECT_ROOT`（相对 `__file__` 上溯至仓库根），消除 X1 |
+| `tests/test_undefined_names.py` | 增加类作用域分析，并把 `asr_agent_verifier.py`、`product_anchor.py`、`verify_clip_product_alignment.py`、`qc_auditor.py` 纳入检查 |
+| `tests/test_clip_alignment.py` | 新增契约同音词动态加载（覆盖 `options.product_anchor` 崩溃分支）与 C12 降级路径两例，并接入直接执行 `main()` |
+| `.github/workflows/regression.yml` | `pull_request.types` 增加 `labeled`，使加标签可触发素材端到端层 |
+| `src/agent/agent_director.py` | S2 区分「门禁违规（BLOCK）」与「工具异常（WARN + 降级）」 |
+| `src/qc/qc_auditor.py` | `QcAuditor` 增加 `spec` 属性；C12 无 `alignment_report` 时按 spec/work_dir 降级核验 |
+| `src/tools/verify_clip_product_alignment.py` | 去除 CTA 单字「拍/车」误判；面料占比兜底口径与 QC 统一 |
+| `src/tools/product_anchor.py` | 参数占比替换时同步守住单源 ≤40% 与源数下限，修复 C8 |
+| `docs/live_content_structure_project-4.md` | 清理示例商品（桑蚕丝）残留 |
+
+### 10.3 完整流水线重跑验收（S0→S6，18m13s，退出码 0）
+
+用推送后的代码清理 S2~S6 阶段缓存后完整重跑；因代码指纹变更，6 源逐源 ASR 全部重新转录（730 句、97 处语境纠错）。
+
+| 项目 | 结果 |
+| :--- | :--- |
+| 成片 | `C:\Users\ePanda\Desktop\project-4\project-4.mp4`，**61.07s**，1080×1920 @ 60fps，H.264 High / yuv420p，AAC-LC / 48kHz / 立体声 |
+| 响度 / 解码 | −14.46 LUFS，True Peak −1.36 dBTP，LRA 2.20 LU；`ffmpeg -xerror` 全片 `DECODE_OK` |
+| QC | **46 项 / 44 PASS / 2 WARN / 0 BLOCK FAIL**；C5–C11 与 C12「分镜品类与语义对齐门禁」全 PASS；C8 单源 39.8% ≤40% |
+| 商品锚点审计 | `all_gates_passed=True`，M01=0、M02=1、P0 4/4、M05 4 源、M10 Hook 主体明确、M11=1、M12/M13 为空 |
+| 视觉验收 | 2 秒网格 31 帧；无黑裤特写、白色翻领外套、带帽款、水杯、重复静止画面；t=56s 为同款黑色配色，t=60s 为片尾淡出 |
+
+`asr_verification_report.json` 由本次 6 源缓存补生成（730 句 / 97 处纠错）；汇总成单次审查会触发 `WARN_RATIO_ESCALATED`，属合并口径差异，流水线逐源审查通过，报告内 `_delivery_note` 已注明。兼容副本、人工复核表与审计均已同步。
+
+### 10.4 已知限制（如实披露）
+
+- **素材端到端 CI 未产出结论**：本次 push 后「单元测试层」`success`，「素材端到端层」由 skipped 变为 `queued`，但依赖 `[self-hosted, windows]` runner 与未入库的直播素材，能否跑通尚未证明。本次完整 S0→S6 重跑为本地等效验证。
+- **C6 必备卖点覆盖 6/7**：本次重转录后 `fit` 类窗口未入选，但 P0 四类无缺失，C6 判定 PASS；属可接受的内容取舍，非门禁失败。
+- **2 条 WARN 不拦截**：封面人像宽占比 0.404（版式预留底部商品名区）、`transition:on` 被 R7 `hard_cut` 覆盖。
+- §9.4 记录的「商品锚点与契约不在缓存指纹内」已在 PR 中消除：`stage_cache.py` 现纳入两个工具，`compute_pipeline_key` 会合并契约文件哈希。
+- `scripts/build_content_structure_doc.py` 读取仓库根示例 `job_spec.json`；直接重生成会把本品数据覆盖为示例商品。本次已恢复为 §10.2 修正版，后续改该文档须手工维护或修脚本取 `specs/job_spec_project-4.resolved.json`。
