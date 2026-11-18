@@ -612,16 +612,19 @@ class AgentDirector:
         # -------------------------------------------------------------
         print(">>> [PHASE 1] 确定性工具链提取候选池...")
 
-        # 1.1 镜头边界检测（多源：逐源检测后合并；B13 阶段缓存）
+        # 1.1 镜头边界检测（多源：逐源检测保存字典 + 合并；B13 阶段缓存）
         scene_cuts = []
+        scene_cuts_by_source: Dict[str, List[float]] = {}
         try:
             for v in self.raw_videos:
                 cuts = detect_scene_cuts(v, cache_key=(ck + "|" + v) if ck else None,
                                           work_dir=self.work_dir)
+                scene_cuts_by_source[v] = cuts
                 scene_cuts.extend(cuts)
             print(f"    镜头边界: {len(scene_cuts)} 个切换点（{len(self.raw_videos)} 个源）")
         except Exception as e:
             scene_cuts = []
+            scene_cuts_by_source = {}
             print(f"    镜头边界检测失败（不阻断）: {e}")
 
         # 1.2 封面候选（v2：人脸门禁 + 水平 1:6:1；多源：全部源参与候选池；B13 阶段缓存）
@@ -804,7 +807,8 @@ class AgentDirector:
             plan = build_plan(self.raw_video, segments, self.spec,
                               self.constraints, scene_cuts=scene_cuts,
                               cache_key=ck, work_dir=self.work_dir,
-                              pauses_by_source=pauses_by_source)
+                              pauses_by_source=pauses_by_source,
+                              scene_cuts_by_source=scene_cuts_by_source)
             plan_source = "build_plan"
             plan_forced = False
             # 保留自动计划的分镜与包装配置（人工精修只改时间轴）
@@ -1015,6 +1019,25 @@ class AgentDirector:
         except Exception as e:
             print(f"  [ALIGNMENT][WARN] 对齐校验工具执行异常（降级放行）: {e}")
 
+        # 决策 2.7: 视听接缝连续性审查与切点微调（V3 PR-07 ContinuityAuditor & CutOptimizer）
+        continuity_review = None
+        try:
+            from src.qc.continuity_qc import ContinuityAuditor
+            from src.core.cut_optimizer import CutOptimizer
+            c_auditor = ContinuityAuditor()
+            continuity_review = c_auditor.audit_sequence_seams(plan.get("clips", []), {})
+            cont_path = os.path.join(self.output_dir, "continuity_review.json")
+            with open(cont_path, "w", encoding="utf-8") as f:
+                json.dump(continuity_review, f, ensure_ascii=False, indent=2)
+            plan["continuity_review"] = continuity_review
+            cut_opt = CutOptimizer()
+            fixed_clips, opt_actions = cut_opt.optimize_cuts(plan.get("clips", []), continuity_review)
+            if opt_actions:
+                plan["clips"] = fixed_clips
+                print(f"  [CONTINUITY] 接缝微调完成 ({len(opt_actions)} 处)")
+        except Exception as ce:
+            print(f"  [CONTINUITY][WARN] 连续性审计异常（跳过）: {ce}")
+
         plan_path = os.path.join(self.work_dir, "plan.json")
         with open(plan_path, "w", encoding="utf-8") as f:
             json.dump(plan, f, ensure_ascii=False, indent=2)
@@ -1084,6 +1107,31 @@ class AgentDirector:
                 from src.tools.stage_cache import save_stage
                 save_stage(self.work_dir, "qc", ck, auditor.report)
 
+        # 4.2 电商内容层与业务质量门禁（V3 PR-08 EditorialQcAuditor）
+        editorial_report = None
+        try:
+            from src.qc.editorial_qc import EditorialQcAuditor
+            policy = (self.spec.get("options", {}).get("automation", {}).get("quality_policy") or "standard")
+            ed_auditor = EditorialQcAuditor(policy=policy)
+            product_profile = None
+            if self.spec.get("product_profile_path") and os.path.isfile(self.spec["product_profile_path"]):
+                try:
+                    with open(self.spec["product_profile_path"], "r", encoding="utf-8") as pf:
+                        product_profile = json.load(pf)
+                except Exception:
+                    pass
+            if not product_profile:
+                from src.core.product_profile import build_product_profile
+                product_profile = build_product_profile(self.spec, spec_dir=self.work_dir, strict_missing_images=False, validate=False)
+
+            editorial_report = ed_auditor.audit_editorial_quality(plan, product_profile, continuity_review)
+            ed_report_path = os.path.join(self.output_dir, "editorial_qc_report.json")
+            with open(ed_report_path, "w", encoding="utf-8") as f:
+                json.dump(editorial_report, f, ensure_ascii=False, indent=2)
+            print(f"  [EDITORIAL-QC] {editorial_report.get('summary')}")
+        except Exception as ee:
+            print(f"  [EDITORIAL-QC][WARN] 内容质检异常（跳过）: {ee}")
+
         # 产物直接交付并保存到用户提供的素材目录下，文件名与任务名字 (project_id) 完全一致
         target_mp4 = os.path.join(material_dir, f"{self.project_id}.mp4")
         target_cover = os.path.join(material_dir, f"{self.project_id}.jpg")
@@ -1120,6 +1168,8 @@ class AgentDirector:
             # 2026-10-27 新增：一致性预检 / 对话脚本 / 违规处理登记
             "consistency_check": consistency_report,
             "dialogue_script_stats": dialogue_stats,
+            "continuity_review": continuity_review,
+            "editorial_qc": editorial_report,
             "final_deliverables": {
                 "video": target_mp4,
                 "cover": target_cover,
