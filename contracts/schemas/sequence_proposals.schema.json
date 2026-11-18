@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sequence_proposals.schema.json",
+  "title": "sequence_proposals",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "proposals",
+    "evidence_gap"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": [
+        "3.0"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "PROPOSED",
+        "INSUFFICIENT_EVIDENCE"
+      ]
+    },
+    "proposals": {
+      "type": "array",
+      "items": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "sequence_proposal",
+        "title": "sequence_proposal",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "proposal_id",
+          "style",
+          "ordered_candidate_ids",
+          "expected_duration_ms",
+          "selling_point_coverage",
+          "narrative_rationale",
+          "risk_notes",
+          "confidence"
+        ],
+        "properties": {
+          "proposal_id": {
+            "type": "string"
+          },
+          "style": {
+            "type": "string",
+            "enum": [
+              "balanced",
+              "fast_paced",
+              "showcase"
+            ]
+          },
+          "ordered_candidate_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expected_duration_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "selling_point_coverage": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "narrative_rationale": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "risk_notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    },
+    "evidence_gap": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}
