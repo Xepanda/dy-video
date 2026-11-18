@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "product_profile_v3.schema.json",
+  "title": "product_profile_v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "sku_id",
+    "name",
+    "category",
+    "reference_image_ids",
+    "allowed_variants",
+    "selling_points",
+    "product_attributes",
+    "provenance",
+    "price_policy",
+    "claim_policy",
+    "media_hashes"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": [
+        "3.0"
+      ]
+    },
+    "sku_id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "category": {
+      "type": "string"
+    },
+    "reference_image_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "allowed_variants": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "selling_points": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "product_attributes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": [
+          "string",
+          "number",
+          "boolean",
+          "array",
+          "null"
+        ]
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "enum": [
+          "USER",
+          "MODEL_SUGGESTED",
+          "VERIFIED_EXTERNAL"
+        ]
+      }
+    },
+    "price_policy": {
+      "type": "string",
+      "enum": [
+        "EXCLUDE_ALL",
+        "USER_DEFINED"
+      ]
+    },
+    "claim_policy": {
+      "type": "string",
+      "enum": [
+        "FACTS_ONLY",
+        "REVIEW_REQUIRED"
+      ]
+    },
+    "media_hashes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  }
+}

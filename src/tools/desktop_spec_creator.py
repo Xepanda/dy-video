@@ -146,6 +146,45 @@ class SpecManager:
         else:
             keywords = []
 
+        # V3 扩展字段提取（向后兼容）
+        sku_id = str(payload.get("sku_id") or payload.get("sku") or "").strip()
+        category = str(payload.get("category") or "").strip()
+        p_name = str(payload.get("product_name") or payload.get("name") or "").strip()
+        attributes = dict(payload.get("attributes") or {})
+        allowed_variants = list(payload.get("allowed_variants") or [])
+        selling_points = list(payload.get("selling_points") or [])
+        if not selling_points and keywords:
+            selling_points = list(keywords)
+        automation = dict(payload.get("automation") or {})
+
+        prod_dict = {
+            "title_line1": p_l1,
+            "title_line2": p_l2,
+            "item_images": item_images
+        }
+        if sku_id:
+            prod_dict["sku_id"] = sku_id
+        if category:
+            prod_dict["category"] = category
+        if p_name:
+            prod_dict["name"] = p_name
+        if attributes:
+            prod_dict["attributes"] = attributes
+        if allowed_variants:
+            prod_dict["allowed_variants"] = allowed_variants
+        if selling_points:
+            prod_dict["selling_points"] = selling_points
+
+        opt_dict = {
+            "duration_range": duration_range,
+            "split_strategy": split_strategy,
+            "highlight_keywords": keywords,
+            # 统一能力开关（2026-11-01）：由 GUI 面板产生，随任务落盘可复现
+            "features": dict(payload.get("features") or {}),
+        }
+        if automation:
+            opt_dict["automation"] = automation
+
         spec = {
             "project_id": project_id,
             "raw_video_path": raw_video_path,
@@ -154,18 +193,8 @@ class SpecManager:
                 "title_en": brand_en,
                 "subtitle_cn": brand_cn
             },
-            "product": {
-                "title_line1": p_l1,
-                "title_line2": p_l2,
-                "item_images": item_images
-            },
-            "options": {
-                "duration_range": duration_range,
-                "split_strategy": split_strategy,
-                "highlight_keywords": keywords,
-                # 统一能力开关（2026-11-01）：由 GUI 面板产生，随任务落盘可复现
-                "features": dict(payload.get("features") or {}),
-            }
+            "product": prod_dict,
+            "options": opt_dict
         }
         return spec
 
