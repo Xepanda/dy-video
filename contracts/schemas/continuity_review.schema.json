@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "continuity_review.schema.json",
+  "title": "continuity_review",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "seams",
+    "summary"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": [
+        "3.0"
+      ]
+    },
+    "seams": {
+      "type": "array",
+      "items": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "seam",
+        "title": "seam",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "seam_id",
+          "left_candidate_id",
+          "right_candidate_id",
+          "severity",
+          "issue_codes",
+          "evidence_refs",
+          "suggested_action",
+          "suggested_time_shift_ms",
+          "verified_media_types",
+          "notes"
+        ],
+        "properties": {
+          "seam_id": {
+            "type": "string"
+          },
+          "left_candidate_id": {
+            "type": "string"
+          },
+          "right_candidate_id": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "PASS",
+              "WARN",
+              "BLOCK",
+              "UNVERIFIABLE"
+            ]
+          },
+          "issue_codes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "TRUNCATED_WORD",
+                "INCOMPLETE_SENTENCE",
+                "ACTION_BREAK",
+                "AUDIO_JUMP",
+                "SKU_SWITCH",
+                "VISUAL_JUMP",
+                "MOUTH_SYNC_RISK",
+                "TEXT_OVERLAY_COLLISION"
+              ]
+            }
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "suggested_action": {
+            "type": "string",
+            "enum": [
+              "NONE",
+              "SHIFT_CUT",
+              "GAIN_MATCH",
+              "REPLACE_CLIP",
+              "REPLAN",
+              "NEED_INPUT"
+            ]
+          },
+          "suggested_time_shift_ms": {
+            "type": "integer",
+            "minimum": -2000,
+            "maximum": 2000
+          },
+          "verified_media_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "TEXT",
+                "AUDIO",
+                "VIDEO",
+                "POSE"
+              ]
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "string"
+    }
+  }
+}
