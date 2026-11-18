@@ -215,8 +215,8 @@ def main() -> int:
               f"{meta['duration']:.1f}s")
     print(f"  合计 {total_dur:.1f}s 原始直播素材")
 
-    # —— 2. 校验商品图 ——
-    print(f"\n[2/5] 商品图校验:")
+    # —— 2. 校验商品图与构建商品档案 (V3 PR-02) ——
+    print(f"\n[2/5] 商品图校验与商品档案构建:")
     item_images = []
     for img in (product.get("item_images") or []):
         rp = resolve_path(img, spec_dir)
@@ -228,10 +228,25 @@ def main() -> int:
     if not item_images:
         print("  [WARN] 无可用商品图，封面商品位将走占位图路径")
 
+    from src.core.product_profile import build_product_profile, save_product_profile, ProductProfileError
+    product_profile = None
+    try:
+        product_profile = build_product_profile(spec, spec_dir=spec_dir)
+        print(f"  [OK] 商品身份档案生成成功 (SKU: {product_profile['sku_id']}, 品类: {product_profile['category']})")
+    except ProductProfileError as pe:
+        print(f"  [FATAL] 商品档案严格策略阻断: {pe}")
+        return 1
+    except Exception as pe:
+        print(f"  [WARN] 商品档案构建降级（不阻断）: {pe}")
+
     # —— 3. 派生文案并落盘可执行 spec ——
     texts = derive_texts(spec)
     resolved_spec = build_resolved_spec(spec, videos, texts)
     os.makedirs(SPECS_DIR, exist_ok=True)
+    if product_profile:
+        profile_path = os.path.join(SPECS_DIR, f"product_profile_{project_id}.json")
+        save_product_profile(product_profile, profile_path)
+        resolved_spec["product_profile_path"] = profile_path
     resolved_path = os.path.join(
         SPECS_DIR, f"job_spec_{project_id}.resolved.json")
     with open(resolved_path, "w", encoding="utf-8") as f:

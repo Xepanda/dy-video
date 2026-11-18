@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent_request_v3.schema.json",
+  "title": "agent_request_v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "job_id",
+    "request_id",
+    "stage",
+    "prompt_version",
+    "response_schema_name",
+    "idempotency_key",
+    "evidence_manifest_path",
+    "allowed_candidate_ids",
+    "evidence_summary",
+    "constraints_hash",
+    "product_profile_hash"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": [
+        "3.0"
+      ]
+    },
+    "job_id": {
+      "type": "string"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "stage": {
+      "type": "string",
+      "enum": [
+        "S3",
+        "S5",
+        "S6",
+        "S7"
+      ]
+    },
+    "prompt_version": {
+      "type": "string"
+    },
+    "response_schema_name": {
+      "type": "string"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "evidence_manifest_path": {
+      "type": "string"
+    },
+    "allowed_candidate_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "evidence_summary": {
+      "type": "string"
+    },
+    "constraints_hash": {
+      "type": "string"
+    },
+    "product_profile_hash": {
+      "type": "string"
+    }
+  }
+}
