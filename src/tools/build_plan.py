@@ -210,6 +210,15 @@ def is_blacklisted(text: str, use_price: bool = True,
     for pat in chg_patterns:
         if re.search(pat, probe):
             return True, f"命中换款/离场 ({pat})"
+    # 违规极限词排查（如 '扣1' 等平台禁止互动/诱导话术，统一防范）
+    try:
+        from src.tools.detect_violation import find_violation_matches
+        v_matches = find_violation_matches(probe, constraints=constraints)
+        block_hits = [m for m in v_matches if m.get("severity") == "BLOCK"]
+        if block_hits:
+            return True, f"命中违规极限词: {[m['word'] for m in block_hits]}"
+    except Exception:
+        pass
     return False, ""
 
 

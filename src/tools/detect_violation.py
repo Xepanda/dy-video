@@ -287,9 +287,9 @@ def mask_text_action(text: str, words: List[str],
     return out, hits
 
 
-def find_violation_matches(text: str, library_path: str = None) -> List[Dict[str, Any]]:
+def find_violation_matches(text: str, library_path: str = None, constraints: Dict[str, Any] = None) -> List[Dict[str, Any]]:
     """单文本检测（模块级便捷入口，对齐 detect_price.find_price_matches）。"""
-    return ViolationDetector(library_path=library_path).scan_text(text)
+    return ViolationDetector(library_path=library_path, constraints=constraints).scan_text(text)
 
 
 def contains_violation(text: str, library_path: str = None) -> Tuple[bool, List[Dict[str, Any]]]:

@@ -91,6 +91,17 @@ class CandidateRanker:
                 eligible = False
                 rejection_reasons.append(f"时长过短 ({dur_ms}ms < 1500ms)")
 
+            # 违规极限词硬过滤
+            try:
+                from src.tools.detect_violation import find_violation_matches
+                v_matches = find_violation_matches(text)
+                block_hits = [m for m in v_matches if m.get("severity") == "BLOCK"]
+                if block_hits:
+                    eligible = False
+                    rejection_reasons.append(f"命中违规极限词: {[m['word'] for m in block_hits]}")
+            except Exception:
+                pass
+
             # 2. 软评分各分项 (0~100)
             # Relevance
             rel_score = 50.0
