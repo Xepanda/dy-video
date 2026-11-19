@@ -94,10 +94,18 @@ class ContinuityAuditor:
                 notes = "检测到严重款式冲突，必须重新排片"
                 block_count += 1
 
-            # 4. 检查跨源音频陡变
-            if cand_l.get("source_id") != cand_r.get("source_id"):
+            # 4. 检查跨源音频陡变（规范化 source_id 与 source_file，避免空值漏判）
+            src_l = str(
+                cand_l.get("source_id") or cand_l.get("source_file") or
+                left.get("source_id") or left.get("source_file") or ""
+            ).strip()
+            src_r = str(
+                cand_r.get("source_id") or cand_r.get("source_file") or
+                right.get("source_id") or right.get("source_file") or ""
+            ).strip()
+            if src_l and src_r and src_l != src_r:
                 issue_codes.append("AUDIO_JUMP")
-                evidence_refs.append(f"跨源音底切换: {cand_l.get('source_id')} → {cand_r.get('source_id')}")
+                evidence_refs.append(f"跨源音底切换: {src_l} → {src_r}")
                 if severity == "PASS":
                     severity = "WARN"
                     action = "GAIN_MATCH"

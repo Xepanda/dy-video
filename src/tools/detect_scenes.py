@@ -68,14 +68,15 @@ def detect_scene_cuts(
     base_threshold: float = 0.30,
     k_std: float = 3.0,
     min_gap_sec: float = 0.8,
-    max_scan_sec: Optional[float] = 600.0,
+    max_scan_sec: Optional[float] = None,
     cache_key: str = None,
     work_dir: str = None,
 ) -> List[float]:
     """检测镜头切换点，返回 cut 时间戳（秒，升序）。
 
+    说明：采用基于 OpenCV 的自适应 HSV 直方图差分与动态阈值 NMS 检测镜头切换点。
+    默认 max_scan_sec 为 None，全量扫描整段长直播素材；若显式指定秒数则限制扫描时长。
     cache_key + work_dir 提供时启用阶段缓存（B13）：命中则跳过重算。
-    当 max_scan_sec 为 None 或 <= 0 时，扫描整段长视频，无 600s 上限阻断。
     """
     if cache_key and work_dir:
         from src.tools.stage_cache import load_stage, save_stage

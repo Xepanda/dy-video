@@ -373,6 +373,36 @@ class DesktopSpecApi:
         except Exception as e:
             return {"success": False, "message": f"保存配置失败: {str(e)}"}
 
+    def start_pipeline(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """校验、保存配置并调度 JobRunner 端到端执行一键全自动智能剪辑。"""
+        save_res = self.save_spec(payload)
+        if not save_res.get("success"):
+            return save_res
+
+        spec = save_res["spec"]
+        material_dir = save_res["material_dir"]
+        work_dir = os.path.join(material_dir, "work_dir")
+        out_dir = os.path.join(material_dir, "output")
+
+        try:
+            from src.runtime.job_runner import JobRunner
+            runner = JobRunner(spec, work_dir, out_dir)
+            result = runner.run_pipeline()
+            is_delivered = (result.get("status") == "DELIVERED")
+            return {
+                "success": is_delivered,
+                "status": result.get("status"),
+                "message": f"剪辑任务执行状态: {result.get('status')}",
+                "result": result,
+                "material_dir": material_dir,
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "status": "FAILED",
+                "message": f"启动剪辑任务异常: {str(e)}"
+            }
+
 
 def get_html_content() -> str:
     """生成内嵌的现代化暗黑风格桌面表单 UI（无任何外部网络依赖）。
@@ -508,33 +538,59 @@ def get_html_content() -> str:
         }
         .action-bar {
             margin-top: 24px;
+            display: flex;
+            gap: 12px;
         }
-        .btn-save-primary {
-            width: 100%;
-            padding: 16px 20px;
+        .btn-save-secondary {
+            flex: 1;
+            padding: 14px 18px;
+            border: 1px solid #4b5563;
+            border-radius: 10px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            background: #1f2937;
+            color: #d1d5db;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .btn-save-secondary:hover {
+            background: #374151;
+            border-color: #9ca3af;
+        }
+        .btn-save-secondary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .btn-save-primary, .btn-run-primary {
+            flex: 2;
+            padding: 14px 20px;
             border: none;
             border-radius: 10px;
             font-size: 16px;
             font-weight: 700;
             cursor: pointer;
-            background: linear-gradient(135deg, #f59e0b, #d97706);
+            background: linear-gradient(135deg, #10b981, #059669);
             color: #ffffff;
-            box-shadow: 0 4px 15px rgba(245, 158, 11, 0.35);
+            box-shadow: 0 4px 15px rgba(16, 185, 129, 0.35);
             display: flex;
             align-items: center;
             justify-content: center;
             gap: 8px;
             transition: transform 0.1s, opacity 0.15s, box-shadow 0.2s;
         }
-        .btn-save-primary:hover {
+        .btn-save-primary:hover, .btn-run-primary:hover {
             opacity: 0.95;
-            box-shadow: 0 6px 20px rgba(245, 158, 11, 0.5);
+            box-shadow: 0 6px 20px rgba(16, 185, 129, 0.5);
             transform: translateY(-1px);
         }
-        .btn-save-primary:active {
+        .btn-save-primary:active, .btn-run-primary:active {
             transform: translateY(0);
         }
-        .btn-save-primary:disabled {
+        .btn-save-primary:disabled, .btn-run-primary:disabled {
             opacity: 0.5;
             cursor: not-allowed;
             transform: none !important;
@@ -671,8 +727,11 @@ def get_html_content() -> str:
             </div>
 
             <div class="action-bar">
-                <button type="button" class="btn-save-primary" id="btnSave" onclick="saveOnly()">
-                    💾 保存配置到素材目录并打开
+                <button type="button" class="btn-save-secondary" id="btnSave" onclick="saveOnly()">
+                    💾 仅保存任务配置
+                </button>
+                <button type="button" class="btn-run-primary" id="btnRun" onclick="runPipelineOneClick()">
+                    🚀 一键智能剪辑出片
                 </button>
             </div>
 
@@ -879,6 +938,36 @@ def get_html_content() -> str:
                     showAlert(false, "保存异常: " + e);
                 } finally {
                     btn.disabled = false;
+                    btn.innerText = origText;
+                }
+            }
+        }
+
+        async function runPipelineOneClick() {
+            const payload = collectPayload();
+            if (!payload.raw_video_path) {
+                showAlert(false, "请先选择或填写直播素材视频/目录路径！");
+                return;
+            }
+            if (window.pywebview && window.pywebview.api) {
+                const btn = document.getElementById('btnRun');
+                const btnSave = document.getElementById('btnSave');
+                btn.disabled = true;
+                btnSave.disabled = true;
+                const origText = btn.innerText;
+                btn.innerText = "⏳ 正在一键智能剪辑出片（请稍候）...";
+                try {
+                    const res = await window.pywebview.api.start_pipeline(payload);
+                    let msg = res.message;
+                    if (res.result && res.result.final_video) {
+                        msg += "\n成片输出至：" + res.result.final_video;
+                    }
+                    showAlert(res.success, msg);
+                } catch (e) {
+                    showAlert(false, "剪辑执行异常: " + e);
+                } finally {
+                    btn.disabled = false;
+                    btnSave.disabled = false;
                     btn.innerText = origText;
                 }
             }

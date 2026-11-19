@@ -52,6 +52,7 @@ class SkuTracker:
         text: str,
         product_profile: Dict[str, Any],
         visual_decision: Optional[Dict[str, Any]] = None,
+        strict_vision: bool = False,
     ) -> Tuple[str, float, List[str], List[str]]:
         """综合文本与视觉信号，判定与指定 SKU 的关系。
 
@@ -128,6 +129,13 @@ class SkuTracker:
         if visual_decision and visual_decision.get("uncertainties"):
             evidence_gap.extend(visual_decision["uncertainties"])
 
+        is_strict = (
+            strict_vision or
+            product_profile.get("quality_policy") == "strict" or
+            product_profile.get("visual_verification") == "required" or
+            product_profile.get("strict") is True
+        )
+
         # 6. 综合裁决状态机
         if is_styling:
             # 搭配镜头
@@ -144,10 +152,26 @@ class SkuTracker:
                 # 画面与口播冲突
                 reasons.append("口播提到本品但视觉判定为其他商品")
                 evidence_gap.append("音画商品不一致")
-                return "UNCERTAIN", 0.5, reasons, evidence_gap
+                return "UNCERTAIN", 0.45, reasons, evidence_gap
+            elif not vis_available:
+                # 缺失候选帧或视觉识别失败：严格模式下绝不直接认定 SAME_SKU
+                if is_strict:
+                    reasons.append("文本命中关键词，但严格模式下缺失有效视觉证据")
+                    evidence_gap.append("UNVERIFIABLE: 缺失候选视频帧或未通过视觉比对")
+                    return "UNCERTAIN", 0.40, reasons, evidence_gap
+                else:
+                    reasons.append("文本命中主推商品（未接通视觉验证）")
+                    evidence_gap.append("缺少已验证视觉证据")
+                    return "SAME_SKU", 0.65, reasons, evidence_gap
             else:
-                reasons.append("文本命中主推商品")
-                return "SAME_SKU", 0.80, reasons, evidence_gap
+                # vis_available is True but vis_relation is UNCERTAIN
+                if is_strict:
+                    reasons.append("文本命中商品词，但视觉相似度偏低")
+                    evidence_gap.append("视觉证据不足以确认为同款")
+                    return "UNCERTAIN", 0.45, reasons, evidence_gap
+                else:
+                    reasons.append("文本命中主推商品")
+                    return "SAME_SKU", 0.70, reasons, evidence_gap
 
         # 无明显文本关键词时查看视觉
         if vis_available:
@@ -185,6 +209,9 @@ class SkuTracker:
             vis_dec = self.vision.analyze_candidate(cand, frame_paths, product_profile)
             rel, conf, reasons, gap = self.identify_relation(text, product_profile, visual_decision=vis_dec)
             cand["product_relation"] = rel
+            cand["relation_confidence"] = round(conf, 2)
+            if frame_paths:
+                cand.setdefault("frame_ids", []).extend([os.path.basename(p) for p in frame_paths])
 
             decisions.append({
                 "candidate_id": cid,

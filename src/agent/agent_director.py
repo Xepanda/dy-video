@@ -588,7 +588,8 @@ class AgentDirector:
         self,
         chosen_cover_id: Optional[str] = None,
         custom_plan_path: Optional[str] = None,
-        edited_timeline_path: Optional[str] = None
+        edited_timeline_path: Optional[str] = None,
+        custom_sequence_proposal: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         start_time = time.time()
         # 外部干预模式（指定封面/自定义计划/人工精修时间线）禁用阶段缓存，保证每次重算
@@ -840,9 +841,15 @@ class AgentDirector:
                     cands = generator.generate_candidates(utts, product_profile, source_id=src, shots=shots_for_src)
                     all_candidates.extend(cands)
 
-                # 4. 商品关系追踪
+                # 4. 商品关系追踪（真实接通候选视频帧与视觉比对）
+                from src.core.frame_provider import VideoFrameProvider
+                from src.core.sequence_optimizer import InsufficientEvidenceError
+                frame_provider = VideoFrameProvider(work_dir=self.work_dir, default_video_path=self.raw_video)
                 sku_tracker = SkuTracker()
-                relation_decisions = sku_tracker.track_candidates(all_candidates, product_profile)
+                relation_decisions = sku_tracker.track_candidates(
+                    all_candidates, product_profile, frame_provider=frame_provider
+                )
+                self._all_candidates_map = {c["candidate_id"]: c for c in all_candidates}
 
                 # 5. 多模态候选精排
                 ranker = CandidateRanker()
@@ -851,11 +858,14 @@ class AgentDirector:
                 )
 
                 # 6. 全局序列优化
-                dur_range = (self.constraints.get("video", {}) or {}).get("duration_range", [45, 65])
-                opt = SequenceOptimizer(
-                    target_min_ms=int(dur_range[0] * 1000), target_max_ms=int(dur_range[1] * 1000)
-                )
-                opt_res = opt.optimize_sequence(all_candidates, candidate_scores, product_profile)
+                if custom_sequence_proposal:
+                    opt_res = {"status": "PROPOSED", "proposals": [custom_sequence_proposal]}
+                else:
+                    dur_range = (self.constraints.get("video", {}) or {}).get("duration_range", [45, 65])
+                    opt = SequenceOptimizer(
+                        target_min_ms=int(dur_range[0] * 1000), target_max_ms=int(dur_range[1] * 1000)
+                    )
+                    opt_res = opt.optimize_sequence(all_candidates, candidate_scores, product_profile)
 
                 if opt_res.get("status") == "PROPOSED" and opt_res.get("proposals"):
                     chosen_proposal = opt_res["proposals"][0]
@@ -869,8 +879,14 @@ class AgentDirector:
                     )
                     print(f"  [V3 DIRECT-PLAN] 成功生成 V3 全局导演排片方案: {chosen_proposal['proposal_id']} "
                           f"（风格={chosen_proposal.get('style')}，{len(plan['clips'])} 个分镜，预期时长 {plan['total_expected_duration']}s）")
+                elif opt_res.get("status") == "INSUFFICIENT_EVIDENCE":
+                    gaps = opt_res.get("evidence_gap") or ["可用本品素材累计时长不足"]
+                    raise InsufficientEvidenceError(f"本品素材证据不足: {'; '.join(gaps)}")
+            except InsufficientEvidenceError:
+                # 内容证据不足为质量门禁，绝不允许静默降级到旧版 build_plan 强行凑片！
+                raise
             except Exception as v3_err:
-                print(f"  [V3 PLAN][WARN] V3 编排异常，降级回退至启发式 build_plan: {v3_err}")
+                print(f"  [V3 PLAN][WARN] V3 编排技术异常，降级回退至启发式 build_plan: {v3_err}")
                 plan = None
 
             if not plan:
@@ -1097,13 +1113,14 @@ class AgentDirector:
             from src.qc.continuity_qc import ContinuityAuditor
             from src.core.cut_optimizer import CutOptimizer
             c_auditor = ContinuityAuditor()
-            continuity_review = c_auditor.audit_sequence_seams(plan.get("clips", []), {})
+            cand_map = getattr(self, "_all_candidates_map", None) or {}
+            continuity_review = c_auditor.audit_sequence_seams(plan.get("clips", []), cand_map)
             cont_path = os.path.join(self.output_dir, "continuity_review.json")
             with open(cont_path, "w", encoding="utf-8") as f:
                 json.dump(continuity_review, f, ensure_ascii=False, indent=2)
             plan["continuity_review"] = continuity_review
             cut_opt = CutOptimizer()
-            fixed_clips, opt_actions = cut_opt.optimize_cuts(plan.get("clips", []), continuity_review)
+            fixed_clips, opt_actions = cut_opt.optimize_cuts(plan.get("clips", []), continuity_review, plan=plan)
             if opt_actions:
                 plan["clips"] = fixed_clips
                 print(f"  [CONTINUITY] 接缝微调完成 ({len(opt_actions)} 处)")
@@ -1206,8 +1223,13 @@ class AgentDirector:
             with open(ed_report_path, "w", encoding="utf-8") as f:
                 json.dump(editorial_report, f, ensure_ascii=False, indent=2)
             print(f"  [EDITORIAL-QC] {editorial_report.get('summary')}")
+            if not editorial_report.get("passed", True) or editorial_report.get("block_count", 0) > 0:
+                print(f"  [EDITORIAL-QC][BLOCK] 内容质检未通过，触发阻断拦截 (block_count={editorial_report.get('block_count', 0)})")
+                passed = False
         except Exception as ee:
-            print(f"  [EDITORIAL-QC][WARN] 内容质检异常（跳过）: {ee}")
+            print(f"  [EDITORIAL-QC][WARN] 内容质检异常: {ee}")
+            if policy == "strict":
+                passed = False
 
         # 产物直接交付并保存到用户提供的素材目录下，文件名与任务名字 (project_id) 完全一致
         target_mp4 = os.path.join(material_dir, f"{self.project_id}.mp4")

@@ -193,6 +193,91 @@ def test_candidate_generator_emits_text_and_shot_alignment():
     assert "s_01" in c["shot_ids"]
 
 
+def test_job_runner_three_agent_scenarios():
+    """测试真实的 Agent 调用链三态：未安装、未登录、正常返回与白名单校验。"""
+    from unittest.mock import MagicMock, patch
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        work_dir = os.path.join(tmpdir, "work")
+        out_dir = os.path.join(tmpdir, "out")
+        dummy_video = os.path.join(tmpdir, "test.mp4")
+        with open(dummy_video, "wb") as f:
+            f.write(b"0000")
+
+        spec = {
+            "project_id": "test_agent_scenarios",
+            "raw_video_path": dummy_video,
+            "product": {"name": "羊毛衫"},
+            "_allowed_candidate_ids": ["cand_01", "cand_02"]
+        }
+
+        # 1. Agent 未安装
+        mock_adapter_not_installed = MagicMock()
+        mock_adapter_not_installed.check_availability.return_value = (False, "未找到 agy CLI")
+        runner1 = JobRunner(spec, work_dir, out_dir, agent_adapter=mock_adapter_not_installed)
+        res1 = runner1.run_pipeline()
+        assert res1["status"] == JobStage.AGENT_AUTH_REQUIRED
+        assert "未安装" in res1["reason"]
+
+        # 2. Agent 未登录
+        mock_adapter_unauth = MagicMock()
+        mock_adapter_unauth.check_availability.return_value = (True, "OK")
+        mock_adapter_unauth.invoke.return_value = AgentResponse(
+            status=AgentStatus.AUTH_REQUIRED,
+            error_message="Not logged in. Please run `agy auth login`."
+        )
+        runner2 = JobRunner(spec, work_dir, out_dir, agent_adapter=mock_adapter_unauth)
+        res2 = runner2.run_pipeline()
+        assert res2["status"] == JobStage.AGENT_AUTH_REQUIRED
+        assert "未登录" in res2["reason"]
+
+        # 3. Agent 正常返回，但包含幻觉候选 ID（触发安全阻断）
+        mock_adapter_hallucination = MagicMock()
+        mock_adapter_hallucination.check_availability.return_value = (True, "OK")
+        mock_adapter_hallucination.invoke.return_value = AgentResponse(
+            status=AgentStatus.SUCCESS,
+            structured_output={
+                "status": "PROPOSED",
+                "proposals": [{
+                    "proposal_id": "p_hallucination",
+                    "ordered_candidate_ids": ["cand_01", "cand_fake_999"]
+                }]
+            }
+        )
+        runner3 = JobRunner(spec, work_dir, out_dir, agent_adapter=mock_adapter_hallucination)
+        res3 = runner3.run_pipeline()
+        assert res3["status"] == JobStage.FAILED
+        assert "未知候选 ID" in res3["error"] or "未知幻觉候选 ID" in res3["error"]
+
+        # 4. Agent 正常返回合法候选 -> 成功进入下一步组装
+        mock_adapter_success = MagicMock()
+        mock_adapter_success.check_availability.return_value = (True, "OK")
+        mock_adapter_success.invoke.return_value = AgentResponse(
+            status=AgentStatus.SUCCESS,
+            structured_output={
+                "status": "PROPOSED",
+                "proposals": [{
+                    "proposal_id": "p_valid",
+                    "ordered_candidate_ids": ["cand_01", "cand_02"]
+                }]
+            }
+        )
+        runner4 = JobRunner(spec, work_dir, out_dir, agent_adapter=mock_adapter_success)
+        mock_director = MagicMock()
+        mock_director.run_director_workflow.return_value = {
+            "qc_passed": True,
+            "editorial_qc": {"passed": True, "block_count": 0},
+            "final_deliverables": {"video": dummy_video}
+        }
+        with patch("src.agent.agent_director.AgentDirector", return_value=mock_director):
+            res4 = runner4.run_pipeline()
+        assert res4["status"] == JobStage.DELIVERED
+        # 验证传入了 custom_sequence_proposal
+        mock_director.run_director_workflow.assert_called_once()
+        call_kwargs = mock_director.run_director_workflow.call_args[1]
+        assert call_kwargs.get("custom_sequence_proposal")["proposal_id"] == "p_valid"
+
+
 def main():
     test_agy_not_found_handling()
     test_agy_auth_and_permission_detection()
@@ -202,6 +287,7 @@ def main():
     test_agy_headless_json_extraction_with_markdown_and_logs()
     test_cut_optimizer_with_st_dur_not_inflating()
     test_candidate_generator_emits_text_and_shot_alignment()
+    test_job_runner_three_agent_scenarios()
     print("[TEST-JOB-RUNNER] 全部通过")
     return 0
 

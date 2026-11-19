@@ -65,6 +65,20 @@ class JobRunner:
         self.events_log = os.path.join(self.work_dir, "events.jsonl")
         self.is_canceled = False
         self.history: List[Dict[str, Any]] = []
+        self.retry_count = 0
+        self.resumed_from = None
+
+        # 尝试从历史 checkpoint 恢复
+        if os.path.isfile(self.checkpoint_file):
+            try:
+                with open(self.checkpoint_file, "r", encoding="utf-8") as f:
+                    chk = json.load(f)
+                    self.retry_count = int(chk.get("retry_count", 0))
+                    self.resumed_from = chk.get("current_state") or chk.get("stage")
+                    if self.resumed_from:
+                        self.state = self.resumed_from
+            except Exception:
+                pass
 
         os.makedirs(self.work_dir, exist_ok=True)
         os.makedirs(self.output_dir, exist_ok=True)
@@ -89,6 +103,7 @@ class JobRunner:
                 json.dump({
                     "project_id": self.project_id,
                     "current_state": self.state,
+                    "retry_count": self.retry_count,
                     "updated_at": event["timestamp"],
                     "message": message,
                 }, f, ensure_ascii=False, indent=2)
@@ -165,6 +180,64 @@ class JobRunner:
         if self.is_canceled:
             return {"status": JobStage.CANCELED}
 
+        chosen_proposal = None
+        if self.agent_adapter:
+            is_avail, avail_msg = self.agent_adapter.check_availability()
+            if not is_avail:
+                _update(JobStage.AGENT_AUTH_REQUIRED, 0.5, f"AGY 命令行工具未就绪: {avail_msg}")
+                return {
+                    "status": JobStage.AGENT_AUTH_REQUIRED,
+                    "error": avail_msg,
+                    "reason": "AGY CLI 未安装或未加入 PATH",
+                }
+
+            schema_p = os.path.join(PROJECT_ROOT, "contracts", "schemas", "sequence_proposals.schema.json")
+            prompt = (
+                f"任务ID: {self.project_id}\n"
+                f"商品档案: {json.dumps(profile, ensure_ascii=False)}\n"
+                "请依据 sequence_proposals.schema.json 契约生成优选镜头序列提案。"
+            )
+            resp = self.agent_adapter.invoke(prompt, schema_p, self.work_dir)
+            if resp.status == AgentStatus.AUTH_REQUIRED:
+                _update(JobStage.AGENT_AUTH_REQUIRED, 0.5, f"AGY 凭证失效: {resp.error_message}")
+                return {
+                    "status": JobStage.AGENT_AUTH_REQUIRED,
+                    "error": resp.error_message,
+                    "reason": "AGY 未登录或凭证过期",
+                }
+            elif resp.status == AgentStatus.PERMISSION_DENIED:
+                _update(JobStage.AGENT_PERMISSION_DENIED, 0.5, f"AGY 权限被软拒绝: {resp.error_message}")
+                return {
+                    "status": JobStage.AGENT_PERMISSION_DENIED,
+                    "error": resp.error_message,
+                    "reason": "AGY 工具执行权限被拒绝",
+                }
+            elif resp.status == AgentStatus.SUCCESS:
+                s_out = resp.structured_output or {}
+                if s_out.get("status") == "INSUFFICIENT_EVIDENCE":
+                    _update(JobStage.NEEDS_INPUT, 0.5, "Agent 判定素材证据不足")
+                    return {
+                        "status": JobStage.NEEDS_INPUT,
+                        "reason": "素材证据不足",
+                        "evidence_gap": s_out.get("evidence_gap", []),
+                    }
+                proposals = s_out.get("proposals", [])
+                if not proposals or not isinstance(proposals, list):
+                    _update(JobStage.FAILED, 0.5, "Agent 未输出有效提案")
+                    return {"status": JobStage.FAILED, "error": "Agent 未输出有效提案"}
+
+                # 候选白名单安全校验
+                allowed_cids = self.spec.get("_allowed_candidate_ids")
+                for p in proposals:
+                    for cid in p.get("ordered_candidate_ids", []):
+                        if allowed_cids is not None and cid not in allowed_cids:
+                            _update(JobStage.FAILED, 0.5, f"Agent 决策包含未知幻觉候选 ID: {cid}")
+                            return {"status": JobStage.FAILED, "error": f"Agent 决策包含未知候选 ID: {cid}"}
+                chosen_proposal = proposals[0]
+            else:
+                _update(JobStage.FAILED, 0.5, f"Agent 决策执行失败: {resp.error_message}")
+                return {"status": JobStage.FAILED, "error": resp.error_message}
+
         # 5. RENDERING
         _update(JobStage.RENDERING, 0.7, "合成音视频、特效与字幕...")
         if self.is_canceled:
@@ -173,10 +246,14 @@ class JobRunner:
         # 调用 AgentDirector 执行确定性分析与总装
         try:
             from src.agent.agent_director import AgentDirector
+            from src.core.sequence_optimizer import InsufficientEvidenceError
             director = AgentDirector(resolved_spec_path, use_cache=True)
             # 重定向输出目录至当前指定的 output_dir
             director.output_dir = self.output_dir
-            manifest = director.run_director_workflow()
+            manifest = director.run_director_workflow(custom_sequence_proposal=chosen_proposal)
+        except InsufficientEvidenceError as ie:
+            _update(JobStage.NEEDS_INPUT, 0.75, f"素材证据不足: {str(ie)}")
+            return {"status": JobStage.NEEDS_INPUT, "reason": str(ie)}
         except Exception as e:
             _update(JobStage.FAILED, 0.75, f"视频渲染与组装失败: {str(e)}")
             return {"status": JobStage.FAILED, "error": str(e)}
@@ -186,13 +263,39 @@ class JobRunner:
 
         # 6. VERIFYING
         _update(JobStage.VERIFYING, 0.9, "执行双层质量门禁审计...")
-        qc_passed = manifest.get("qc_passed", False)
+        tech_qc_passed = bool(manifest.get("qc_passed", False))
         editorial_qc = manifest.get("editorial_qc") or {}
-        if editorial_qc and not editorial_qc.get("passed", True) and editorial_qc.get("block_count", 0) > 0:
-            qc_passed = False
+        editorial_qc_passed = bool(editorial_qc.get("passed", True) and editorial_qc.get("block_count", 0) == 0)
+        qc_passed = bool(tech_qc_passed and editorial_qc_passed)
 
         if self.is_canceled:
             return {"status": JobStage.CANCELED}
+
+        if not qc_passed:
+            fail_reasons = []
+            if not tech_qc_passed:
+                fail_reasons.append("工程技术质检未通过")
+            if not editorial_qc_passed:
+                fail_reasons.append(f"内容审核门禁阻断 (BLOCK={editorial_qc.get('block_count', 0)})")
+            fail_msg = "；".join(fail_reasons)
+            _update(JobStage.FAILED, 0.95, f"质量门禁未通过，拒绝交付: {fail_msg}")
+            manifest_path = os.path.join(self.output_dir, "delivery_manifest.json")
+            delivery_manifest = {
+                "project_id": self.project_id,
+                "status": JobStage.FAILED,
+                "qc_passed": False,
+                "fail_reason": fail_msg,
+                "completed_at": time.time(),
+                "director_manifest": manifest,
+            }
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(delivery_manifest, f, ensure_ascii=False, indent=2)
+            return {
+                "status": JobStage.FAILED,
+                "reason": fail_msg,
+                "qc_passed": False,
+                "manifest": delivery_manifest,
+            }
 
         # 7. DELIVERED
         deliverables = manifest.get("final_deliverables", {})
@@ -212,7 +315,7 @@ class JobRunner:
             "status": "DELIVERED",
             "video_path": final_mp4,
             "cover_path": deliverables.get("cover") or deliverables.get("output_dir_cover"),
-            "qc_passed": qc_passed,
+            "qc_passed": True,
             "completed_at": time.time(),
             "director_manifest": manifest,
         }

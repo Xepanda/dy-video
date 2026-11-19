@@ -139,22 +139,37 @@ class CandidateRanker:
                     rejection_reasons.append(f"命中叫卖/换款模式: '{pat}'")
                     break
 
-            # 品类冲突硬过滤（如上衣中出现下装/裤装词汇，与 verify_clip_product_alignment 统一硬门禁）
+            # 搭配识别：如果是搭配语境（如"上衣搭西裤"），不作为负向冲突误杀，而是认定为合规搭配 (ACCESSORY_OR_STYLING)
+            styling_patterns = (
+                r"搭(配)?(一条|个|件)?(裤|裙|鞋|包|开衫|马甲|西裤|打底)",
+                r"配(一条|个|件)?(裤|裙|鞋|包|开衫|马甲|西裤|打底)",
+                r"脚上(穿|搭)", r"下半身(搭|配)", r"里面(搭|穿)",
+            )
+            is_styling_context = (
+                relation == "ACCESSORY_OR_STYLING" or
+                any(re.search(p, text) for p in styling_patterns)
+            )
+
+            # 品类冲突硬过滤（仅在非搭配且主讲非本品时拦截）
             cat_name = str(product_profile.get("category", "") or product_profile.get("name", "")).lower()
-            if any(k in cat_name for k in ("上衣", "毛衣", "针织", "衫", "外套", "大衣", "开衫")):
-                top_neg_terms = ("裤", "库长", "裤长", "毛呢裤", "毛泥裤", "裤腿", "西裤", "卫裤", "皮裤", "石墨烯", "加绒裤", "棉服", "填充物", "羽绒", "鞋", "靴", "侧缝", "腿在裤", "白牛")
-                hits = [nt for nt in top_neg_terms if nt in text]
-                if hits:
-                    eligible = False
-                    relation = "OTHER_SKU"
-                    rejection_reasons.append(f"品类负向词冲突: 主品为上衣但台词包含负向词 {hits}")
-            elif any(k in cat_name for k in ("裤", "裙", "半裙", "短裤", "长裤", "阔腿")):
-                bottom_neg_terms = ("上衣", "毛衣", "针织衫", "衬衫", "吊带", "外套", "大衣", "风衣")
-                hits = [nt for nt in bottom_neg_terms if nt in text]
-                if hits:
-                    eligible = False
-                    relation = "OTHER_SKU"
-                    rejection_reasons.append(f"品类负向词冲突: 主品为下装但台词包含负向词 {hits}")
+            if is_styling_context:
+                if relation != "OTHER_SKU":
+                    relation = "ACCESSORY_OR_STYLING"
+            else:
+                if any(k in cat_name for k in ("上衣", "毛衣", "针织", "衫", "外套", "大衣", "开衫")):
+                    top_neg_terms = ("裤长", "毛呢裤", "毛泥裤", "裤腿", "西裤", "卫裤", "皮裤", "加绒裤", "侧缝", "腿在裤", "石墨烯裤")
+                    hits = [nt for nt in top_neg_terms if nt in text and not any(k in text for k in (cat_name, "毛衣", "针织", "这件", "上衣"))]
+                    if hits or relation == "OTHER_SKU":
+                        eligible = False
+                        relation = "OTHER_SKU"
+                        rejection_reasons.append(f"品类负向冲突: 主品为上衣但台词主推下装 {hits}")
+                elif any(k in cat_name for k in ("裤", "裙", "半裙", "短裤", "长裤", "阔腿")):
+                    bottom_neg_terms = ("毛衣", "针织衫", "衬衫", "吊带", "大衣", "风衣")
+                    hits = [nt for nt in bottom_neg_terms if nt in text and not any(k in text for k in (cat_name, "裤", "裙", "这条"))]
+                    if hits or relation == "OTHER_SKU":
+                        eligible = False
+                        relation = "OTHER_SKU"
+                        rejection_reasons.append(f"品类负向冲突: 主品为下装但台词主推上衣 {hits}")
 
             # 句子完整性硬约束：禁止未闭合或断句截断的碎片入选
             risks = cand.get("risks") or []
@@ -181,24 +196,31 @@ class CandidateRanker:
             sp_hits = cand.get("selling_point_evidence_refs") or []
             sp_score = min(100.0, len(sp_hits) * 35.0 + 30.0) if sp_hits else 40.0
 
-            # Visual Quality
-            vis_score = 80.0
-            if "UNCERTAIN" in relation:
-                vis_score = 50.0
+            # Visual Quality：基于真实媒体/帧特征评分
+            vis_conf = cand.get("relation_confidence") or (0.9 if relation in ("SAME_SKU", "SAME_SKU_VARIANT") else 0.5)
+            if cand.get("frame_ids") and relation in ("SAME_SKU", "SAME_SKU_VARIANT"):
+                vis_score = min(98.0, 75.0 + float(vis_conf) * 25.0)
+            elif "UNCERTAIN" in relation:
+                vis_score = 45.0
+            else:
+                vis_score = 70.0
 
             # Utterance Completeness
-            risks = cand.get("risks") or []
             if "INCOMPLETE_SENTENCE" in risks:
-                utt_score = 45.0
+                utt_score = 40.0
                 missing_evidence.append("语句未在句末正常闭合")
             else:
                 utt_score = 95.0
 
-            # Action Completeness
-            action_score = 85.0
+            # Action Completeness：结合镜头切换共振与动作完整性
+            has_shot_align = len(cand.get("shot_ids") or []) > 0
+            action_score = 90.0 if has_shot_align else 75.0
 
-            # Audio Quality
-            audio_score = 90.0
+            # Audio Quality：结合字词级对齐精度与音频风险
+            has_word_level = cand.get("alignment_precision") == "WORD_LEVEL"
+            audio_score = 95.0 if has_word_level else 85.0
+            if "AUDIO_JUMP" in risks:
+                audio_score -= 20.0
 
             subscores = {
                 "relevance": round(rel_score, 1),

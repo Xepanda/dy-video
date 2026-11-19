@@ -49,15 +49,26 @@ class EditorialQcAuditor:
         # 1. Product Identity Gate (本品准确性门禁 - P0 硬约束)
         other_sku_clips = []
         uncertain_clips = []
+        unverifiable_clips = []
         for c in clips:
-            rel = c.get("product_relation", "SAME_SKU")
+            rel = c.get("product_relation")
             cid = c.get("candidate_id") or c.get("id") or "unknown"
-            if rel == "OTHER_SKU":
+            if not rel or rel in ("UNVERIFIABLE", "MISSING"):
+                unverifiable_clips.append(cid)
+            elif rel == "OTHER_SKU":
                 other_sku_clips.append(cid)
             elif rel == "UNCERTAIN":
                 uncertain_clips.append(cid)
 
-        if other_sku_clips:
+        if unverifiable_clips:
+            checks.append({
+                "gate": "ProductIdentityGate",
+                "status": "BLOCK",
+                "detail": f"检测到分镜缺少商品关系结论或证据引用缺失 (UNVERIFIABLE): {unverifiable_clips}",
+                "affected_clips": unverifiable_clips,
+            })
+            block_count += 1
+        elif other_sku_clips:
             checks.append({
                 "gate": "ProductIdentityGate",
                 "status": "BLOCK",
@@ -77,7 +88,7 @@ class EditorialQcAuditor:
             checks.append({
                 "gate": "ProductIdentityGate",
                 "status": "AUTOMATED_PASS",
-                "detail": f"所有片段均确认为主推本品或合规变体 (共 {len(clips)} 段)",
+                "detail": f"所有片段均确认为主推本品或合规变体/搭配 (共 {len(clips)} 段)",
                 "affected_clips": [],
             })
 

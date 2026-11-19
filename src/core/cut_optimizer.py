@@ -25,6 +25,7 @@ class CutOptimizer:
         self,
         clips: List[Dict[str, Any]],
         continuity_review: Dict[str, Any],
+        plan: Optional[Dict[str, Any]] = None,
     ) -> Tuple[List[Dict[str, Any]], List[str]]:
         """依据接缝审查报告执行微调，返回修复后的 clips 列表与操作日志。"""
         fixed_clips = [dict(c) for c in clips]
@@ -60,6 +61,13 @@ class CutOptimizer:
                     if "source_end_ms" in clip:
                         clip["source_end_ms"] = int(round(new_en * 1000))
                     clip["_cut_shifted_ms"] = shift_ms
+
+                    # 同步更新字幕映射（避免微调后尾字时间轴错位）
+                    if "subtitles" in clip and isinstance(clip["subtitles"], list):
+                        for sub in clip["subtitles"]:
+                            if float(sub.get("end", 0.0)) > new_en:
+                                sub["end"] = new_en
+
                     actions_taken.append(
                         f"接缝 {seam['seam_id']} ({cid}): 切点微调 {shift_ms:+d}ms "
                         f"({old_en}s → {new_en}s) 以闭合语句/动作"
@@ -67,5 +75,8 @@ class CutOptimizer:
             elif action == "GAIN_MATCH":
                 clip["_audio_gain_match"] = True
                 actions_taken.append(f"接缝 {seam['seam_id']} ({cid}): 启用跨源增益匹配与微淡变")
+
+        if plan and actions_taken:
+            plan["total_expected_duration"] = round(sum(c.get("dur", 0.0) for c in fixed_clips), 2)
 
         return fixed_clips, actions_taken

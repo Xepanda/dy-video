@@ -66,6 +66,7 @@ UNIT_TESTS = [
     "tests/test_job_runner_and_adapters.py",
     "tests/test_cut_and_continuity.py",
     "tests/test_editorial_qc.py",
+    "tests/test_pr16_regressions.py",
 ]
 
 PYTHON = sys.executable

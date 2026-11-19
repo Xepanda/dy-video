@@ -164,9 +164,26 @@ class AgyHeadlessAdapter(AgentAdapter):
 
         if parsed is not None:
             structured = parsed.get("structured_output") if (isinstance(parsed, dict) and "structured_output" in parsed) else parsed
+            if not isinstance(structured, dict):
+                structured = {"data": structured}
+            if isinstance(parsed, dict):
+                for k in ("schema_version", "status"):
+                    if k in parsed and k not in structured:
+                        structured[k] = parsed[k]
+
+            # 基础业务有效性校验
+            if "status" not in structured and "proposal_id" not in structured and "proposals" not in structured:
+                return AgentResponse(
+                    status=AgentStatus.INVALID_OUTPUT,
+                    raw_output=raw_out,
+                    structured_output=structured,
+                    error_message="AGY 结构化输出缺少必要契约字段 (status / proposals)",
+                    exit_code=proc.returncode,
+                )
+
             return AgentResponse(
                 status=AgentStatus.SUCCESS,
-                structured_output=structured if isinstance(structured, dict) else {"data": structured},
+                structured_output=structured,
                 raw_output=raw_out,
                 exit_code=0,
             )

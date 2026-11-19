@@ -168,6 +168,28 @@ def test_environment_helpers() -> None:
     print(f"  [PASS] 环境探测：root={os.path.basename(root)}，解释器可解析")
 
 
+def test_api_start_pipeline_wires_job_runner() -> None:
+    """测试 DesktopSpecApi.start_pipeline 正确链接 JobRunner 调度并返回状态。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        mat_file = os.path.join(tmpdir, "test.mp4")
+        with open(mat_file, "wb") as f:
+            f.write(b"0" * 1024)
+
+        payload = _sample_payload()
+        payload["raw_video_path"] = mat_file
+        payload["project_id"] = "desktop_pipeline_test"
+
+        api = DesktopSpecApi()
+        from unittest.mock import patch
+        with patch("src.runtime.job_runner.JobRunner.run_pipeline") as mock_run:
+            mock_run.return_value = {"status": "DELIVERED", "final_video": "out.mp4"}
+            res = api.start_pipeline(payload)
+            assert res["success"] is True
+            assert res["status"] == "DELIVERED"
+            assert mock_run.called
+        print("  [PASS] DesktopSpecApi.start_pipeline：成功打通 EXE 与 JobRunner 调用链")
+
+
 def main() -> int:
     tests = [
         test_spec_manager_build_spec_dict,
@@ -177,6 +199,7 @@ def main() -> int:
         test_api_save_spec_rejects_invalid,
         test_api_save_spec_direct_to_material_dir,
         test_environment_helpers,
+        test_api_start_pipeline_wires_job_runner,
     ]
     failed = 0
     for t in tests:

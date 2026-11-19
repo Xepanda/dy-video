@@ -567,7 +567,6 @@ def _split_long_block(block: Dict[str, Any], max_sec: float,
             if any(abs(c - s.get("end", 0.0)) <= 0.25 for c in scene_cuts):
                 groups.append(cur)
                 cur = []
-            cur = []
     if cur:
         groups.append(cur)
 

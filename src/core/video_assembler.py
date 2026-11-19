@@ -912,6 +912,9 @@ class VideoAssembler:
         if not micro_afade_sec:
             _sr_t = (self.constraints.get("slicing_rules", {}) or {}).get("transition_style", {}) or {}
             micro_afade_sec = float(_sr_t.get("micro_afade_sec", 0.0) or 0.0)
+        if any(c.get("_audio_gain_match") for c in plan.get("clips", [])):
+            micro_afade_sec = max(micro_afade_sec, 0.015)
+            print("[ASSEMBLER] 检测到跨源接缝 _audio_gain_match，已激活音频微淡变电平匹配")
         # R8：Boom 音效开关（参考成片实测无音效）
         boom_enabled = bool(_astyle.get("boom_sfx_enabled", True)) if _astyle else True
         if _astyle:

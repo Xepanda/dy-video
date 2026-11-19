@@ -24,6 +24,11 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 
+class InsufficientEvidenceError(RuntimeError):
+    """当素材证据不足以构建合规成片时抛出的硬阻断异常。"""
+    pass
+
+
 class SequenceOptimizer:
     """全片序列编排器。"""
 
@@ -99,66 +104,114 @@ class SequenceOptimizer:
         # 区分风格生成提案：balanced, fast_paced, showcase
         proposals = []
 
-        # 参数类内容（面料/做工）占比上限约束（决策 6：QC 严格门禁 <= 25%）
+        # 参数类内容（面料/做工）占比上限约束（决策 6：QC 严格门禁 <= 25%，此处收敛为 23%）
         max_fabric_ms = int(max_ms * 0.23)
 
         for style in ("balanced", "fast_paced", "showcase"):
-            chosen_cands: List[Dict[str, Any]] = []
-            chosen_clusters: Set[str] = set()
-            cur_dur = 0
-            cur_fabric_dur = 0
-
-            # 偏好过滤
+            # 偏好排序与候选池配置
             pool = list(eligible_cands)
             if style == "fast_paced":
-                # 优先选用较短、节奏轻快的段
                 pool.sort(key=lambda x: (x["dur"] > 5000, -x["composite"]))
             elif style == "showcase":
-                # 优先选用面料/细节/较长展示段
                 pool.sort(key=lambda x: (x["role"] not in ("FABRIC", "PROOF", "STYLING"), -x["composite"]))
+            else:
+                pool.sort(key=lambda x: -x["composite"])
 
-            # 开头优先选择 HOOK 角色
+            # Beam Search 全局多路搜索（Beam Width = 5）
+            # 状态元组: (score, chosen_cands, chosen_clusters, cur_dur, cur_fabric_dur, covered_sp)
+            initial_beams = []
             hooks = [x for x in pool if x["role"] == "HOOK"]
-            if hooks:
-                first = hooks[0]
-                chosen_cands.append(first)
-                chosen_clusters.add(first["cluster"])
-                cur_dur += first["dur"]
-                if first["role"] == "FABRIC":
-                    cur_fabric_dur += first["dur"]
+            start_candidates = hooks[:3] if hooks else pool[:3]
+            for start_cand in start_candidates:
+                fab_d = start_cand["dur"] if start_cand["role"] == "FABRIC" else 0
+                sp_cov = set(start_cand["cand"].get("selling_point_evidence_refs") or [])
+                initial_beams.append((
+                    start_cand["composite"],
+                    [start_cand],
+                    {start_cand["cluster"]},
+                    start_cand["dur"],
+                    fab_d,
+                    sp_cov
+                ))
 
-            for item in pool:
-                if cur_dur >= max_ms:
+            if not initial_beams:
+                initial_beams = [(0.0, [], set(), 0, 0, set())]
+
+            beams = initial_beams
+            completed_beams = []
+
+            for _ in range(len(pool)):
+                next_beams = []
+                for b_score, b_cands, b_clusters, b_dur, b_fab_dur, b_sp in beams:
+                    if b_dur >= min_ms:
+                        completed_beams.append((b_score, b_cands, b_clusters, b_dur, b_fab_dur, b_sp))
+                        if b_dur >= max_ms:
+                            continue
+
+                    expanded = False
+                    for item in pool:
+                        if item in b_cands:
+                            continue
+                        if item["cluster"] in b_clusters:
+                            continue
+                        # 同源重叠检查
+                        if any(self._is_overlapping(item["cand"], chosen["cand"]) for chosen in b_cands):
+                            continue
+
+                        # 面料占比严格门禁：加入后整体面料占比不得超过 24%
+                        new_fab_dur = b_fab_dur + (item["dur"] if item["role"] == "FABRIC" else 0)
+                        new_tot_dur = b_dur + item["dur"]
+                        if new_tot_dur > 0 and (new_fab_dur / new_tot_dur) > 0.24:
+                            continue
+                        if new_fab_dur > max_fabric_ms:
+                            continue
+                        if new_tot_dur > max_ms and b_cands:
+                            continue
+
+                        # 叙事与卖点增益评分
+                        new_sp = b_sp | set(item["cand"].get("selling_point_evidence_refs") or [])
+                        sp_gain = (len(new_sp) - len(b_sp)) * 12.0
+                        narrative_bonus = 5.0
+                        if b_cands:
+                            prev_role = b_cands[-1]["role"]
+                            # 期望的叙事跃迁流转: HOOK -> PROOF/FABRIC -> FIT/STYLING
+                            if prev_role == "HOOK" and item["role"] in ("PROOF", "FABRIC"):
+                                narrative_bonus = 10.0
+                            elif prev_role in ("PROOF", "FABRIC") and item["role"] in ("FIT", "STYLING"):
+                                narrative_bonus = 8.0
+
+                        new_score = b_score + item["composite"] + sp_gain + narrative_bonus
+                        next_beams.append((
+                            new_score,
+                            b_cands + [item],
+                            b_clusters | {item["cluster"]},
+                            new_tot_dur,
+                            new_fab_dur,
+                            new_sp
+                        ))
+                        expanded = True
+
+                    if not expanded and b_cands:
+                        completed_beams.append((b_score, b_cands, b_clusters, b_dur, b_fab_dur, b_sp))
+
+                if not next_beams:
                     break
-                if item in chosen_cands:
-                    continue
-                if item["cluster"] in chosen_clusters:
-                    continue
-                # 同源重叠检查
-                if any(self._is_overlapping(item["cand"], chosen["cand"]) for chosen in chosen_cands):
-                    continue
 
-                # 面料/参数类占比门禁：防止面料片段超时导致下游 QC BLOCK 报错
-                if item["role"] == "FABRIC" and (cur_fabric_dur + item["dur"]) > max_fabric_ms:
-                    continue
+                # 保留 Top-K 路径
+                next_beams.sort(key=lambda x: x[0], reverse=True)
+                beams = next_beams[:5]
 
-                # 检查加入后是否超出最大上限
-                if cur_dur + item["dur"] > max_ms and chosen_cands:
-                    continue
-
-                chosen_cands.append(item)
-                chosen_clusters.add(item["cluster"])
-                cur_dur += item["dur"]
-                if item["role"] == "FABRIC":
-                    cur_fabric_dur += item["dur"]
-
-            if not chosen_cands:
+            # 汇总并过滤达到最低时长要求的方案
+            all_viable = [b for b in (completed_beams + beams) if b[3] >= min_ms]
+            if not all_viable:
+                # 没有任何候选组合能够满足 min_ms，丢弃该 style
                 continue
 
-            # 统计卖点覆盖
-            all_sp = set()
-            for x in chosen_cands:
-                all_sp.update(x["cand"].get("selling_point_evidence_refs") or [])
+            all_viable.sort(key=lambda x: x[0], reverse=True)
+            best_beam = all_viable[0]
+            chosen_cands = best_beam[1]
+            cur_dur = best_beam[3]
+            all_sp = best_beam[5]
 
             pid = f"p_{style}"
             rationale = [
@@ -166,9 +219,6 @@ class SequenceOptimizer:
                 f"优选片段数: {len(chosen_cands)}",
                 f"叙事结构: {' → '.join(x['role'] for x in chosen_cands[:5])}",
             ]
-            risks = []
-            if cur_dur < min_ms:
-                risks.append(f"总时长略低于目标下限 ({cur_dur/1000:.1f}s < {min_ms/1000:.1f}s)")
 
             proposals.append({
                 "proposal_id": pid,
@@ -177,8 +227,8 @@ class SequenceOptimizer:
                 "expected_duration_ms": cur_dur,
                 "selling_point_coverage": sorted(all_sp),
                 "narrative_rationale": rationale,
-                "risk_notes": risks,
-                "confidence": 0.90 if not risks else 0.75,
+                "risk_notes": [],
+                "confidence": 0.92,
             })
 
         status = "PROPOSED" if proposals else "INSUFFICIENT_EVIDENCE"
@@ -186,5 +236,8 @@ class SequenceOptimizer:
             "schema_version": "3.0",
             "status": status,
             "proposals": proposals,
-            "evidence_gap": [] if proposals else ["未能构造满足所有硬约束的合法镜头序列"],
+            "evidence_gap": [] if proposals else [
+                f"所有合格候选组合均未能达到最低时长要求 ({min_ms/1000:.1f}s)",
+                "可用本品素材不足或存在严重重叠"
+            ],
         }

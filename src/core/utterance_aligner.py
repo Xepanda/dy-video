@@ -84,7 +84,7 @@ class UtteranceAligner:
         utterances: List[Dict[str, Any]] = []
         cur_group: List[Dict[str, Any]] = []
 
-        def _flush_group(grp: List[Dict[str, Any]], idx: int, is_pause_break: bool = True):
+        def _flush_group(grp: List[Dict[str, Any]], idx: int, is_pause_break: bool = False):
             if not grp:
                 return
             st_ms = grp[0]["start_ms"]
@@ -102,12 +102,30 @@ class UtteranceAligner:
             for x in grp:
                 all_cats.update(x.get("categories") or [])
 
-            # 当包含句末标点，或在气口停顿点自然截断，或末尾带语气/句末助词时，视为完整意群闭合
-            ends_sentence = (
-                _ends_with_sentence_punct(combined_text) or
-                is_pause_break or
-                combined_text.rstrip().endswith(("呢", "啦", "呀", "吧", "啊", "哦", "的", "了", "套", "条", "件"))
-            )
+            # 句子完整性判定（绝非默认 True）：
+            # 1. 显式从句标点（逗号/顿号）：必然是半句未闭合
+            if _ends_with_clause_punct(combined_text) and not _ends_with_sentence_punct(combined_text):
+                ends_sentence = False
+            # 2. 显式句末标点（句号/问号/感叹号/分号/省略号）：完整闭合
+            elif _ends_with_sentence_punct(combined_text):
+                ends_sentence = True
+            # 3. 伴随真实气口停顿且末尾带语气/句末助词，或非未完从句连接词
+            elif is_pause_break:
+                clean_t = combined_text.rstrip()
+                incomplete_tails = (
+                    "因为", "所以", "但是", "如果", "虽然", "而且", "不仅",
+                    "并且", "以及", "采用", "采用的是", "比如", "这个", "那个", "这件"
+                )
+                if any(clean_t.endswith(tail) for tail in incomplete_tails):
+                    ends_sentence = False
+                elif clean_t.endswith(("呢", "啦", "呀", "吧", "啊", "哦", "的", "了", "套", "条", "件")):
+                    ends_sentence = True
+                else:
+                    ends_sentence = False
+            else:
+                ends_sentence = False
+
+            risks = [] if ends_sentence else ["INCOMPLETE_SENTENCE"]
 
             utterances.append({
                 "utterance_id": f"utt_{source_id}_{idx:03d}",
@@ -119,6 +137,7 @@ class UtteranceAligner:
                 "words": all_words if precision == "WORD_LEVEL" else [],
                 "alignment_precision": precision,
                 "ends_sentence": ends_sentence,
+                "risks": risks,
                 "categories": sorted(all_cats),
                 "segment_count": len(grp),
             })
@@ -139,23 +158,31 @@ class UtteranceAligner:
             # 3. 累计时长达到最大上限 (max_utterance_ms) 强制截断，防长达数分钟滚雪球；
             # 4. 出现语气词/句末特征字且伴随微弱气口 (>=100ms) 且累计时长合规。
             should_split = False
+            split_pause = False
             if _ends_with_sentence_punct(last_seg["text"]) and (last_seg["end_ms"] - cur_group[0]["start_ms"]) >= self.min_utterance_ms:
                 should_split = True
+                split_pause = True
             elif gap_ms >= 250 and accum_dur >= self.min_utterance_ms:
                 should_split = True
+                split_pause = True
             elif accum_dur >= self.max_utterance_ms:
                 should_split = True
+                split_pause = False  # 强制超时切断，非自然停顿
             elif gap_ms >= 100 and accum_dur >= self.min_utterance_ms and last_seg["text"].rstrip().endswith(("吧", "呢", "呀", "啊", "了", "好", "对", "入", "色", "套", "单")):
                 should_split = True
+                split_pause = True
 
             if should_split:
-                _flush_group(cur_group, u_idx)
+                _flush_group(cur_group, u_idx, is_pause_break=split_pause)
                 u_idx += 1
                 cur_group = [seg]
             else:
                 cur_group.append(seg)
 
         if cur_group:
-            _flush_group(cur_group, u_idx)
+            # 尾段检查是否以句末标点或自然停顿闭合
+            last_text = cur_group[-1].get("text", "")
+            end_pause = _ends_with_sentence_punct(last_text)
+            _flush_group(cur_group, u_idx, is_pause_break=end_pause)
 
         return utterances
