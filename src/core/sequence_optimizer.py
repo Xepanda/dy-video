@@ -90,7 +90,7 @@ class SequenceOptimizer:
 
         # 检查是否有足够素材
         total_eligible_dur = sum(x["dur"] for x in eligible_cands)
-        if not eligible_cands or total_eligible_dur < min_ms * 0.7:
+        if not eligible_cands or total_eligible_dur < min_ms:
             return {
                 "schema_version": "3.0",
                 "status": "INSUFFICIENT_EVIDENCE",
@@ -150,7 +150,8 @@ class SequenceOptimizer:
 
                     expanded = False
                     for item in pool:
-                        if item in b_cands:
+                        item_cid = item["cand"]["candidate_id"]
+                        if any(chosen["cand"]["candidate_id"] == item_cid for chosen in b_cands):
                             continue
                         if item["cluster"] in b_clusters:
                             continue

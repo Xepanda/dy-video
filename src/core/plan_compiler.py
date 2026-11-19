@@ -97,6 +97,8 @@ def compile_v3_plan(
     total_clips = len(ordered_cids)
 
     for idx, cid in enumerate(ordered_cids, 1):
+        if cid not in cand_map:
+            raise ValueError(f"提案包含未知候选 ID: {cid}")
         cand = cand_map[cid]
         sc = score_map.get(cid, {})
         role = str(sc.get("narrative_role", "PROOF")).upper()
@@ -123,6 +125,11 @@ def compile_v3_plan(
         # 面料块推镜
         zoom = z_target if cat == "fabric" else 1.0
 
+        prod_rel = cand.get("product_relation") or "UNVERIFIABLE"
+        rel_conf = cand.get("relation_confidence")
+        if rel_conf is None:
+            rel_conf = sc.get("composite", 0.8) if prod_rel in ("SAME_SKU", "SAME_SKU_VARIANT", "ACCESSORY_OR_STYLING") else 0.0
+
         clip_obj = {
             "id": f"c{idx:02d}_{cat}",
             "candidate_id": cid,
@@ -142,9 +149,9 @@ def compile_v3_plan(
             "source_tag": os.path.basename(str(cand.get("source_id") or "")),
             "duration_in_range": True,
             "sticker_text": sticker,
-            # 完整保留商品关系与证据链（PR-03 / PR-08 门禁硬依赖）
-            "product_relation": cand.get("product_relation", "SAME_SKU"),
-            "relation_confidence": cand.get("relation_confidence") or sc.get("composite", 0.8),
+            # 完整保留商品关系与证据链（PR-03 / PR-08 门禁硬依赖，字段缺失严禁默认视为 SAME_SKU）
+            "product_relation": prod_rel,
+            "relation_confidence": round(float(rel_conf), 2),
             "evidence_refs": cand.get("selling_point_evidence_refs", []) + (cand.get("frame_ids") or []),
             "risks": cand.get("risks", []),
             "matched_selling_points": cand.get("selling_point_evidence_refs", []),

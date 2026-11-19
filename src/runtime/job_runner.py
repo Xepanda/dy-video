@@ -42,6 +42,9 @@ class JobStage:
     CANCELED = "CANCELED"
 
 
+_SENTINEL = object()
+
+
 class JobRunner:
     """V3 自动剪辑状态机调度引擎。"""
 
@@ -50,14 +53,14 @@ class JobRunner:
         job_spec: Dict[str, Any],
         work_dir: str,
         output_dir: str,
-        agent_adapter: Optional[AgentAdapter] = None,
+        agent_adapter: Any = _SENTINEL,
         max_retries: int = 2,
     ):
         self.spec = job_spec
         self.project_id = str(job_spec.get("project_id", "demo"))
         self.work_dir = os.path.abspath(work_dir)
         self.output_dir = os.path.abspath(output_dir)
-        self.agent_adapter = agent_adapter or AgyHeadlessAdapter()
+        self.agent_adapter = AgyHeadlessAdapter() if agent_adapter is _SENTINEL else agent_adapter
         self.max_retries = max_retries
 
         self.state = JobStage.QUEUED
@@ -104,6 +107,7 @@ class JobRunner:
                     "project_id": self.project_id,
                     "current_state": self.state,
                     "retry_count": self.retry_count,
+                    "resumed_from": self.resumed_from,
                     "updated_at": event["timestamp"],
                     "message": message,
                 }, f, ensure_ascii=False, indent=2)
@@ -121,6 +125,33 @@ class JobRunner:
             self._record_state(state, msg)
             if progress_callback:
                 progress_callback(state, progress, msg)
+
+        # 0. 幂等与断点恢复检查
+        if self.resumed_from == JobStage.DELIVERED:
+            delivery_manifest_p = os.path.join(self.output_dir, "delivery_manifest.json")
+            if os.path.isfile(delivery_manifest_p):
+                try:
+                    with open(delivery_manifest_p, "r", encoding="utf-8") as dmf:
+                        d_data = json.load(dmf)
+                    v_p = d_data.get("video_path")
+                    if v_p and os.path.isfile(v_p):
+                        _update(JobStage.DELIVERED, 1.0, "任务已交付，直接复用既有成片（幂等）")
+                        return d_data
+                except Exception:
+                    pass
+
+        if self.resumed_from == JobStage.FAILED:
+            if self.retry_count >= self.max_retries:
+                fail_msg = f"任务此前已失败且达到最大重试上限 ({self.max_retries})，阻断执行"
+                _update(JobStage.FAILED, 1.0, fail_msg)
+                return {
+                    "status": JobStage.FAILED,
+                    "error": fail_msg,
+                    "reason": "已达最大重试次数",
+                    "retry_count": self.retry_count,
+                }
+            self.retry_count += 1
+            _update(JobStage.QUEUED, 0.05, f"任务自 FAILED 恢复执行重试 (第 {self.retry_count}/{self.max_retries} 次)")
 
         # 1. PRECHECK
         _update(JobStage.PRECHECK, 0.1, "环境与媒体预检...")
@@ -247,10 +278,21 @@ class JobRunner:
         try:
             from src.agent.agent_director import AgentDirector
             from src.core.sequence_optimizer import InsufficientEvidenceError
-            director = AgentDirector(resolved_spec_path, use_cache=True)
+            from src.runtime.adapters.agent_protocol import AgentAuthRequiredError, AgentPermissionDeniedError
+            director = AgentDirector(
+                resolved_spec_path,
+                use_cache=True,
+                agent_adapter=self.agent_adapter if not chosen_proposal else None,
+            )
             # 重定向输出目录至当前指定的 output_dir
             director.output_dir = self.output_dir
             manifest = director.run_director_workflow(custom_sequence_proposal=chosen_proposal)
+        except AgentAuthRequiredError as ae:
+            _update(JobStage.AGENT_AUTH_REQUIRED, 0.75, f"AGY 授权失效: {str(ae)}")
+            return {"status": JobStage.AGENT_AUTH_REQUIRED, "error": str(ae), "reason": "AGY 未登录或凭证过期"}
+        except AgentPermissionDeniedError as pe:
+            _update(JobStage.AGENT_PERMISSION_DENIED, 0.75, f"AGY 权限被软拒绝: {str(pe)}")
+            return {"status": JobStage.AGENT_PERMISSION_DENIED, "error": str(pe), "reason": "AGY 工具执行权限被拒绝"}
         except InsufficientEvidenceError as ie:
             _update(JobStage.NEEDS_INPUT, 0.75, f"素材证据不足: {str(ie)}")
             return {"status": JobStage.NEEDS_INPUT, "reason": str(ie)}

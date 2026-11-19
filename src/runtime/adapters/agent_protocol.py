@@ -22,6 +22,16 @@ class AgentStatus:
     CANCELED = "CANCELED"
 
 
+class AgentAuthRequiredError(RuntimeError):
+    """当 Agent 未安装或未登录/凭证失效时抛出。"""
+    pass
+
+
+class AgentPermissionDeniedError(RuntimeError):
+    """当 Agent 工具调用权限被软拒绝时抛出。"""
+    pass
+
+
 class AgentResponse:
     """Agent 调用响应封装。"""
 

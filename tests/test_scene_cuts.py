@@ -127,6 +127,19 @@ def test_v2_fallback_flag():
     assert "scene_cuts" not in meta, "当 enable_scene_cuts: False 时不应注入 scene_cuts"
 
 
+def test_detect_scenes_max_scan_sec_parameter():
+    """验证 detect_scene_cuts 默认全量扫描 (max_scan_sec=None)，并支持长视频分段扫描上限。"""
+    import inspect
+    sig = inspect.signature(detect_scene_cuts)
+    params = sig.parameters
+    assert "max_scan_sec" in params, "detect_scene_cuts 必须暴露 max_scan_sec 参数"
+    assert params["max_scan_sec"].default is None, "默认 max_scan_sec 必须为 None（支持全量长直播分析）"
+
+    import pytest
+    with pytest.raises(FileNotFoundError):
+        detect_scene_cuts("non_existent_video.mp4", max_scan_sec=1200.0)
+
+
 def main():
     test_nms_dual_peaks_preserves_stronger()
     test_nms_distant_peaks_kept()
@@ -134,6 +147,7 @@ def main():
     test_multi_source_scene_cuts_isolation()
     test_snap_end_to_sentence_with_scene_cuts()
     test_v2_fallback_flag()
+    test_detect_scenes_max_scan_sec_parameter()
     print("[TEST-SCENE-CUTS] 全部通过")
     return 0
 

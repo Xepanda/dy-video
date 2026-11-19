@@ -16,13 +16,57 @@ import re
 import json
 import shutil
 import subprocess
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from src.runtime.adapters.agent_protocol import AgentAdapter, AgentResponse, AgentStatus
+
+
+def validate_sequence_proposals_schema(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
+    """本地校验 AGY 结构化输出是否严格满足 sequence_proposals.schema.json 契约。"""
+    errors = []
+    if not isinstance(data, dict):
+        return False, ["响应必须为字典/JSON对象"]
+
+    status = data.get("status")
+    if not status and "proposal_id" in data:
+        status = "PROPOSED"
+        data["status"] = status
+
+    if status not in ("PROPOSED", "INSUFFICIENT_EVIDENCE"):
+        errors.append(f"status 必须为 'PROPOSED' 或 'INSUFFICIENT_EVIDENCE'，当前为: '{status}'")
+
+    if status == "PROPOSED":
+        proposals = data.get("proposals")
+        if proposals is None and "proposal_id" in data:
+            proposals = [data]
+            data["proposals"] = proposals
+
+        if not isinstance(proposals, list) or len(proposals) == 0:
+            errors.append("status 为 PROPOSED 时，proposals 必须为非空列表")
+        else:
+            for idx, p in enumerate(proposals):
+                if not isinstance(p, dict):
+                    errors.append(f"proposals[{idx}] 必须为对象")
+                    continue
+                if not p.get("proposal_id"):
+                    errors.append(f"proposals[{idx}] 缺少必填字段 'proposal_id'")
+                cids = p.get("ordered_candidate_ids") or p.get("selected_clips")
+                if cids is not None and "ordered_candidate_ids" not in p:
+                    p["ordered_candidate_ids"] = cids
+                if not isinstance(cids, list) or len(cids) == 0:
+                    errors.append(f"proposals[{idx}] 的 'ordered_candidate_ids' 必须为非空列表")
+                elif not all(isinstance(c, str) for c in cids):
+                    errors.append(f"proposals[{idx}] 的 'ordered_candidate_ids' 元素必须全为字符串")
+    elif status == "INSUFFICIENT_EVIDENCE":
+        gap = data.get("evidence_gap")
+        if gap is not None and not isinstance(gap, list):
+            errors.append("status 为 INSUFFICIENT_EVIDENCE 时，'evidence_gap' 必须为列表")
+
+    return len(errors) == 0, errors
 
 
 class AgyHeadlessAdapter(AgentAdapter):
@@ -167,17 +211,18 @@ class AgyHeadlessAdapter(AgentAdapter):
             if not isinstance(structured, dict):
                 structured = {"data": structured}
             if isinstance(parsed, dict):
-                for k in ("schema_version", "status"):
+                for k in ("schema_version", "status", "proposals", "evidence_gap"):
                     if k in parsed and k not in structured:
                         structured[k] = parsed[k]
 
-            # 基础业务有效性校验
-            if "status" not in structured and "proposal_id" not in structured and "proposals" not in structured:
+            # 契约 Schema 与业务有效性强校验
+            is_valid, schema_errs = validate_sequence_proposals_schema(structured)
+            if not is_valid:
                 return AgentResponse(
                     status=AgentStatus.INVALID_OUTPUT,
                     raw_output=raw_out,
                     structured_output=structured,
-                    error_message="AGY 结构化输出缺少必要契约字段 (status / proposals)",
+                    error_message=f"AGY 结构化输出契约校验失败: {'; '.join(schema_errs)}",
                     exit_code=proc.returncode,
                 )
 

@@ -191,8 +191,15 @@ class SkuTracker:
         product_profile: Dict[str, Any],
         frame_provider: Optional[Any] = None,
         utterances_map: Optional[Dict[str, Dict[str, Any]]] = None,
+        strict_vision: bool = False,
     ) -> Dict[str, Any]:
         """批量对候选进行商品关系判定，返回结构符合 product_relation_decisions.schema.json 的字典。"""
+        is_strict = (
+            strict_vision or
+            product_profile.get("quality_policy") == "strict" or
+            product_profile.get("visual_verification") == "required" or
+            product_profile.get("strict") is True
+        )
         decisions = []
         for cand in candidates:
             cid = cand.get("candidate_id", "")
@@ -207,7 +214,9 @@ class SkuTracker:
                 frame_paths = frame_provider.get_frames_for_candidate(cand)
 
             vis_dec = self.vision.analyze_candidate(cand, frame_paths, product_profile)
-            rel, conf, reasons, gap = self.identify_relation(text, product_profile, visual_decision=vis_dec)
+            rel, conf, reasons, gap = self.identify_relation(
+                text, product_profile, visual_decision=vis_dec, strict_vision=is_strict
+            )
             cand["product_relation"] = rel
             cand["relation_confidence"] = round(conf, 2)
             if frame_paths:

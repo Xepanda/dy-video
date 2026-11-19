@@ -38,7 +38,7 @@ from src.core.vision_backend import VisionBackend
 from src.tools.build_plan import _split_long_block
 from src.core.utterance_aligner import UtteranceAligner
 from src.core.sequence_optimizer import SequenceOptimizer, InsufficientEvidenceError
-from src.core.plan_compiler import _derive_verified_sticker
+from src.core.plan_compiler import _derive_verified_sticker, compile_v3_plan
 from src.qc.editorial_qc import EditorialQcAuditor
 from src.qc.continuity_qc import ContinuityAuditor
 from src.core.cut_optimizer import CutOptimizer
@@ -114,14 +114,23 @@ class TestPR16Regressions(unittest.TestCase):
             "selling_points": ["白鸭绒"]
         }
         text = "这款立领羽绒服非常保暖舒服。"
-        # 没有提供 visual_decision，且处于 strict 模式
+        # 1. 单句识别测试：没有提供 visual_decision，且处于 strict 模式
         rel, conf, reasons, gap = tracker.identify_relation(
             text, product_profile, visual_decision=None, strict_vision=True
         )
-        # strict 模式下无视觉证据不得为 SAME_SKU
         self.assertNotEqual(rel, "SAME_SKU", "strict 模式缺失视觉证据不得认定为 SAME_SKU")
         self.assertEqual(rel, "UNCERTAIN")
         self.assertTrue(any("UNVERIFIABLE" in g for g in gap))
+
+        # 2. 批量候选追踪测试：track_candidates 在 strict 模式下无帧提供同样坚决阻断 SAME_SKU
+        candidates = [
+            {"candidate_id": "cand_01", "text": text, "source_start_ms": 0, "source_end_ms": 3000}
+        ]
+        res = tracker.track_candidates(candidates, product_profile, frame_provider=None, strict_vision=True)
+        dec = res["decisions"][0]
+        self.assertNotEqual(dec["relation"], "SAME_SKU", "track_candidates strict 模式无帧不得判定为 SAME_SKU")
+        self.assertEqual(dec["relation"], "UNCERTAIN")
+        self.assertEqual(candidates[0]["product_relation"], "UNCERTAIN")
 
     def test_scenario_04_scene_cuts_conservation_in_long_block_split(self):
         """场景 4：长块句末附近没有 scene cut -> 分镜拆分前后内容守恒，不得丢失语句。"""
@@ -196,10 +205,39 @@ class TestPR16Regressions(unittest.TestCase):
         self.assertEqual(opt_res["status"], "INSUFFICIENT_EVIDENCE")
         self.assertTrue(len(opt_res["evidence_gap"]) > 0)
 
-        # 验证在 AgentDirector 遇到 INSUFFICIENT_EVIDENCE 时坚决抛出 InsufficientEvidenceError，不静默降级
-        if opt_res.get("status") == "INSUFFICIENT_EVIDENCE":
-            with self.assertRaises(InsufficientEvidenceError):
-                raise InsufficientEvidenceError(f"本品素材证据不足: {'; '.join(opt_res.get('evidence_gap', []))}")
+        # 真实端到端验证：当导演中枢收到 INSUFFICIENT_EVIDENCE 时，坚决抛出 InsufficientEvidenceError，
+        # JobRunner 捕获后置入 NEEDS_INPUT 状态，绝对禁止静默降级到启发式拼接！
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = os.path.join(tmpdir, "work")
+            out_dir = os.path.join(tmpdir, "out")
+            dummy_video = os.path.join(tmpdir, "dummy.mp4")
+            with open(dummy_video, "wb") as f:
+                f.write(b"0000")
+            spec = {
+                "project_id": "test_ie_block",
+                "raw_video_path": dummy_video,
+                "product": {"name": "针织衫"}
+            }
+            # 1. 模拟 Agent 直接返回 INSUFFICIENT_EVIDENCE
+            mock_adapter = MagicMock()
+            mock_adapter.check_availability.return_value = (True, "OK")
+            mock_adapter.invoke.return_value = AgentResponse(
+                status=AgentStatus.SUCCESS,
+                structured_output={"status": "INSUFFICIENT_EVIDENCE", "evidence_gap": ["时长不足 45 秒"]}
+            )
+            runner_agent = JobRunner(spec, work_dir, out_dir, agent_adapter=mock_adapter)
+            res_agent = runner_agent.run_pipeline()
+            self.assertEqual(res_agent["status"], JobStage.NEEDS_INPUT)
+            self.assertIn("素材证据不足", res_agent["reason"])
+
+            # 2. 模拟确定性导演总装抛出 InsufficientEvidenceError
+            mock_director = MagicMock()
+            mock_director.run_director_workflow.side_effect = InsufficientEvidenceError("本品素材证据不足: 可用本品素材累计时长不足 (8.0s < 目标下限 45.0s)")
+            with patch("src.agent.agent_director.AgentDirector", return_value=mock_director):
+                runner = JobRunner(spec, work_dir, out_dir, agent_adapter=None)
+                res = runner.run_pipeline()
+                self.assertEqual(res["status"], JobStage.NEEDS_INPUT)
+                self.assertIn("本品素材证据不足", res["reason"])
 
     def test_scenario_07_down_jacket_not_generating_wool_claim(self):
         """场景 7：商品为羽绒服，面料镜头 -> 不得生成‘羊毛面料’等虚假宣传。"""
@@ -298,29 +336,83 @@ class TestPR16Regressions(unittest.TestCase):
         self.assertTrue(any("afade" in line for line in fc), "启用了增益匹配时必须注入 afade 音频平滑淡入淡出")
 
     def test_scenario_10_checkpoint_resumption_and_idempotence(self):
-        """场景 10：任务中断后重新启动 -> 根据 checkpoint 恢复，跳过已完成阶段。"""
+        """场景 10：任务中断后重新启动 -> 根据 checkpoint 恢复，跳过已完成阶段，支持幂等交付与有限重试。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = os.path.join(tmpdir, "work")
             out_dir = os.path.join(tmpdir, "out")
+            dummy_mp4 = os.path.join(out_dir, "resume_test.mp4")
+            os.makedirs(work_dir, exist_ok=True)
+            os.makedirs(out_dir, exist_ok=True)
+            with open(dummy_mp4, "wb") as f:
+                f.write(b"0000")
+
             spec = {
                 "project_id": "resume_test",
-                "raw_video_path": "test.mp4",
+                "raw_video_path": dummy_mp4,
                 "product": {"name": "羊绒衫"}
             }
-            # 手工写入已完成 ANALYZING 的 checkpoint
-            os.makedirs(work_dir, exist_ok=True)
-            ckpt_path = os.path.join(work_dir, "checkpoint.json")
-            with open(ckpt_path, "w", encoding="utf-8") as f:
+
+            # 1. 幂等交付验证：当 checkpoint 记录为 DELIVERED 且成片已落盘，直接复用成片，不重复执行分析
+            delivery_manifest = {
+                "project_id": "resume_test",
+                "status": "DELIVERED",
+                "video_path": dummy_mp4,
+                "qc_passed": True,
+            }
+            with open(os.path.join(out_dir, "delivery_manifest.json"), "w", encoding="utf-8") as f:
+                json.dump(delivery_manifest, f)
+            with open(os.path.join(work_dir, "checkpoint.json"), "w", encoding="utf-8") as f:
                 json.dump({
                     "project_id": "resume_test",
-                    "current_state": "ANALYZING",
+                    "current_state": "DELIVERED",
                     "retry_count": 0,
                     "updated_at": 1000000000
                 }, f)
 
-            runner = JobRunner(spec, work_dir, out_dir)
-            self.assertEqual(runner.state, JobStage.ANALYZING)
-            self.assertEqual(runner.resumed_from, JobStage.ANALYZING)
+            runner_idempotent = JobRunner(spec, work_dir, out_dir)
+            self.assertEqual(runner_idempotent.state, JobStage.DELIVERED)
+            res_idempotent = runner_idempotent.run_pipeline()
+            self.assertEqual(res_idempotent.get("status"), "DELIVERED")
+            self.assertEqual(res_idempotent.get("video_path"), dummy_mp4)
+
+            # 2. 有限重试与失败阻断：当达到 max_retries 时，坚决阻断重复返工
+            with open(os.path.join(work_dir, "checkpoint.json"), "w", encoding="utf-8") as f:
+                json.dump({
+                    "project_id": "resume_test",
+                    "current_state": "FAILED",
+                    "retry_count": 2,
+                    "updated_at": 1000000000
+                }, f)
+            runner_failed = JobRunner(spec, work_dir, out_dir, max_retries=2)
+            res_failed = runner_failed.run_pipeline()
+            self.assertEqual(res_failed["status"], JobStage.FAILED)
+            self.assertIn("已达最大重试次数", res_failed["reason"])
+
+    def test_scenario_11_missing_product_relation_strictly_blocked_by_qc(self):
+        """场景 11：分镜缺失 product_relation -> compile_v3_plan 标记 UNVERIFIABLE，QC 坚决 BLOCK 拦截。"""
+        cand = {
+            "candidate_id": "c_no_relation",
+            "source_start_ms": 0,
+            "source_end_ms": 4000,
+            "text": "这是一件没有经过商品关系认定的测试片段",
+            # 缺失 product_relation 字段
+        }
+        proposal = {
+            "proposal_id": "p_test",
+            "ordered_candidate_ids": ["c_no_relation"],
+        }
+        spec = {"product": {"name": "针织衫"}}
+        plan = compile_v3_plan(proposal, [cand], {}, spec)
+        clip = plan["clips"][0]
+        self.assertEqual(clip["product_relation"], "UNVERIFIABLE", "缺失商品关系的片段必须标记为 UNVERIFIABLE")
+
+        auditor = EditorialQcAuditor(policy="strict")
+        report = auditor.audit_editorial_quality(plan, {"name": "针织衫"})
+        self.assertFalse(report["passed"], "缺失商品关系的分镜严禁通过内容质检")
+        self.assertGreaterEqual(report["block_count"], 1)
+        id_check = next(c for c in report["checks"] if c["gate"] == "ProductIdentityGate")
+        self.assertEqual(id_check["status"], "BLOCK")
+        self.assertIn("c_no_relation", id_check["affected_clips"])
 
 
 def main():
