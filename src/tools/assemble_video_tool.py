@@ -58,9 +58,14 @@ def assemble_video_tool(
         with open(_cpath, "r", encoding="utf-8") as f:
             constraints = yaml.safe_load(f) or {}
 
-    if cache_key:
+    import hashlib
+    with open(plan_path, "rb") as pf:
+        plan_hash = hashlib.sha256(pf.read()).hexdigest()[:16]
+    effective_cache_key = f"{cache_key}|{plan_hash}" if cache_key else None
+
+    if effective_cache_key:
         from src.tools.stage_cache import load_stage_video
-        cached_video = load_stage_video(work_dir, cache_key)
+        cached_video = load_stage_video(work_dir, effective_cache_key)
         if cached_video:
             import subprocess
             res = subprocess.run(
@@ -74,9 +79,18 @@ def assemble_video_tool(
     assembler = VideoAssembler(work_dir, constraints=constraints)
     out_mp4, duration = assembler.assemble_final_video(plan, output_mp4_path)
     print(f"[ASSEMBLE-TOOL] 成片总装完成: {out_mp4} (实测物理时长: {duration:.2f}s)")
-    if cache_key:
+
+    # 清理可能存在的旧成片 ASR 复检缓存，防止新成片误中旧转录
+    old_asr_cache = os.path.join(work_dir, "final_asr_segments.json")
+    if os.path.exists(old_asr_cache):
+        try:
+            os.remove(old_asr_cache)
+        except Exception:
+            pass
+
+    if effective_cache_key:
         from src.tools.stage_cache import save_stage_video
-        save_stage_video(work_dir, cache_key, out_mp4, duration)
+        save_stage_video(work_dir, effective_cache_key, out_mp4, duration)
     return out_mp4, duration
 
 

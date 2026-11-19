@@ -802,15 +802,87 @@ class AgentDirector:
                 verified_cache = os.path.join(self.work_dir, "whisper_segments.json")
             with open(verified_cache, "r", encoding="utf-8") as f:
                 segments = json.load(f)
-            # R1：检测各源语音气口，供 build_plan 把裁剪点吸附到气口
-            pauses_by_source = self._detect_speech_pauses()
-            plan = build_plan(self.raw_video, segments, self.spec,
-                              self.constraints, scene_cuts=scene_cuts,
-                              cache_key=ck, work_dir=self.work_dir,
-                              pauses_by_source=pauses_by_source,
-                              scene_cuts_by_source=scene_cuts_by_source)
-            plan_source = "build_plan"
+
+            # —— V3 Agent 总导演决策流（PR-01~PR-08 全链路编排）——
+            plan = None
+            plan_source = "v3_agent_director"
             plan_forced = False
+            try:
+                from src.core.product_profile import build_product_profile
+                from src.core.utterance_aligner import UtteranceAligner
+                from src.core.candidate_generator import CandidateGenerator
+                from src.core.sku_tracker import SkuTracker
+                from src.core.candidate_ranker import CandidateRanker
+                from src.core.sequence_optimizer import SequenceOptimizer
+                from src.core.plan_compiler import compile_v3_plan
+
+                # 1. 建立商品档案
+                product_profile = build_product_profile(
+                    self.spec, spec_dir=self.work_dir, strict_missing_images=False, validate=False
+                )
+
+                # 2. 意群对齐
+                aligner = UtteranceAligner(merge_gap_ms=600, min_utterance_ms=1200, max_utterance_ms=10000)
+                raw_by_source = {}
+                for s in segments:
+                    src = s.get("source_file") or self.raw_video
+                    raw_by_source.setdefault(src, []).append(s)
+
+                utterances_by_source = {}
+                for src, src_segs in raw_by_source.items():
+                    utterances_by_source[src] = aligner.align_segments(src_segs, source_id=src)
+
+                # 3. 候选片段挖掘
+                generator = CandidateGenerator(min_candidate_ms=1800, max_candidate_ms=12000, target_candidate_ms=5000)
+                all_candidates = []
+                for src, utts in utterances_by_source.items():
+                    shots_for_src = scene_cuts_by_source.get(src, [])
+                    cands = generator.generate_candidates(utts, product_profile, source_id=src, shots=shots_for_src)
+                    all_candidates.extend(cands)
+
+                # 4. 商品关系追踪
+                sku_tracker = SkuTracker()
+                relation_decisions = sku_tracker.track_candidates(all_candidates, product_profile)
+
+                # 5. 多模态候选精排
+                ranker = CandidateRanker()
+                candidate_scores = ranker.score_candidates(
+                    all_candidates, product_profile, relation_decisions=relation_decisions
+                )
+
+                # 6. 全局序列优化
+                dur_range = (self.constraints.get("video", {}) or {}).get("duration_range", [45, 65])
+                opt = SequenceOptimizer(
+                    target_min_ms=int(dur_range[0] * 1000), target_max_ms=int(dur_range[1] * 1000)
+                )
+                opt_res = opt.optimize_sequence(all_candidates, candidate_scores, product_profile)
+
+                if opt_res.get("status") == "PROPOSED" and opt_res.get("proposals"):
+                    chosen_proposal = opt_res["proposals"][0]
+                    plan = compile_v3_plan(
+                        chosen_proposal,
+                        all_candidates,
+                        candidate_scores,
+                        self.spec,
+                        constraints=self.constraints,
+                        raw_video_path=self.raw_video,
+                    )
+                    print(f"  [V3 DIRECT-PLAN] 成功生成 V3 全局导演排片方案: {chosen_proposal['proposal_id']} "
+                          f"（风格={chosen_proposal.get('style')}，{len(plan['clips'])} 个分镜，预期时长 {plan['total_expected_duration']}s）")
+            except Exception as v3_err:
+                print(f"  [V3 PLAN][WARN] V3 编排异常，降级回退至启发式 build_plan: {v3_err}")
+                plan = None
+
+            if not plan:
+                # 降级回退
+                pauses_by_source = self._detect_speech_pauses()
+                plan = build_plan(self.raw_video, segments, self.spec,
+                                  self.constraints, scene_cuts=scene_cuts,
+                                  cache_key=ck, work_dir=self.work_dir,
+                                  pauses_by_source=pauses_by_source,
+                                  scene_cuts_by_source=scene_cuts_by_source)
+                plan_source = "build_plan"
+                plan_forced = False
             # 保留自动计划的分镜与包装配置（人工精修只改时间轴）
             built_clips = list(plan.get("clips", []))
             built_plan_extras = {
@@ -1078,14 +1150,19 @@ class AgentDirector:
         ass_path = os.path.join(self.work_dir, "subtitles.ass")
         qc_report_path = os.path.join(self.output_dir, "qc_report.json")
         candidates_json = os.path.join(cover_cand_dir, "cover_candidates.json")
-        # B13：QC 阶段缓存（报告含全部断言明细才命中）
+        # B13：QC 阶段缓存（包含 plan_hash，计划变更时必须重新质检）
+        import hashlib
+        with open(plan_path, "rb") as pf:
+            plan_hash = hashlib.sha256(pf.read()).hexdigest()[:16]
+        qc_ck = f"{ck}|{plan_hash}" if ck else None
+
         qc_cached = None
-        if ck:
+        if qc_ck:
             from src.tools.stage_cache import load_stage
-            qc_cached = load_stage(self.work_dir, "qc", ck)
-        if qc_cached is not None:
-            print("[QC] 命中阶段缓存，跳过复测（约束与输入未变更）")
-            passed = qc_cached.get("all_passed", False)
+            qc_cached = load_stage(self.work_dir, "qc", qc_ck)
+        if qc_cached is not None and qc_cached.get("all_passed", False):
+            print("[QC] 命中阶段缓存，跳过复测（全绿已通过）")
+            passed = True
             auditor.report = qc_cached
         else:
             overlay_meta_path = os.path.join(self.work_dir, "video_overlay_meta.json")
@@ -1103,9 +1180,9 @@ class AgentDirector:
                 # 拒绝不合规项，实际交付项未必是 candidates[0]（2026-11-01 实测）。
                 chosen_cover_id=selected_cover.get("id"),
             )
-            if ck:
+            if qc_ck and passed:
                 from src.tools.stage_cache import save_stage
-                save_stage(self.work_dir, "qc", ck, auditor.report)
+                save_stage(self.work_dir, "qc", qc_ck, auditor.report)
 
         # 4.2 电商内容层与业务质量门禁（V3 PR-08 EditorialQcAuditor）
         editorial_report = None

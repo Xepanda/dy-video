@@ -84,7 +84,7 @@ class UtteranceAligner:
         utterances: List[Dict[str, Any]] = []
         cur_group: List[Dict[str, Any]] = []
 
-        def _flush_group(grp: List[Dict[str, Any]], idx: int):
+        def _flush_group(grp: List[Dict[str, Any]], idx: int, is_pause_break: bool = True):
             if not grp:
                 return
             st_ms = grp[0]["start_ms"]
@@ -102,6 +102,13 @@ class UtteranceAligner:
             for x in grp:
                 all_cats.update(x.get("categories") or [])
 
+            # 当包含句末标点，或在气口停顿点自然截断，或末尾带语气/句末助词时，视为完整意群闭合
+            ends_sentence = (
+                _ends_with_sentence_punct(combined_text) or
+                is_pause_break or
+                combined_text.rstrip().endswith(("呢", "啦", "呀", "吧", "啊", "哦", "的", "了", "套", "条", "件"))
+            )
+
             utterances.append({
                 "utterance_id": f"utt_{source_id}_{idx:03d}",
                 "source_id": source_id,
@@ -111,7 +118,7 @@ class UtteranceAligner:
                 "text": combined_text,
                 "words": all_words if precision == "WORD_LEVEL" else [],
                 "alignment_precision": precision,
-                "ends_sentence": _ends_with_sentence_punct(combined_text),
+                "ends_sentence": ends_sentence,
                 "categories": sorted(all_cats),
                 "segment_count": len(grp),
             })
@@ -126,16 +133,19 @@ class UtteranceAligner:
             gap_ms = seg["start_ms"] - last_seg["end_ms"]
             accum_dur = seg["end_ms"] - cur_group[0]["start_ms"]
 
-            # 拆分条件：
-            # 1. 前一段已是完整句末标点且累计时长达到最小阈值；
-            # 2. 静默间隔超过 merge_gap_ms；
-            # 3. 累计时长超出 max_utterance_ms 且遇到子句标点；
+            # 拆分条件（适配无标点 ASR 流）：
+            # 1. 包含显式句末标点且达到最小意群时长；
+            # 2. 停顿间隙超过气口阈值 (>=250ms) 且累计达到最小意群时长；
+            # 3. 累计时长达到最大上限 (max_utterance_ms) 强制截断，防长达数分钟滚雪球；
+            # 4. 出现语气词/句末特征字且伴随微弱气口 (>=100ms) 且累计时长合规。
             should_split = False
             if _ends_with_sentence_punct(last_seg["text"]) and (last_seg["end_ms"] - cur_group[0]["start_ms"]) >= self.min_utterance_ms:
                 should_split = True
-            elif gap_ms > self.merge_gap_ms:
+            elif gap_ms >= 250 and accum_dur >= self.min_utterance_ms:
                 should_split = True
-            elif accum_dur > self.max_utterance_ms and _ends_with_clause_punct(last_seg["text"]):
+            elif accum_dur >= self.max_utterance_ms:
+                should_split = True
+            elif gap_ms >= 100 and accum_dur >= self.min_utterance_ms and last_seg["text"].rstrip().endswith(("吧", "呢", "呀", "啊", "了", "好", "对", "入", "色", "套", "单")):
                 should_split = True
 
             if should_split:

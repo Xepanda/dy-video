@@ -99,10 +99,14 @@ class SequenceOptimizer:
         # 区分风格生成提案：balanced, fast_paced, showcase
         proposals = []
 
+        # 参数类内容（面料/做工）占比上限约束（决策 6：QC 严格门禁 <= 25%）
+        max_fabric_ms = int(max_ms * 0.23)
+
         for style in ("balanced", "fast_paced", "showcase"):
             chosen_cands: List[Dict[str, Any]] = []
             chosen_clusters: Set[str] = set()
             cur_dur = 0
+            cur_fabric_dur = 0
 
             # 偏好过滤
             pool = list(eligible_cands)
@@ -120,6 +124,8 @@ class SequenceOptimizer:
                 chosen_cands.append(first)
                 chosen_clusters.add(first["cluster"])
                 cur_dur += first["dur"]
+                if first["role"] == "FABRIC":
+                    cur_fabric_dur += first["dur"]
 
             for item in pool:
                 if cur_dur >= max_ms:
@@ -132,13 +138,19 @@ class SequenceOptimizer:
                 if any(self._is_overlapping(item["cand"], chosen["cand"]) for chosen in chosen_cands):
                     continue
 
-                # 检查加入后是否超出最大上限过甚
-                if cur_dur + item["dur"] > max_ms + 2000 and chosen_cands:
+                # 面料/参数类占比门禁：防止面料片段超时导致下游 QC BLOCK 报错
+                if item["role"] == "FABRIC" and (cur_fabric_dur + item["dur"]) > max_fabric_ms:
+                    continue
+
+                # 检查加入后是否超出最大上限
+                if cur_dur + item["dur"] > max_ms and chosen_cands:
                     continue
 
                 chosen_cands.append(item)
                 chosen_clusters.add(item["cluster"])
                 cur_dur += item["dur"]
+                if item["role"] == "FABRIC":
+                    cur_fabric_dur += item["dur"]
 
             if not chosen_cands:
                 continue

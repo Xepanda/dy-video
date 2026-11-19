@@ -29,7 +29,8 @@ from src.core.vision_backend import VisionBackend, LocalCVVisionBackend
 # 换款与离场关键词
 CHANGEOVER_PATTERNS = [
     "换下一款", "看下一件", "下一套", "下一号", "换掉", "拿走", "去换衣服",
-    "下一款衣服", "换件衣服", "过款", "换款式", "走开一下", "我们换", "下一件"
+    "下一款衣服", "换件衣服", "过款", "换款式", "走开一下", "我们换", "下一件",
+    "换下一个", "不能再讲这个了", "我们要开始上对头了", "下楼"
 ]
 
 # 搭配词模式（修饰性指代，不应篡改主推品类）
@@ -84,15 +85,40 @@ class SkuTracker:
                 reasons.append(f"命中允许展示的颜色/变体: '{var}'")
                 break
 
-        # 4. 主品词命中
+        # 4. 主品词与核心卖点命中
         has_primary_token = False
-        if sku_name:
-            tokens = [t for t in re.split(r"[\s,，、]+", sku_name) if len(t) >= 2]
-            for tok in tokens:
-                if tok in text:
-                    has_primary_token = True
-                    reasons.append(f"命中商品关键词: '{tok}'")
-                    break
+        selling_points = [str(sp) for sp in product_profile.get("selling_points", [])]
+        highlight_keywords = [str(kw) for kw in product_profile.get("highlight_keywords", [])]
+
+        primary_tokens = set()
+        for raw in [sku_name, category] + selling_points + highlight_keywords:
+            if not raw:
+                continue
+            for part in re.split(r"[\s,，、/·\-_]+", str(raw)):
+                if len(part) >= 2:
+                    primary_tokens.add(part)
+                if len(part) > 2:
+                    for n in (2, 3):
+                        for i in range(len(part) - n + 1):
+                            primary_tokens.add(part[i:i+n])
+
+        # 品类与行业核心词扩展（直播带货自然口播指代）
+        cat_lower = (category or "").lower()
+        if any(k in cat_lower for k in ("针织", "毛衣", "衫", "上衣")):
+            primary_tokens.update(["毛衣", "针织", "大毛衫", "线衫", "羊毛衫", "开衫", "打底", "上衣", "纱线", "面料", "手感", "版型", "领形", "领口", "正肩", "落肩"])
+        elif any(k in cat_lower for k in ("裤", "阔腿", "西裤")):
+            primary_tokens.update(["裤子", "西裤", "裤腿", "阔腿裤", "垂坠", "腰头"])
+        elif any(k in cat_lower for k in ("裙", "连衣裙")):
+            primary_tokens.update(["裙子", "连衣裙", "裙摆", "下摆", "腰线"])
+
+        primary_tokens.discard("这个")
+        primary_tokens.discard("一个")
+
+        for tok in primary_tokens:
+            if tok in text:
+                has_primary_token = True
+                reasons.append(f"命中商品关键词: '{tok}'")
+                break
 
         # 5. 结合视觉后端
         vis_relation = visual_decision.get("sku_relation") if visual_decision else None

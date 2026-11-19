@@ -35,9 +35,9 @@ import argparse
 import subprocess
 
 if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8", line_buffering=True)
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
@@ -178,6 +178,8 @@ def main() -> int:
                         help="任务契约文件路径（默认仓库根 job_spec.json）")
     parser.add_argument("--no-cache", action="store_true",
                         help="禁用阶段缓存（强制全量重算）")
+    parser.add_argument("--cache-key", default=None,
+                        help="指定阶段缓存键（便于精准命中前序媒体扫描缓存）")
     args = parser.parse_args()
 
     spec_path = os.path.abspath(args.spec)
@@ -258,7 +260,7 @@ def main() -> int:
     # —— 4. 端到端流水线 ——
     print(f"\n[4/5] 启动 Agent 剪辑导演中枢（端到端）...")
     from src.agent.agent_director import AgentDirector
-    director = AgentDirector(resolved_path, use_cache=not args.no_cache)
+    director = AgentDirector(resolved_path, cache_key=args.cache_key, use_cache=not args.no_cache)
     manifest = director.run_director_workflow()
 
     # —— 5. 交付汇总 ——

@@ -51,24 +51,38 @@ class CandidateRanker:
         sku_name = product_profile.get("name", "")
         scores_list = []
 
-        # 重叠聚类辅助：同一 source 且重叠 >= 50% 的分入同一 duplicate_cluster
+        # 重叠聚类辅助：按 source 分组并在时序窗口内聚类，避免 O(N^2) 笛卡尔积卡死
         clusters: Dict[str, str] = {}
         cluster_counter = 1
 
-        for i, c1 in enumerate(candidates):
-            cid1 = c1["candidate_id"]
-            if cid1 not in clusters:
-                clusters[cid1] = f"cluster_{cluster_counter:03d}"
-                cluster_counter += 1
+        # 先按 source_id 分组
+        by_source: Dict[str, List[Dict[str, Any]]] = {}
+        for c in candidates:
+            sid = str(c.get("source_id", "src_0"))
+            by_source.setdefault(sid, []).append(c)
 
-            for c2 in candidates[i+1:]:
-                cid2 = c2["candidate_id"]
-                if c1.get("source_id") == c2.get("source_id"):
-                    s1, e1 = c1["source_start_ms"], c1["source_end_ms"]
+        for sid, src_cands in by_source.items():
+            # 保证按起始时间排序
+            src_cands.sort(key=lambda x: x["source_start_ms"])
+            n_src = len(src_cands)
+            for i in range(n_src):
+                c1 = src_cands[i]
+                cid1 = c1["candidate_id"]
+                if cid1 not in clusters:
+                    clusters[cid1] = f"cluster_{cluster_counter:03d}"
+                    cluster_counter += 1
+
+                s1, e1 = c1["source_start_ms"], c1["source_end_ms"]
+                for j in range(i + 1, n_src):
+                    c2 = src_cands[j]
                     s2, e2 = c2["source_start_ms"], c2["source_end_ms"]
+                    if s2 >= e1:
+                        # 后续候选起点已超过 c1 终点，不可能再有重叠
+                        break
                     overlap = max(0, min(e1, e2) - max(s1, s2))
                     min_dur = min(e1 - s1, e2 - s2)
                     if min_dur > 0 and (overlap / min_dur) >= 0.5:
+                        cid2 = c2["candidate_id"]
                         clusters[cid2] = clusters[cid1]
 
         for cand in candidates:
@@ -101,6 +115,52 @@ class CandidateRanker:
                     rejection_reasons.append(f"命中违规极限词: {[m['word'] for m in block_hits]}")
             except Exception:
                 pass
+
+            # 价格表达硬过滤（决策 3：零具体价格）
+            try:
+                from src.tools.detect_price import find_price_matches
+                p_matches = find_price_matches(text)
+                if p_matches:
+                    eligible = False
+                    rejection_reasons.append(f"命中价格表达: {[m['text'] for m in p_matches]}")
+            except Exception:
+                pass
+
+            # 库存叫卖、迫切催单与换款离场硬过滤
+            inventory_changeover_patterns = [
+                r".*库存.*", r".*只剩.*", r".*单了.*", r".*快下了.*", r".*上链接.*", r".*一号链接.*",
+                r".*抢购.*", r".*秒杀.*", r".*现货.*", r".*发货.*", r".*不能再讲.*", r".*上对头.*",
+                r".*换下一款.*", r".*下楼.*", r".*过款.*", r".*拿走.*", r".*去换衣服.*", r".*换款式.*",
+                r".*不用讲.*", r".*随便对比.*", r".*凑单去拍.*",
+            ]
+            for pat in inventory_changeover_patterns:
+                if re.search(pat, text):
+                    eligible = False
+                    rejection_reasons.append(f"命中叫卖/换款模式: '{pat}'")
+                    break
+
+            # 品类冲突硬过滤（如上衣中出现下装/裤装词汇，与 verify_clip_product_alignment 统一硬门禁）
+            cat_name = str(product_profile.get("category", "") or product_profile.get("name", "")).lower()
+            if any(k in cat_name for k in ("上衣", "毛衣", "针织", "衫", "外套", "大衣", "开衫")):
+                top_neg_terms = ("裤", "库长", "裤长", "毛呢裤", "毛泥裤", "裤腿", "西裤", "卫裤", "皮裤", "石墨烯", "加绒裤", "棉服", "填充物", "羽绒", "鞋", "靴", "侧缝", "腿在裤", "白牛")
+                hits = [nt for nt in top_neg_terms if nt in text]
+                if hits:
+                    eligible = False
+                    relation = "OTHER_SKU"
+                    rejection_reasons.append(f"品类负向词冲突: 主品为上衣但台词包含负向词 {hits}")
+            elif any(k in cat_name for k in ("裤", "裙", "半裙", "短裤", "长裤", "阔腿")):
+                bottom_neg_terms = ("上衣", "毛衣", "针织衫", "衬衫", "吊带", "外套", "大衣", "风衣")
+                hits = [nt for nt in bottom_neg_terms if nt in text]
+                if hits:
+                    eligible = False
+                    relation = "OTHER_SKU"
+                    rejection_reasons.append(f"品类负向词冲突: 主品为下装但台词包含负向词 {hits}")
+
+            # 句子完整性硬约束：禁止未闭合或断句截断的碎片入选
+            risks = cand.get("risks") or []
+            if "INCOMPLETE_SENTENCE" in risks:
+                eligible = False
+                rejection_reasons.append("语句未在句末正常闭合（避免截断吞字）")
 
             # 2. 软评分各分项 (0~100)
             # Relevance
