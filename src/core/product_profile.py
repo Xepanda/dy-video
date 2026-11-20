@@ -87,10 +87,8 @@ def migrate_job_spec(raw_spec: Dict[str, Any], project_root: str = None) -> Dict
     product.setdefault("allowed_variants", [])
     product.setdefault("attributes", {})
 
-    selling_points = product.get("selling_points")
-    if not selling_points:
-        hk = spec.get("options", {}).get("highlight_keywords") or []
-        selling_points = list(hk)
+    # 严格分离商品事实 (selling_points) 与字幕高亮词 (highlight_keywords)
+    selling_points = list(product.get("selling_points") or [])
     product["selling_points"] = selling_points
 
     # 规范化 options 与 automation 策略

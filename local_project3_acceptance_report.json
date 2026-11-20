@@ -1,0 +1,1304 @@
+{
+  "timestamp": "2026-11-21 04:31:59",
+  "project_dir": "C:\\Users\\ePanda\\Desktop\\project-3",
+  "run_id": "run_v31_20261121_041915",
+  "execution_status": "DELIVERED",
+  "source_videos_used": [
+    "C:\\Users\\ePanda\\Desktop\\project-3\\20261023141614_20261023141937 (1).mp4",
+    "C:\\Users\\ePanda\\Desktop\\project-3\\20261023143205_20261023143415.mp4",
+    "C:\\Users\\ePanda\\Desktop\\project-3\\20261023143415_20261023143613.mp4"
+  ],
+  "historical_files_quarantined": [
+    "C:\\Users\\ePanda\\Desktop\\project-3\\project-3.jpg"
+  ],
+  "work_dir": "C:\\Users\\ePanda\\Desktop\\project-3\\work\\run_v31_20261121_041915",
+  "output_dir": "C:\\Users\\ePanda\\Desktop\\project-3\\output\\run_v31_20261121_041915",
+  "anti_tampering_verification": {
+    "total_files_monitored": 14,
+    "missing_files": [],
+    "tampered_files": [],
+    "new_files_in_root": [],
+    "intact": true
+  },
+  "delivery_manifest": {
+    "status": "DELIVERED",
+    "final_video": "C:\\Users\\ePanda\\Desktop\\project-3\\output\\run_v31_20261121_041915\\project-3.mp4",
+    "manifest": {
+      "project_id": "project-3",
+      "status": "DELIVERED",
+      "job_fingerprint": "fb3b948aff469a1f52003a11",
+      "video_path": "C:\\Users\\ePanda\\Desktop\\project-3\\output\\run_v31_20261121_041915\\project-3.mp4",
+      "cover_path": "C:\\Users\\ePanda\\Desktop\\project-3\\output\\run_v31_20261121_041915\\project-3.jpg",
+      "qc_passed": true,
+      "completed_at": 1795215718.9586267,
+      "director_manifest": {
+        "project_id": "project-3",
+        "decision_timestamp": "2026-11-21 04:31:58",
+        "constraints_version": 1.7,
+        "cache_key": "2ace5c877b589cf4166a6f38dd9ec31128b765e78f06faacaed0f72e7dc76e00",
+        "chosen_cover": {
+          "id": "cand_02_143613",
+          "timestamp": 121.0,
+          "image_path": "C:\\Users\\ePanda\\Desktop\\project-3\\work\\run_v31_20261121_041915\\candidates\\cover_candidates\\1023143613\\cand_02_t121.0s.jpg",
+          "image_filename": "cand_02_t121.0s.jpg",
+          "frontal_score": 58.7,
+          "dz_shoulder": 0.022,
+          "sharpness": 230.2,
+          "face": {
+            "face_detected": true,
+            "detect_source": "pose_roi",
+            "yaw_deg": 0.91,
+            "pitch_deg": 3.04,
+            "ear": 0.331,
+            "mar": 0.082,
+            "face_sharpness": 481.9,
+            "face_area_ratio": 0.0047,
+            "face_bbox_norm": [
+              0.3917,
+              0.4125,
+              0.4802,
+              0.4658
+            ],
+            "face_top_y": 0.4125
+          },
+          "garment_match": 0.4511,
+          "garment_engine": "histogram",
+          "garment_passed": true,
+          "garment_level": "WARN",
+          "garment_failed_keys": [],
+          "garment_not_evaluable": false,
+          "background_text_ratio": 0.00023,
+          "background_text_passed": true,
+          "ocr_fallback": false,
+          "framing": {
+            "scale": 0.972,
+            "bg_scale": 1.0,
+            "full_bleed": true,
+            "y_offset_px": 0,
+            "framing_policy": "example",
+            "person_width_px_src": 449.0,
+            "achieved_width_px": 436.4,
+            "achieved_width_ratio": 0.4041,
+            "achieved_height_ratio": 0.643,
+            "width_constraint_active": false,
+            "head_top_y_px": 0,
+            "center_x_px": 540,
+            "knees_visible": true,
+            "ankles_visible": true,
+            "post_scale_sharpness": 286.1,
+            "width_note": "身高约束优先（保全完整人体），宽占比 0.40 未达目标 0.75（纪要'尽力居中'语义）"
+          },
+          "description": "严格正面立姿 @121.0s, 人像宽占比 0.40 (目标 0.75), 偏航 0.91°, 放大后清晰度 286.1",
+          "source_file": "C:\\Users\\ePanda\\Desktop\\project-3\\20261023143415_20261023143613.mp4"
+        },
+        "chosen_clips": [
+          {
+            "id": "c01_hook",
+            "candidate_id": "c_20261023141614_20261023141937__1_001",
+            "st": 0.0,
+            "end": 6.96,
+            "dur": 6.96,
+            "is_hook": true,
+            "zoom": 1.0,
+            "y_anchor": 0.35,
+            "effect": "none",
+            "category": "hook",
+            "desc": "所以这件毛衣姐妹们我们整身的话给大家做的是稍微就…",
+            "full_text": "所以这件毛衣姐妹们我们整身的话给大家做的是稍微就是加硬是一点点",
+            "text": "所以这件毛衣姐妹们我们整身的话给大家做的是稍微就是加硬是一点点",
+            "source_file": "C:\\Users\\ePanda\\Desktop\\project-3\\20261023141614_20261023141937 (1).mp4",
+            "source_id": "20261023141614_20261023141937__1",
+            "source_tag": "20261023141614_20261023141937__1",
+            "duration_in_range": true,
+            "sticker_text": "开场精选",
+            "product_relation": "SAME_SKU",
+            "relation_confidence": 0.7,
+            "evidence_refs": [
+              "f_20261023141614_20261023141937__1_3480",
+              "c_20261023141614_20261023141937__1_001_mid.jpg"
+            ],
+            "risks": [],
+            "matched_selling_points": [],
+            "body_h": 0.5454,
+            "span": 0.6716,
+            "shoulder_w": 0.3641,
+            "face_area": 0.0277,
+            "fabric_block": 0.374,
+            "wrist_motion": 0.0922,
+            "torso_motion": 0.0339,
+            "ankles_in_frame": false,
+            "framing": "partial",
+            "sticker_side": "right",
+            "sticker_y": 300,
+            "_audio_gain_match": true
+          },
+          {
+            "id": "c02_fit",
+            "candidate_id": "c_20261023143415_20261023143613_136",
+            "st": 57.92,
+            "end": 63.6,
+            "dur": 5.68,
+            "is_hook": false,
+            "zoom": 1.0,
+            "y_anchor": 0.35,
+            "effect": "hflip",
+            "category": "fit",
+            "desc": "你所有肩线不好看的你想高级感的我给你讲大吧经常穿…",
+            "full_text": "你所有肩线不好看的你想高级感的我给你讲大吧经常穿打底",
+            "text": "你所有肩线不好看的你想高级感的我给你讲大吧经常穿打底",
+            "source_file": "C:\\Users\\ePanda\\Desktop\\project-3\\20261023143415_20261023143613.mp4",
+            "source_id": "20261023143415_20261023143613",
+            "source_tag": "20261023143415_20261023143613",
+            "duration_in_range": true,
+            "sticker_text": "版型细节",
+            "product_relation": "SAME_SKU",
+            "relation_confidence": 0.9,
+            "evidence_refs": [
+              "f_20261023143415_20261023143613_60760",
+              "c_20261023143415_20261023143613_136_mid.jpg"
+            ],
+            "risks": [],
+            "matched_selling_points": [],
+            "effect_reason": "打破连续分镜的站位单一感（SKILL 2.1）",
+            "body_h": 0.5916,
+            "span": 0.7464,
+            "shoulder_w": 0.3389,
+            "face_area": 0.0215,
+            "fabric_block": 0.2859,
+            "wrist_motion": 0.0806,
+            "torso_motion": 0.0273,
+            "ankles_in_frame": false,
+            "framing": "partial",
+            "sticker_side": "right",
+            "sticker_y": 300,
+            "_audio_gain_match": true
+          },
+          {
+            "id": "c03_fit",
+            "candidate_id": "c_20261023141614_20261023141937__1_195",
+            "st": 110.52,
+            "end": 114.96,
+            "dur": 4.44,
+            "is_hook": false,
+            "zoom": 1.0,
+            "y_anchor": 0.35,
+            "effect": "none",
+            "category": "fit",
+            "desc": "巨好穿巨好搭配它整个的版型我们调了三次",
+            "full_text": "巨好穿巨好搭配它整个的版型我们调了三次",
+            "text": "巨好穿巨好搭配它整个的版型我们调了三次",
+            "source_file": "C:\\Users\\ePanda\\Desktop\\project-3\\20261023141614_20261023141937 (1).mp4",
+            "source_id": "20261023141614_20261023141937__1",
+            "source_tag": "20261023141614_20261023141937__1",
+            "duration_in_range": true,
+            "sticker_text": "版型细节",
+            "product_relation": "SAME_SKU",
+            "relation_confidence": 0.7,
+            "evidence_refs": [
+              "f_20261023141614_20261023141937__1_112740",
+              "c_20261023141614_20261023141937__1_195_mid.jpg"
+            ],
+            "risks": [],
+            "matched_selling_points": [],
+            "body_h": 0.4266,
+            "span": 0.4946,
+            "shoulder_w": 0.1714,
+            "face_area": 0.0048,
+            "fabric_block": 0.524,
+            "wrist_motion": 0.0499,
+            "torso_motion": 0.0064,
+            "ankles_in_frame": true,
+            "framing": "full_body",
+            "sticker_side": "right",
+            "sticker_y": 300
+          },
+          {
+            "id": "c04_fit",
+            "candidate_id": "c_20261023141614_20261023141937__1_004",
+            "st": 10.76,
+            "end": 13.0,
+            "dur": 2.24,
+            "is_hook": false,
+            "zoom": 1.0,
+            "y_anchor": 0.35,
+            "effect": "none",
+            "category": "fit",
+            "desc": "然后毛衣两个颜色都是黑色",
+            "full_text": "然后毛衣两个颜色都是黑色",
+            "text": "然后毛衣两个颜色都是黑色",
+            "source_file": "C:\\Users\\ePanda\\Desktop\\project-3\\20261023141614_20261023141937 (1).mp4",
+            "source_id": "20261023141614_20261023141937__1",
+            "source_tag": "20261023141614_20261023141937__1",
+            "duration_in_range": true,
+            "sticker_text": "版型细节",
+            "product_relation": "SAME_SKU",
+            "relation_confidence": 0.7,
+            "evidence_refs": [
+              "f_20261023141614_20261023141937__1_11880",
+              "c_20261023141614_20261023141937__1_004_mid.jpg"
+            ],
+            "risks": [
+              "SHORT_DURATION"
+            ],
+            "matched_selling_points": [],
+            "body_h": 0.6406,
+            "span": 0.7902,
+            "shoulder_w": 0.3318,
+            "face_area": 0.0212,
+            "fabric_block": 0.4017,
+            "wrist_motion": 0.2322,
+            "torso_motion": 0.0188,
+            "ankles_in_frame": false,
+            "framing": "partial",
+            "sticker_side": "left",
+            "sticker_y": 300
+          },
+          {
+            "id": "c05_fit",
+            "candidate_id": "c_20261023141614_20261023141937__1_018",
+            "st": 20.28,
+            "end": 23.48,
+            "dur": 3.2,
+            "is_hook": false,
+            "zoom": 1.0,
+            "y_anchor": 0.35,
+            "effect": "none",
+            "category": "fit",
+            "desc": "先去抢毛衣毛衣手批大宝",
+            "full_text": "先去抢毛衣毛衣手批大宝",
+            "text": "先去抢毛衣毛衣手批大宝",
+            "source_file": "C:\\Users\\ePanda\\Desktop\\project-3\\20261023141614_20261023141937 (1).mp4",
+            "source_id": "20261023141614_20261023141937__1",
+            "source_tag": "20261023141614_20261023141937__1",
+            "duration_in_range": true,
+            "sticker_text": "版型细节",
+            "product_relation": "SAME_SKU",
+            "relation_confidence": 0.7,
+            "evidence_refs": [
+              "f_20261023141614_20261023141937__1_21880",
+              "c_20261023141614_20261023141937__1_018_mid.jpg"
+            ],
+            "risks": [],
+            "matched_selling_points": [],
+            "body_h": 0.5755,
+            "span": 0.7188,
+            "shoulder_w": 0.3506,
+            "face_area": 0.0288,
+            "fabric_block": 0.145,
+            "wrist_motion": 0.2463,
+            "torso_motion": 0.0531,
+            "ankles_in_frame": false,
+            "framing": "partial",
+            "sticker_side": "right",
+            "sticker_y": 300
+          },
+          {
+            "id": "c06_fit",
+            "candidate_id": "c_20261023141614_20261023141937__1_228",
+            "st": 132.92,
+            "end": 138.12,
+            "dur": 5.2,
+            "is_hook": false,
+            "zoom": 1.0,
+            "y_anchor": 0.35,
+            "effect": "none",
+            "category": "fit",
+            "desc": "冬天就是冬天下雪天的时候山都这样会穿的对后面好暖…",
+            "full_text": "冬天就是冬天下雪天的时候山都这样会穿的对后面好暖这叫护子整个的版型",
+            "text": "冬天就是冬天下雪天的时候山都这样会穿的对后面好暖这叫护子整个的版型",
+            "source_file": "C:\\Users\\ePanda\\Desktop\\project-3\\20261023141614_20261023141937 (1).mp4",
+            "source_id": "20261023141614_20261023141937__1",
+            "source_tag": "20261023141614_20261023141937__1",
+            "duration_in_range": true,
+            "sticker_text": "版型细节",
+            "product_relation": "SAME_SKU",
+            "relation_confidence": 0.7,
+            "evidence_refs": [
+              "f_20261023141614_20261023141937__1_135520",
+              "c_20261023141614_20261023141937__1_228_mid.jpg"
+            ],
+            "risks": [],
+            "matched_selling_points": [],
+            "body_h": 0.4234,
+            "span": 0.4947,
+            "shoulder_w": 0.1728,
+            "face_area": 0.0049,
+            "fabric_block": 0.5065,
+            "wrist_motion": 0.1954,
+            "torso_motion": 0.0301,
+            "ankles_in_frame": true,
+            "framing": "full_body",
+            "sticker_side": "right",
+            "sticker_y": 300
+          },
+          {
+            "id": "c07_fit",
+            "candidate_id": "c_20261023141614_20261023141937__1_027",
+            "st": 27.44,
+            "end": 29.92,
+            "dur": 2.48,
+            "is_hook": false,
+            "zoom": 1.0,
+            "y_anchor": 0.35,
+            "effect": "none",
+            "category": "fit",
+            "desc": "要毛衣的大宝全凭抠衣药宝宝",
+            "full_text": "要毛衣的大宝全凭抠衣药宝宝",
+            "text": "要毛衣的大宝全凭抠衣药宝宝",
+            "source_file": "C:\\Users\\ePanda\\Desktop\\project-3\\20261023141614_20261023141937 (1).mp4",
+            "source_id": "20261023141614_20261023141937__1",
+            "source_tag": "20261023141614_20261023141937__1",
+            "duration_in_range": true,
+            "sticker_text": "版型细节",
+            "product_relation": "SAME_SKU",
+            "relation_confidence": 0.7,
+            "evidence_refs": [
+              "f_20261023141614_20261023141937__1_28680",
+              "c_20261023141614_20261023141937__1_027_mid.jpg"
+            ],
+            "risks": [
+              "SHORT_DURATION"
+            ],
+            "matched_selling_points": [],
+            "body_h": 0.7868,
+            "span": 0.921,
+            "shoulder_w": 0.3859,
+            "face_area": 0.0501,
+            "fabric_block": 0.1707,
+            "wrist_motion": 0.1462,
+            "torso_motion": 0.0304,
+            "ankles_in_frame": false,
+            "framing": "partial",
+            "sticker_side": "right",
+            "sticker_y": 300,
+            "_audio_gain_match": true
+          },
+          {
+            "id": "c08_fit",
+            "candidate_id": "c_20261023143205_20261023143415_039",
+            "st": 14.64,
+            "end": 20.32,
+            "dur": 5.68,
+            "is_hook": false,
+            "zoom": 1.0,
+            "y_anchor": 0.35,
+            "effect": "none",
+            "category": "fit",
+            "desc": "又遮肉又给你有小腰身小妈腰的感觉一字尖的毛衣鲜窝…",
+            "full_text": "又遮肉又给你有小腰身小妈腰的感觉一字尖的毛衣鲜窝再上准备一下",
+            "text": "又遮肉又给你有小腰身小妈腰的感觉一字尖的毛衣鲜窝再上准备一下",
+            "source_file": "C:\\Users\\ePanda\\Desktop\\project-3\\20261023143205_20261023143415.mp4",
+            "source_id": "20261023143205_20261023143415",
+            "source_tag": "20261023143205_20261023143415",
+            "duration_in_range": true,
+            "sticker_text": "遮肉版型",
+            "product_relation": "SAME_SKU",
+            "relation_confidence": 0.7,
+            "evidence_refs": [
+              "f_20261023143205_20261023143415_17480",
+              "c_20261023143205_20261023143415_039_mid.jpg"
+            ],
+            "risks": [],
+            "matched_selling_points": [],
+            "body_h": 0.4162,
+            "span": 0.4978,
+            "shoulder_w": 0.1707,
+            "face_area": 0.0059,
+            "fabric_block": 0.4463,
+            "wrist_motion": 0.1085,
+            "torso_motion": 0.0327,
+            "ankles_in_frame": false,
+            "framing": "partial",
+            "sticker_side": "right",
+            "sticker_y": 300,
+            "_audio_gain_match": true
+          },
+          {
+            "id": "c09_fit",
+            "candidate_id": "c_20261023141614_20261023141937__1_031",
+            "st": 29.92,
+            "end": 31.72,
+            "dur": 1.8,
+            "is_hook": false,
+            "zoom": 1.0,
+            "y_anchor": 0.35,
+            "effect": "none",
+            "category": "fit",
+            "desc": "毛衣扣小衣宝贝",
+            "full_text": "毛衣扣小衣宝贝",
+            "text": "毛衣扣小衣宝贝",
+            "source_file": "C:\\Users\\ePanda\\Desktop\\project-3\\20261023141614_20261023141937 (1).mp4",
+            "source_id": "20261023141614_20261023141937__1",
+            "source_tag": "20261023141614_20261023141937__1",
+            "duration_in_range": true,
+            "sticker_text": "版型细节",
+            "product_relation": "SAME_SKU",
+            "relation_confidence": 0.7,
+            "evidence_refs": [
+              "f_20261023141614_20261023141937__1_30820",
+              "c_20261023141614_20261023141937__1_031_mid.jpg"
+            ],
+            "risks": [
+              "SHORT_DURATION"
+            ],
+            "matched_selling_points": [],
+            "body_h": 0.8236,
+            "span": 0.9852,
+            "shoulder_w": 0.413,
+            "face_area": 0.0572,
+            "fabric_block": 0.1828,
+            "wrist_motion": 0.0737,
+            "torso_motion": 0.0517,
+            "ankles_in_frame": false,
+            "framing": "partial",
+            "sticker_side": "right",
+            "sticker_y": 300,
+            "_audio_gain_match": true
+          },
+          {
+            "id": "c10_fit",
+            "candidate_id": "c_20261023143205_20261023143415_077",
+            "st": 41.32,
+            "end": 48.44,
+            "dur": 7.12,
+            "is_hook": false,
+            "zoom": 1.0,
+            "y_anchor": 0.35,
+            "effect": "none",
+            "category": "fit",
+            "desc": "全部是连接一线成一一线成一所以说我们的工艺我们的…",
+            "full_text": "全部是连接一线成一一线成一所以说我们的工艺我们的版型",
+            "text": "全部是连接一线成一一线成一所以说我们的工艺我们的版型",
+            "source_file": "C:\\Users\\ePanda\\Desktop\\project-3\\20261023143205_20261023143415.mp4",
+            "source_id": "20261023143205_20261023143415",
+            "source_tag": "20261023143205_20261023143415",
+            "duration_in_range": true,
+            "sticker_text": "版型细节",
+            "product_relation": "SAME_SKU",
+            "relation_confidence": 0.7,
+            "evidence_refs": [
+              "f_20261023143205_20261023143415_44880",
+              "c_20261023143205_20261023143415_077_mid.jpg"
+            ],
+            "risks": [],
+            "matched_selling_points": [],
+            "body_h": 0.7088,
+            "span": 0.8584,
+            "shoulder_w": 0.4076,
+            "face_area": 0.0328,
+            "fabric_block": 0.1827,
+            "wrist_motion": 0.2073,
+            "torso_motion": 0.0502,
+            "ankles_in_frame": false,
+            "framing": "partial",
+            "sticker_side": "right",
+            "sticker_y": 300,
+            "_audio_gain_match": true
+          },
+          {
+            "id": "c11_styling",
+            "candidate_id": "c_20261023141614_20261023141937__1_042",
+            "st": 31.72,
+            "end": 38.72,
+            "dur": 7.0,
+            "is_hook": false,
+            "zoom": 1.0,
+            "y_anchor": 0.35,
+            "effect": "none",
+            "category": "styling",
+            "desc": "你们再直播先播想要毛衣扣小衣宝宝想要毛衣扣小衣要…",
+            "full_text": "你们再直播先播想要毛衣扣小衣宝宝想要毛衣扣小衣要毛衣的姐妹们全名扣衣",
+            "text": "你们再直播先播想要毛衣扣小衣宝宝想要毛衣扣小衣要毛衣的姐妹们全名扣衣",
+            "source_file": "C:\\Users\\ePanda\\Desktop\\project-3\\20261023141614_20261023141937 (1).mp4",
+            "source_id": "20261023141614_20261023141937__1",
+            "source_tag": "20261023141614_20261023141937__1",
+            "duration_in_range": true,
+            "sticker_text": "穿搭展示",
+            "product_relation": "SAME_SKU",
+            "relation_confidence": 0.7,
+            "evidence_refs": [
+              "f_20261023141614_20261023141937__1_35220",
+              "c_20261023141614_20261023141937__1_042_mid.jpg"
+            ],
+            "risks": [],
+            "matched_selling_points": [],
+            "body_h": 0.6025,
+            "span": 0.7191,
+            "shoulder_w": 0.3208,
+            "face_area": 0.0247,
+            "fabric_block": 0.1914,
+            "wrist_motion": 0.2901,
+            "torso_motion": 0.0824,
+            "ankles_in_frame": false,
+            "framing": "partial",
+            "sticker_side": "right",
+            "sticker_y": 300
+          },
+          {
+            "id": "c12_fit",
+            "candidate_id": "c_20261023141614_20261023141937__1_057",
+            "st": 38.72,
+            "end": 44.72,
+            "dur": 6.0,
+            "is_hook": false,
+            "zoom": 1.0,
+            "y_anchor": 0.35,
+            "effect": "none",
+            "category": "fit",
+            "desc": "我要加鲜货了来不等了准备一下来一号令一街全家鲜货…",
+            "full_text": "我要加鲜货了来不等了准备一下来一号令一街全家鲜货鲜货卖完前面毛衣布补",
+            "text": "我要加鲜货了来不等了准备一下来一号令一街全家鲜货鲜货卖完前面毛衣布补",
+            "source_file": "C:\\Users\\ePanda\\Desktop\\project-3\\20261023141614_20261023141937 (1).mp4",
+            "source_id": "20261023141614_20261023141937__1",
+            "source_tag": "20261023141614_20261023141937__1",
+            "duration_in_range": true,
+            "sticker_text": "版型细节",
+            "product_relation": "SAME_SKU",
+            "relation_confidence": 0.7,
+            "evidence_refs": [
+              "f_20261023141614_20261023141937__1_41720",
+              "c_20261023141614_20261023141937__1_057_mid.jpg"
+            ],
+            "risks": [],
+            "matched_selling_points": [],
+            "body_h": 0.4817,
+            "span": 0.5645,
+            "shoulder_w": 0.1973,
+            "face_area": 0.0101,
+            "fabric_block": 0.3062,
+            "wrist_motion": 0.2534,
+            "torso_motion": 0.0947,
+            "ankles_in_frame": false,
+            "framing": "partial",
+            "sticker_side": "right",
+            "sticker_y": 300
+          },
+          {
+            "id": "c13_styling",
+            "candidate_id": "c_20261023141614_20261023141937__1_096",
+            "st": 50.92,
+            "end": 53.12,
+            "dur": 2.2,
+            "is_hook": false,
+            "zoom": 1.0,
+            "y_anchor": 0.35,
+            "effect": "none",
+            "category": "styling",
+            "desc": "宝贝正拍毛衣姐妹们",
+            "full_text": "宝贝正拍毛衣姐妹们",
+            "text": "宝贝正拍毛衣姐妹们",
+            "source_file": "C:\\Users\\ePanda\\Desktop\\project-3\\20261023141614_20261023141937 (1).mp4",
+            "source_id": "20261023141614_20261023141937__1",
+            "source_tag": "20261023141614_20261023141937__1",
+            "duration_in_range": true,
+            "sticker_text": "穿搭展示",
+            "product_relation": "SAME_SKU",
+            "relation_confidence": 0.7,
+            "evidence_refs": [
+              "f_20261023141614_20261023141937__1_52020",
+              "c_20261023141614_20261023141937__1_096_mid.jpg"
+            ],
+            "risks": [
+              "SHORT_DURATION"
+            ],
+            "matched_selling_points": [],
+            "body_h": 0.7641,
+            "span": 0.9436,
+            "shoulder_w": 0.3874,
+            "face_area": 0.05,
+            "fabric_block": 0.0636,
+            "wrist_motion": 0.1793,
+            "torso_motion": 0.033,
+            "ankles_in_frame": false,
+            "framing": "partial",
+            "sticker_side": "right",
+            "sticker_y": 300
+          },
+          {
+            "id": "c14_fit",
+            "candidate_id": "c_20261023141614_20261023141937__1_131",
+            "st": 73.12,
+            "end": 75.32,
+            "dur": 2.2,
+            "is_hook": false,
+            "zoom": 1.0,
+            "y_anchor": 0.35,
+            "effect": "none",
+            "category": "fit",
+            "desc": "高级然后有简单的感觉是的",
+            "full_text": "高级然后有简单的感觉是的",
+            "text": "高级然后有简单的感觉是的",
+            "source_file": "C:\\Users\\ePanda\\Desktop\\project-3\\20261023141614_20261023141937 (1).mp4",
+            "source_id": "20261023141614_20261023141937__1",
+            "source_tag": "20261023141614_20261023141937__1",
+            "duration_in_range": true,
+            "sticker_text": "版型细节",
+            "product_relation": "SAME_SKU",
+            "relation_confidence": 0.7,
+            "evidence_refs": [
+              "f_20261023141614_20261023141937__1_74220",
+              "c_20261023141614_20261023141937__1_131_mid.jpg"
+            ],
+            "risks": [
+              "SHORT_DURATION"
+            ],
+            "matched_selling_points": [],
+            "body_h": 0.6303,
+            "span": 0.7376,
+            "shoulder_w": 0.3288,
+            "face_area": 0.0211,
+            "fabric_block": 0.4099,
+            "wrist_motion": 0.1289,
+            "torso_motion": 0.0985,
+            "ankles_in_frame": false,
+            "framing": "partial",
+            "sticker_side": "left",
+            "sticker_y": 300
+          },
+          {
+            "id": "c15_decision_closing",
+            "candidate_id": "c_20261023141614_20261023141937__1_127",
+            "st": 70.72,
+            "end": 73.12,
+            "dur": 2.4,
+            "is_hook": false,
+            "zoom": 1.0,
+            "y_anchor": 0.35,
+            "effect": "none",
+            "category": "decision_closing",
+            "desc": "因为我们这一套的颜色它都是这种的高级",
+            "full_text": "因为我们这一套的颜色它都是这种的高级",
+            "text": "因为我们这一套的颜色它都是这种的高级",
+            "source_file": "C:\\Users\\ePanda\\Desktop\\project-3\\20261023141614_20261023141937 (1).mp4",
+            "source_id": "20261023141614_20261023141937__1",
+            "source_tag": "20261023141614_20261023141937__1",
+            "duration_in_range": true,
+            "sticker_text": "品质保障",
+            "product_relation": "SAME_SKU",
+            "relation_confidence": 0.7,
+            "evidence_refs": [
+              "f_20261023141614_20261023141937__1_71920",
+              "c_20261023141614_20261023141937__1_127_mid.jpg"
+            ],
+            "risks": [
+              "SHORT_DURATION"
+            ],
+            "matched_selling_points": [],
+            "body_h": 0.6622,
+            "span": 0.792,
+            "shoulder_w": 0.3144,
+            "face_area": 0.0179,
+            "fabric_block": 0.399,
+            "wrist_motion": 0.1256,
+            "torso_motion": 0.0123,
+            "ankles_in_frame": false,
+            "framing": "partial",
+            "sticker_side": "right",
+            "sticker_y": 300
+          }
+        ],
+        "selection_meta": {
+          "generator": "v3_agent_director",
+          "proposal_id": "p_balanced",
+          "style": "balanced",
+          "total_duration": 64.6,
+          "selling_points": []
+        },
+        "scene_cuts": [
+          105.28
+        ],
+        "gateway_decisions": [
+          {
+            "decision": "cover_selection",
+            "accepted": false,
+            "forced": false,
+            "reasons": [
+              "候选 cand_01_143613 被拒绝: 宽占比 0.341 超出 WARN 区间 [0.36, 0.85]（水平 1:6:1）"
+            ],
+            "metrics_snapshot": {
+              "id": "cand_01_143613",
+              "timestamp": 50.5,
+              "frontal_score": 68.2,
+              "face": {
+                "face_detected": true,
+                "detect_source": "pose_roi",
+                "yaw_deg": 1.42,
+                "pitch_deg": 7.98,
+                "ear": 0.345,
+                "mar": 0.226,
+                "face_sharpness": 292.3,
+                "face_area_ratio": 0.0052,
+                "face_bbox_norm": [
+                  0.4261,
+                  0.414,
+                  0.5158,
+                  0.4721
+                ],
+                "face_top_y": 0.414
+              },
+              "framing": {
+                "scale": 1.035,
+                "bg_scale": 1.035,
+                "full_bleed": true,
+                "y_offset_px": 0,
+                "framing_policy": "example",
+                "person_width_px_src": 356.0,
+                "achieved_width_px": 368.5,
+                "achieved_width_ratio": 0.3412,
+                "achieved_height_ratio": 0.625,
+                "width_constraint_active": false,
+                "head_top_y_px": 0,
+                "center_x_px": 540,
+                "knees_visible": true,
+                "ankles_visible": true,
+                "post_scale_sharpness": 466.9,
+                "width_note": "身高约束优先（保全完整人体），宽占比 0.34 未达目标 0.75（纪要'尽力居中'语义）"
+              },
+              "background_text_ratio": 0.0
+            },
+            "timestamp": "2026-11-21 04:24:59"
+          },
+          {
+            "decision": "cover_selection",
+            "accepted": true,
+            "forced": false,
+            "reasons": [
+              "候选 cand_02_143613 通过约束校验（分数 58.7）"
+            ],
+            "metrics_snapshot": {
+              "id": "cand_02_143613",
+              "timestamp": 121.0,
+              "frontal_score": 58.7,
+              "face": {
+                "face_detected": true,
+                "detect_source": "pose_roi",
+                "yaw_deg": 0.91,
+                "pitch_deg": 3.04,
+                "ear": 0.331,
+                "mar": 0.082,
+                "face_sharpness": 481.9,
+                "face_area_ratio": 0.0047,
+                "face_bbox_norm": [
+                  0.3917,
+                  0.4125,
+                  0.4802,
+                  0.4658
+                ],
+                "face_top_y": 0.4125
+              },
+              "framing": {
+                "scale": 0.972,
+                "bg_scale": 1.0,
+                "full_bleed": true,
+                "y_offset_px": 0,
+                "framing_policy": "example",
+                "person_width_px_src": 449.0,
+                "achieved_width_px": 436.4,
+                "achieved_width_ratio": 0.4041,
+                "achieved_height_ratio": 0.643,
+                "width_constraint_active": false,
+                "head_top_y_px": 0,
+                "center_x_px": 540,
+                "knees_visible": true,
+                "ankles_visible": true,
+                "post_scale_sharpness": 286.1,
+                "width_note": "身高约束优先（保全完整人体），宽占比 0.40 未达目标 0.75（纪要'尽力居中'语义）"
+              },
+              "background_text_ratio": 0.00023
+            },
+            "timestamp": "2026-11-21 04:24:59"
+          },
+          {
+            "decision": "plan_selection",
+            "accepted": true,
+            "forced": false,
+            "reasons": [
+              "分镜计划通过约束校验（v3_agent_director）",
+              "漏斗配额 WARN: ['类目 fabric 时长 0.0s 低于配额下限 8.0s', '类目 craft_detail 时长 0.0s 低于配额下限 8.0s', '类目 styling 时长 9.2s 低于配额下限 15.0s', '类目 decision_closing 时长 2.4s 低于配额下限 6.0s']"
+            ],
+            "metrics_snapshot": {
+              "source": "v3_agent_director",
+              "clip_count": 15,
+              "total_expected_duration": 64.6,
+              "funnel_warnings": [
+                "类目 fabric 时长 0.0s 低于配额下限 8.0s",
+                "类目 craft_detail 时长 0.0s 低于配额下限 8.0s",
+                "类目 styling 时长 9.2s 低于配额下限 15.0s",
+                "类目 decision_closing 时长 2.4s 低于配额下限 6.0s"
+              ],
+              "clips": [
+                {
+                  "id": "c01_hook",
+                  "category": "hook",
+                  "st": 0.0,
+                  "end": 6.96,
+                  "dur": 6.96
+                },
+                {
+                  "id": "c02_fit",
+                  "category": "fit",
+                  "st": 57.92,
+                  "end": 63.6,
+                  "dur": 5.68
+                },
+                {
+                  "id": "c03_fit",
+                  "category": "fit",
+                  "st": 110.52,
+                  "end": 114.96,
+                  "dur": 4.44
+                },
+                {
+                  "id": "c04_fit",
+                  "category": "fit",
+                  "st": 10.76,
+                  "end": 13.0,
+                  "dur": 2.24
+                },
+                {
+                  "id": "c05_fit",
+                  "category": "fit",
+                  "st": 20.28,
+                  "end": 23.48,
+                  "dur": 3.2
+                },
+                {
+                  "id": "c06_fit",
+                  "category": "fit",
+                  "st": 132.92,
+                  "end": 138.12,
+                  "dur": 5.2
+                },
+                {
+                  "id": "c07_fit",
+                  "category": "fit",
+                  "st": 27.44,
+                  "end": 29.92,
+                  "dur": 2.48
+                },
+                {
+                  "id": "c08_fit",
+                  "category": "fit",
+                  "st": 14.64,
+                  "end": 20.32,
+                  "dur": 5.68
+                },
+                {
+                  "id": "c09_fit",
+                  "category": "fit",
+                  "st": 29.92,
+                  "end": 31.72,
+                  "dur": 1.8
+                },
+                {
+                  "id": "c10_fit",
+                  "category": "fit",
+                  "st": 41.32,
+                  "end": 48.44,
+                  "dur": 7.12
+                },
+                {
+                  "id": "c11_styling",
+                  "category": "styling",
+                  "st": 31.72,
+                  "end": 38.72,
+                  "dur": 7.0
+                },
+                {
+                  "id": "c12_fit",
+                  "category": "fit",
+                  "st": 38.72,
+                  "end": 44.72,
+                  "dur": 6.0
+                },
+                {
+                  "id": "c13_styling",
+                  "category": "styling",
+                  "st": 50.92,
+                  "end": 53.12,
+                  "dur": 2.2
+                },
+                {
+                  "id": "c14_fit",
+                  "category": "fit",
+                  "st": 73.12,
+                  "end": 75.32,
+                  "dur": 2.2
+                },
+                {
+                  "id": "c15_decision_closing",
+                  "category": "decision_closing",
+                  "st": 70.72,
+                  "end": 73.12,
+                  "dur": 2.4
+                }
+              ]
+            },
+            "timestamp": "2026-11-21 04:28:20"
+          },
+          {
+            "decision": "hook_card_avoidance",
+            "accepted": false,
+            "forced": false,
+            "reasons": [
+              "避让结果不合格(['Hook 卡 y=464 超出 150~430 区间'])，回退默认 y=280"
+            ],
+            "metrics_snapshot": {
+              "y": 280
+            },
+            "timestamp": "2026-11-21 04:28:26"
+          }
+        ],
+        "qc_passed": true,
+        "qc_warnings": [
+          "封面宽占比复测: 宽占比 0.404 未达目标 0.75（示例版式为底部名称区预留空间 + 保全完整人体，纪要'尽力居中'语义，WARN 不拦截）",
+          "切片转场复测: 未应用转场（切片数 15 < 2 时允许硬切）"
+        ],
+        "total_duration": 64.938,
+        "consistency_check": {
+          "passed": true,
+          "enforce_level": "WARN",
+          "checks": [
+            {
+              "id": "C1",
+              "name": "规范关键词覆盖率",
+              "level": "WARN",
+              "status": "PASS",
+              "measured": 0.571,
+              "threshold": 0.34,
+              "detail": "4/7 命中: 羊毛, 混纺, 高级感, 显瘦"
+            },
+            {
+              "id": "C2",
+              "name": "商品名词覆盖率",
+              "level": "WARN",
+              "status": "PASS",
+              "measured": 1.0,
+              "threshold": 0.5,
+              "detail": "1/1 命中: 羊毛"
+            },
+            {
+              "id": "C4",
+              "name": "违规词扫描（ASR 台词）",
+              "level": "INFO",
+              "status": "INFO",
+              "measured": 3,
+              "threshold": 0,
+              "detail": "命中 3 处，将三通道处理"
+            }
+          ],
+          "warnings": [],
+          "summary": {
+            "n_checks": 3,
+            "n_warnings": 0
+          }
+        },
+        "dialogue_script_stats": {
+          "n_sources": 3,
+          "n_utterances": 4,
+          "n_complete_utterances": 0,
+          "complete_ratio": 0.0,
+          "n_violation_utterances": 2,
+          "total_dur_sec": 10.7
+        },
+        "continuity_review": {
+          "schema_version": "3.0",
+          "seams": [
+            {
+              "seam_id": "seam_001",
+              "left_candidate_id": "c_20261023141614_20261023141937__1_001",
+              "right_candidate_id": "c_20261023143415_20261023143613_136",
+              "severity": "WARN",
+              "issue_codes": [
+                "AUDIO_JUMP"
+              ],
+              "evidence_refs": [
+                "跨源音底切换: 20261023141614_20261023141937__1 → 20261023143415_20261023143613"
+              ],
+              "suggested_action": "GAIN_MATCH",
+              "suggested_time_shift_ms": 0,
+              "verified_media_types": [
+                "TEXT",
+                "AUDIO",
+                "VIDEO"
+              ],
+              "notes": "跨源音频底噪变化，需电平匹配与微淡变"
+            },
+            {
+              "seam_id": "seam_002",
+              "left_candidate_id": "c_20261023143415_20261023143613_136",
+              "right_candidate_id": "c_20261023141614_20261023141937__1_195",
+              "severity": "WARN",
+              "issue_codes": [
+                "AUDIO_JUMP"
+              ],
+              "evidence_refs": [
+                "跨源音底切换: 20261023143415_20261023143613 → 20261023141614_20261023141937__1"
+              ],
+              "suggested_action": "GAIN_MATCH",
+              "suggested_time_shift_ms": 0,
+              "verified_media_types": [
+                "TEXT",
+                "AUDIO",
+                "VIDEO"
+              ],
+              "notes": "跨源音频底噪变化，需电平匹配与微淡变"
+            },
+            {
+              "seam_id": "seam_003",
+              "left_candidate_id": "c_20261023141614_20261023141937__1_195",
+              "right_candidate_id": "c_20261023141614_20261023141937__1_004",
+              "severity": "PASS",
+              "issue_codes": [],
+              "evidence_refs": [],
+              "suggested_action": "NONE",
+              "suggested_time_shift_ms": 0,
+              "verified_media_types": [
+                "TEXT",
+                "AUDIO",
+                "VIDEO"
+              ],
+              "notes": "接缝平滑"
+            },
+            {
+              "seam_id": "seam_004",
+              "left_candidate_id": "c_20261023141614_20261023141937__1_004",
+              "right_candidate_id": "c_20261023141614_20261023141937__1_018",
+              "severity": "PASS",
+              "issue_codes": [],
+              "evidence_refs": [],
+              "suggested_action": "NONE",
+              "suggested_time_shift_ms": 0,
+              "verified_media_types": [
+                "TEXT",
+                "AUDIO",
+                "VIDEO"
+              ],
+              "notes": "接缝平滑"
+            },
+            {
+              "seam_id": "seam_005",
+              "left_candidate_id": "c_20261023141614_20261023141937__1_018",
+              "right_candidate_id": "c_20261023141614_20261023141937__1_228",
+              "severity": "PASS",
+              "issue_codes": [],
+              "evidence_refs": [],
+              "suggested_action": "NONE",
+              "suggested_time_shift_ms": 0,
+              "verified_media_types": [
+                "TEXT",
+                "AUDIO",
+                "VIDEO"
+              ],
+              "notes": "接缝平滑"
+            },
+            {
+              "seam_id": "seam_006",
+              "left_candidate_id": "c_20261023141614_20261023141937__1_228",
+              "right_candidate_id": "c_20261023141614_20261023141937__1_027",
+              "severity": "PASS",
+              "issue_codes": [],
+              "evidence_refs": [],
+              "suggested_action": "NONE",
+              "suggested_time_shift_ms": 0,
+              "verified_media_types": [
+                "TEXT",
+                "AUDIO",
+                "VIDEO"
+              ],
+              "notes": "接缝平滑"
+            },
+            {
+              "seam_id": "seam_007",
+              "left_candidate_id": "c_20261023141614_20261023141937__1_027",
+              "right_candidate_id": "c_20261023143205_20261023143415_039",
+              "severity": "WARN",
+              "issue_codes": [
+                "AUDIO_JUMP"
+              ],
+              "evidence_refs": [
+                "跨源音底切换: 20261023141614_20261023141937__1 → 20261023143205_20261023143415"
+              ],
+              "suggested_action": "GAIN_MATCH",
+              "suggested_time_shift_ms": 0,
+              "verified_media_types": [
+                "TEXT",
+                "AUDIO",
+                "VIDEO"
+              ],
+              "notes": "跨源音频底噪变化，需电平匹配与微淡变"
+            },
+            {
+              "seam_id": "seam_008",
+              "left_candidate_id": "c_20261023143205_20261023143415_039",
+              "right_candidate_id": "c_20261023141614_20261023141937__1_031",
+              "severity": "WARN",
+              "issue_codes": [
+                "AUDIO_JUMP"
+              ],
+              "evidence_refs": [
+                "跨源音底切换: 20261023143205_20261023143415 → 20261023141614_20261023141937__1"
+              ],
+              "suggested_action": "GAIN_MATCH",
+              "suggested_time_shift_ms": 0,
+              "verified_media_types": [
+                "TEXT",
+                "AUDIO",
+                "VIDEO"
+              ],
+              "notes": "跨源音频底噪变化，需电平匹配与微淡变"
+            },
+            {
+              "seam_id": "seam_009",
+              "left_candidate_id": "c_20261023141614_20261023141937__1_031",
+              "right_candidate_id": "c_20261023143205_20261023143415_077",
+              "severity": "WARN",
+              "issue_codes": [
+                "AUDIO_JUMP"
+              ],
+              "evidence_refs": [
+                "跨源音底切换: 20261023141614_20261023141937__1 → 20261023143205_20261023143415"
+              ],
+              "suggested_action": "GAIN_MATCH",
+              "suggested_time_shift_ms": 0,
+              "verified_media_types": [
+                "TEXT",
+                "AUDIO",
+                "VIDEO"
+              ],
+              "notes": "跨源音频底噪变化，需电平匹配与微淡变"
+            },
+            {
+              "seam_id": "seam_010",
+              "left_candidate_id": "c_20261023143205_20261023143415_077",
+              "right_candidate_id": "c_20261023141614_20261023141937__1_042",
+              "severity": "WARN",
+              "issue_codes": [
+                "AUDIO_JUMP"
+              ],
+              "evidence_refs": [
+                "跨源音底切换: 20261023143205_20261023143415 → 20261023141614_20261023141937__1"
+              ],
+              "suggested_action": "GAIN_MATCH",
+              "suggested_time_shift_ms": 0,
+              "verified_media_types": [
+                "TEXT",
+                "AUDIO",
+                "VIDEO"
+              ],
+              "notes": "跨源音频底噪变化，需电平匹配与微淡变"
+            },
+            {
+              "seam_id": "seam_011",
+              "left_candidate_id": "c_20261023141614_20261023141937__1_042",
+              "right_candidate_id": "c_20261023141614_20261023141937__1_057",
+              "severity": "PASS",
+              "issue_codes": [],
+              "evidence_refs": [],
+              "suggested_action": "NONE",
+              "suggested_time_shift_ms": 0,
+              "verified_media_types": [
+                "TEXT",
+                "AUDIO",
+                "VIDEO"
+              ],
+              "notes": "接缝平滑"
+            },
+            {
+              "seam_id": "seam_012",
+              "left_candidate_id": "c_20261023141614_20261023141937__1_057",
+              "right_candidate_id": "c_20261023141614_20261023141937__1_096",
+              "severity": "PASS",
+              "issue_codes": [],
+              "evidence_refs": [],
+              "suggested_action": "NONE",
+              "suggested_time_shift_ms": 0,
+              "verified_media_types": [
+                "TEXT",
+                "AUDIO",
+                "VIDEO"
+              ],
+              "notes": "接缝平滑"
+            },
+            {
+              "seam_id": "seam_013",
+              "left_candidate_id": "c_20261023141614_20261023141937__1_096",
+              "right_candidate_id": "c_20261023141614_20261023141937__1_131",
+              "severity": "PASS",
+              "issue_codes": [],
+              "evidence_refs": [],
+              "suggested_action": "NONE",
+              "suggested_time_shift_ms": 0,
+              "verified_media_types": [
+                "TEXT",
+                "AUDIO",
+                "VIDEO"
+              ],
+              "notes": "接缝平滑"
+            },
+            {
+              "seam_id": "seam_014",
+              "left_candidate_id": "c_20261023141614_20261023141937__1_131",
+              "right_candidate_id": "c_20261023141614_20261023141937__1_127",
+              "severity": "PASS",
+              "issue_codes": [],
+              "evidence_refs": [],
+              "suggested_action": "NONE",
+              "suggested_time_shift_ms": 0,
+              "verified_media_types": [
+                "TEXT",
+                "AUDIO",
+                "VIDEO"
+              ],
+              "notes": "接缝平滑"
+            }
+          ],
+          "summary": "审查 14 个接缝：0 BLOCK / 6 WARN / 8 PASS"
+        },
+        "editorial_qc": {
+          "schema_version": "3.0",
+          "passed": true,
+          "policy": "standard",
+          "block_count": 0,
+          "warn_count": 0,
+          "checks": [
+            {
+              "gate": "ProductIdentityGate",
+              "status": "AUTOMATED_PASS",
+              "detail": "所有片段均确认为主推本品或合规变体/搭配 (共 15 段)",
+              "affected_clips": []
+            },
+            {
+              "gate": "SellingPointEvidenceGate",
+              "status": "AUTOMATED_PASS",
+              "detail": "全部配置卖点均在成片中获得证实: []",
+              "missing_points": []
+            },
+            {
+              "gate": "LanguageIntegrityGate",
+              "status": "AUTOMATED_PASS",
+              "detail": "全部片段均在字词或句末自然气口对齐，无断句",
+              "affected_clips": []
+            },
+            {
+              "gate": "SeamContinuityGate",
+              "status": "AUTOMATED_PASS",
+              "detail": "全部视听接缝审查通过"
+            }
+          ],
+          "summary": "内容层质检: PASS (0 BLOCK / 0 WARN)"
+        },
+        "final_deliverables": {
+          "video": "C:\\Users\\ePanda\\Desktop\\project-3\\output\\run_v31_20261121_041915\\project-3.mp4",
+          "cover": "C:\\Users\\ePanda\\Desktop\\project-3\\output\\run_v31_20261121_041915\\project-3.jpg",
+          "cover_render_meta": "C:\\Users\\ePanda\\Desktop\\project-3\\output\\run_v31_20261121_041915\\project-3_cover_render_meta.json",
+          "qc_report": "C:\\Users\\ePanda\\Desktop\\project-3\\output\\run_v31_20261121_041915\\qc_report.json",
+          "editorial_qc_report": "C:\\Users\\ePanda\\Desktop\\project-3\\output\\run_v31_20261121_041915\\editorial_qc_report.json",
+          "output_dir_video": "C:\\Users\\ePanda\\Desktop\\project-3\\output\\run_v31_20261121_041915\\project-3.mp4",
+          "output_dir_cover": "C:\\Users\\ePanda\\Desktop\\project-3\\output\\run_v31_20261121_041915\\project-3.jpg",
+          "delivery_status": "DELIVERED"
+        }
+      }
+    }
+  }
+}

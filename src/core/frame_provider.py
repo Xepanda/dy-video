@@ -30,7 +30,9 @@ class VideoFrameProvider:
 
     def get_frames_for_candidate(self, cand: Dict[str, Any]) -> List[str]:
         """为指定候选片段抽取 1~2 帧核心关键帧供视觉对比。"""
+        import re
         cid = cand.get("candidate_id", "cand_0")
+        clean_cid = re.sub(r"[^\w\-]", "_", str(cid)).strip("_") or "cand_0"
         src = cand.get("source_id") or cand.get("source_file") or self.default_video
         if not src:
             return []
@@ -46,7 +48,7 @@ class VideoFrameProvider:
         en_ms = cand.get("source_end_ms", st_ms + 3000)
         mid_sec = (st_ms + en_ms) / 2000.0
 
-        out_frame_path = os.path.join(self.frames_dir, f"{cid}_mid.jpg")
+        out_frame_path = os.path.join(self.frames_dir, f"{clean_cid}_mid.jpg")
         if os.path.isfile(out_frame_path) and os.path.getsize(out_frame_path) > 0:
             return [out_frame_path]
 
@@ -59,7 +61,8 @@ class VideoFrameProvider:
             ok, frame = cap.read()
             cap.release()
             if ok and frame is not None:
-                cv2.imwrite(out_frame_path, frame)
+                from src.core.path_resolver import cv2_imwrite
+                cv2_imwrite(out_frame_path, frame)
                 return [out_frame_path]
         except Exception as e:
             print(f"[FRAME-PROVIDER][WARN] 抽帧异常 ({cid}): {e}")

@@ -106,16 +106,27 @@ def test_workdir_with_chinese_and_spaces():
 def test_agy_headless_json_extraction_with_markdown_and_logs():
     """测试 AGY 适配器对带有 Markdown 代码块与前置日志的鲁棒 JSON 提取。"""
     adapter = AgyHeadlessAdapter()
+    adapter.check_availability = lambda: (True, "AGY 可用: 1.5.0")
     raw_output = """
 [INFO] Initializing Google Antigravity Agent...
 [INFO] Model loaded successfully.
 ```json
 {
+  "schema_version": "3.0",
   "status": "PROPOSED",
-  "structured_output": {
-    "proposal_id": "p_01",
-    "selected_clips": ["c1", "c2"]
-  }
+  "evidence_gap": [],
+  "proposals": [
+    {
+      "proposal_id": "p_01",
+      "style": "balanced",
+      "ordered_candidate_ids": ["c1", "c2"],
+      "expected_duration_ms": 50000,
+      "selling_point_coverage": ["面料推荐"],
+      "narrative_rationale": ["结构完整"],
+      "risk_notes": [],
+      "confidence": 0.95
+    }
+  ]
 }
 ```
 Done.
@@ -132,7 +143,7 @@ Done.
         subprocess.run = lambda *args, **kwargs: DummyProc()
         resp = adapter.invoke("prompt", __file__, ".")
         assert resp.is_success is True
-        assert resp.structured_output.get("proposal_id") == "p_01"
+        assert resp.structured_output["proposals"][0]["proposal_id"] == "p_01"
     finally:
         subprocess.run = orig_run
 
@@ -237,10 +248,18 @@ def test_job_runner_three_agent_scenarios():
         mock_adapter_hallucination.invoke.return_value = AgentResponse(
             status=AgentStatus.SUCCESS,
             structured_output={
+                "schema_version": "3.0",
                 "status": "PROPOSED",
+                "evidence_gap": [],
                 "proposals": [{
                     "proposal_id": "p_hallucination",
-                    "ordered_candidate_ids": ["cand_01", "cand_fake_999"]
+                    "style": "balanced",
+                    "ordered_candidate_ids": ["cand_01", "cand_fake_999"],
+                    "expected_duration_ms": 50000,
+                    "selling_point_coverage": [],
+                    "narrative_rationale": [],
+                    "risk_notes": [],
+                    "confidence": 0.9,
                 }]
             }
         )
@@ -255,10 +274,18 @@ def test_job_runner_three_agent_scenarios():
         mock_adapter_success.invoke.return_value = AgentResponse(
             status=AgentStatus.SUCCESS,
             structured_output={
+                "schema_version": "3.0",
                 "status": "PROPOSED",
+                "evidence_gap": [],
                 "proposals": [{
                     "proposal_id": "p_valid",
-                    "ordered_candidate_ids": ["cand_01", "cand_02"]
+                    "style": "balanced",
+                    "ordered_candidate_ids": ["cand_01", "cand_02"],
+                    "expected_duration_ms": 50000,
+                    "selling_point_coverage": [],
+                    "narrative_rationale": [],
+                    "risk_notes": [],
+                    "confidence": 0.95,
                 }]
             }
         )

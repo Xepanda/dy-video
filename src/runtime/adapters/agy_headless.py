@@ -31,40 +31,90 @@ def validate_sequence_proposals_schema(data: Dict[str, Any]) -> Tuple[bool, List
     if not isinstance(data, dict):
         return False, ["响应必须为字典/JSON对象"]
 
-    status = data.get("status")
-    if not status and "proposal_id" in data:
-        status = "PROPOSED"
-        data["status"] = status
+    # 优先尝试使用 jsonschema 库执行权威校验
+    schema_path = os.path.join(PROJECT_ROOT, "contracts", "schemas", "sequence_proposals.schema.json")
+    if os.path.isfile(schema_path):
+        try:
+            import jsonschema
+            with open(schema_path, "r", encoding="utf-8") as sf:
+                schema_def = json.load(sf)
+            validator = jsonschema.Draft202012Validator(schema_def)
+            for err in validator.iter_errors(data):
+                errors.append(f"{err.json_path}: {err.message}")
+            if errors:
+                return False, errors
+            return True, []
+        except ImportError:
+            pass
+        except Exception as e:
+            # jsonschema 校验异常时回退到内建严格校验
+            pass
 
+    # 内建强校验（严格对标 sequence_proposals.schema.json）
+    ver = data.get("schema_version")
+    if ver != "3.0":
+        errors.append(f"schema_version 必须为 '3.0'，当前为: '{ver}'")
+
+    status = data.get("status")
     if status not in ("PROPOSED", "INSUFFICIENT_EVIDENCE"):
         errors.append(f"status 必须为 'PROPOSED' 或 'INSUFFICIENT_EVIDENCE'，当前为: '{status}'")
 
-    if status == "PROPOSED":
-        proposals = data.get("proposals")
-        if proposals is None and "proposal_id" in data:
-            proposals = [data]
-            data["proposals"] = proposals
+    gap = data.get("evidence_gap")
+    if not isinstance(gap, list):
+        errors.append("'evidence_gap' 必须为列表")
+    elif not all(isinstance(g, str) for g in gap):
+        errors.append("'evidence_gap' 中的元素必须全部为字符串")
 
-        if not isinstance(proposals, list) or len(proposals) == 0:
-            errors.append("status 为 PROPOSED 时，proposals 必须为非空列表")
-        else:
-            for idx, p in enumerate(proposals):
-                if not isinstance(p, dict):
-                    errors.append(f"proposals[{idx}] 必须为对象")
-                    continue
-                if not p.get("proposal_id"):
-                    errors.append(f"proposals[{idx}] 缺少必填字段 'proposal_id'")
-                cids = p.get("ordered_candidate_ids") or p.get("selected_clips")
-                if cids is not None and "ordered_candidate_ids" not in p:
-                    p["ordered_candidate_ids"] = cids
-                if not isinstance(cids, list) or len(cids) == 0:
-                    errors.append(f"proposals[{idx}] 的 'ordered_candidate_ids' 必须为非空列表")
-                elif not all(isinstance(c, str) for c in cids):
-                    errors.append(f"proposals[{idx}] 的 'ordered_candidate_ids' 元素必须全为字符串")
-    elif status == "INSUFFICIENT_EVIDENCE":
-        gap = data.get("evidence_gap")
-        if gap is not None and not isinstance(gap, list):
-            errors.append("status 为 INSUFFICIENT_EVIDENCE 时，'evidence_gap' 必须为列表")
+    proposals = data.get("proposals")
+    if not isinstance(proposals, list):
+        errors.append("'proposals' 必须为列表")
+    else:
+        if status == "PROPOSED" and len(proposals) == 0:
+            errors.append("status 为 PROPOSED 时，'proposals' 必须为非空列表")
+
+        for idx, prop in enumerate(proposals):
+            if not isinstance(prop, dict):
+                errors.append(f"proposals[{idx}] 必须为对象")
+                continue
+
+            # 必填字段检查
+            required_keys = [
+                "proposal_id", "style", "ordered_candidate_ids",
+                "expected_duration_ms", "selling_point_coverage",
+                "narrative_rationale", "risk_notes", "confidence"
+            ]
+            for rk in required_keys:
+                if rk not in prop:
+                    errors.append(f"proposals[{idx}] 缺少必填字段 '{rk}'")
+
+            # 字段类型与值域检查
+            if not isinstance(prop.get("proposal_id"), str) or not prop.get("proposal_id"):
+                errors.append(f"proposals[{idx}].proposal_id 必须为非空字符串")
+
+            style = prop.get("style")
+            if style not in ("balanced", "fast_paced", "showcase"):
+                errors.append(f"proposals[{idx}].style 必须为 'balanced', 'fast_paced' 或 'showcase'，当前为: '{style}'")
+
+            cids = prop.get("ordered_candidate_ids")
+            if not isinstance(cids, list) or len(cids) == 0:
+                errors.append(f"proposals[{idx}].ordered_candidate_ids 必须为非空列表")
+            elif not all(isinstance(c, str) and c for c in cids):
+                errors.append(f"proposals[{idx}].ordered_candidate_ids 元素必须为非空字符串")
+
+            exp_dur = prop.get("expected_duration_ms")
+            if not isinstance(exp_dur, int) or exp_dur < 0:
+                errors.append(f"proposals[{idx}].expected_duration_ms 必须为非负整数")
+
+            for list_field in ("selling_point_coverage", "narrative_rationale", "risk_notes"):
+                lv = prop.get(list_field)
+                if not isinstance(lv, list):
+                    errors.append(f"proposals[{idx}].{list_field} 必须为列表")
+                elif not all(isinstance(x, str) for x in lv):
+                    errors.append(f"proposals[{idx}].{list_field} 元素必须为字符串")
+
+            conf = prop.get("confidence")
+            if not isinstance(conf, (int, float)) or conf < 0 or conf > 1:
+                errors.append(f"proposals[{idx}].confidence 必须为 0~1 之间的浮点数")
 
     return len(errors) == 0, errors
 
@@ -157,6 +207,14 @@ class AgyHeadlessAdapter(AgentAdapter):
 
         raw_out = proc.stdout or ""
         raw_err = proc.stderr or ""
+
+        try:
+            with open(os.path.join(work_dir, "agy_debug.log"), "w", encoding="utf-8") as f:
+                f.write(f"=== RETCODE ===\n{proc.returncode}\n\n")
+                f.write(f"=== STDOUT ===\n{raw_out}\n\n")
+                f.write(f"=== STDERR ===\n{raw_err}\n\n")
+        except Exception:
+            pass
 
         # 检查是否命中未授权/登录态过期
         lower_err = (raw_out + " " + raw_err).lower()

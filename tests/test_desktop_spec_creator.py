@@ -190,6 +190,63 @@ def test_api_start_pipeline_wires_job_runner() -> None:
         print("  [PASS] DesktopSpecApi.start_pipeline：成功打通 EXE 与 JobRunner 调用链")
 
 
+def test_initial_data_has_no_fake_materials() -> None:
+    """默认初始数据中严禁预填虚假材质关键词（桑蚕丝/羊绒/羊毛）。"""
+    api = DesktopSpecApi()
+    init_data = api.load_initial_data()
+    keywords = init_data.get("keywords", "")
+    assert "桑蚕丝" not in keywords and "羊绒" not in keywords and "羊毛" not in keywords, \
+        "初始数据中残留了未经证实的虚假材质宣传词"
+    print("  [PASS] load_initial_data：无虚假材质预填")
+
+
+def test_api_scan_project_and_quarantine() -> None:
+    """向导扫描项目：自动识别原始素材并严格隔离历史成品与报告。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        proj_dir = os.path.join(tmpdir, "demo_proj")
+        mat_dir = os.path.join(proj_dir, "素材")
+        os.makedirs(mat_dir, exist_ok=True)
+
+        # 放入原始视频
+        with open(os.path.join(mat_dir, "raw_chunk1.mp4"), "wb") as f:
+            f.write(b"video1")
+        with open(os.path.join(mat_dir, "cover.png"), "wb") as f:
+            f.write(b"img1")
+
+        # 放入历史成片及生成报告（应被隔离）
+        with open(os.path.join(mat_dir, "demo_proj.mp4"), "wb") as f:
+            f.write(b"historical_video")
+        with open(os.path.join(mat_dir, "demo_proj_qc_report.json"), "w", encoding="utf-8") as f:
+            json.dump({"status": "PASS"}, f)
+
+        api = DesktopSpecApi()
+        scan_res = api.scan_project(proj_dir)
+        assert scan_res["success"] is True
+        assert scan_res["project_id"] == "demo_proj"
+
+        # 验证原始视频仅包含 raw_chunk1.mp4，demo_proj.mp4 被严格隔离
+        source_names = [v["filename"] for v in scan_res["source_videos"]]
+        assert "raw_chunk1.mp4" in source_names
+        assert "demo_proj.mp4" not in source_names
+
+        quarantine_names = [q["filename"] for q in scan_res["quarantined_files"]]
+        assert "demo_proj.mp4" in quarantine_names
+        print("  [PASS] DesktopSpecApi.scan_project：向导素材发现与历史成品隔离正确")
+
+
+def test_api_status_and_open_helpers() -> None:
+    """测试状态获取与文件安全打开辅助函数。"""
+    api = DesktopSpecApi()
+    status = api.get_job_status()
+    assert "status" in status
+    assert "progress" in status
+
+    # 路径不存在时返回 False
+    res = api.open_path("C:\\non_existent_folder_xyz123")
+    assert res["success"] is False
+    print("  [PASS] DesktopSpecApi：状态机与打开路径防护正常")
+
+
 def main() -> int:
     tests = [
         test_spec_manager_build_spec_dict,
@@ -200,6 +257,9 @@ def main() -> int:
         test_api_save_spec_direct_to_material_dir,
         test_environment_helpers,
         test_api_start_pipeline_wires_job_runner,
+        test_initial_data_has_no_fake_materials,
+        test_api_scan_project_and_quarantine,
+        test_api_status_and_open_helpers,
     ]
     failed = 0
     for t in tests:

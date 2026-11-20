@@ -109,21 +109,25 @@ class UtteranceAligner:
             # 2. 显式句末标点（句号/问号/感叹号/分号/省略号）：完整闭合
             elif _ends_with_sentence_punct(combined_text):
                 ends_sentence = True
-            # 3. 伴随真实气口停顿且末尾带语气/句末助词，或非未完从句连接词
+            # 3. 伴随真实气口停顿且非未完从句连接词：判定为自然完整句
             elif is_pause_break:
                 clean_t = combined_text.rstrip()
                 incomplete_tails = (
                     "因为", "所以", "但是", "如果", "虽然", "而且", "不仅",
-                    "并且", "以及", "采用", "采用的是", "比如", "这个", "那个", "这件"
+                    "并且", "以及", "采用", "采用的是", "比如", "这个", "那个", "这件",
+                    "这是", "它是", "就是", "然后", "还有", "和", "跟", "与", "或", "或者",
+                    "稍", "更", "越", "比较", "非常", "十分", "极其", "特别", "一件",
                 )
-                if any(clean_t.endswith(tail) for tail in incomplete_tails):
+                if any(clean_t.endswith(tail) for tail in incomplete_tails) or _ends_with_clause_punct(clean_t):
                     ends_sentence = False
-                elif clean_t.endswith(("呢", "啦", "呀", "吧", "啊", "哦", "的", "了", "套", "条", "件")):
+                else:
+                    ends_sentence = True
+            else:
+                clean_t = combined_text.rstrip()
+                if clean_t.endswith(("呢", "啦", "呀", "吧", "啊", "哦", "的", "了", "套", "条", "件", "好", "对", "入", "色", "单")):
                     ends_sentence = True
                 else:
                     ends_sentence = False
-            else:
-                ends_sentence = False
 
             risks = [] if ends_sentence else ["INCOMPLETE_SENTENCE"]
 
@@ -155,20 +159,31 @@ class UtteranceAligner:
             # 拆分条件（适配无标点 ASR 流）：
             # 1. 包含显式句末标点且达到最小意群时长；
             # 2. 停顿间隙超过气口阈值 (>=250ms) 且累计达到最小意群时长；
-            # 3. 累计时长达到最大上限 (max_utterance_ms) 强制截断，防长达数分钟滚雪球；
-            # 4. 出现语气词/句末特征字且伴随微弱气口 (>=100ms) 且累计时长合规。
+            # 3. 达到最小意群时长且当前段末尾无从句标点/挂起连词（自然停顿分界）；
+            # 4. 累计时长达到最大上限 (max_utterance_ms) 强制截断，防长达数分钟滚雪球；
+            # 5. 出现语气词/句末特征字且伴随微弱气口 (>=100ms) 且累计时长合规。
             should_split = False
             split_pause = False
-            if _ends_with_sentence_punct(last_seg["text"]) and (last_seg["end_ms"] - cur_group[0]["start_ms"]) >= self.min_utterance_ms:
+            last_text = last_seg["text"].rstrip()
+            is_dangling = any(last_text.endswith(t) for t in (
+                "因为", "所以", "但是", "如果", "虽然", "而且", "不仅",
+                "并且", "以及", "采用", "采用的是", "比如", "这个", "那个", "这件",
+                "这是", "它是", "就是", "然后", "还有", "和", "跟", "与", "或", "或者", "稍"
+            )) or _ends_with_clause_punct(last_text)
+
+            if _ends_with_sentence_punct(last_text) and (last_seg["end_ms"] - cur_group[0]["start_ms"]) >= self.min_utterance_ms:
                 should_split = True
                 split_pause = True
             elif gap_ms >= 250 and accum_dur >= self.min_utterance_ms:
                 should_split = True
                 split_pause = True
+            elif accum_dur >= self.min_utterance_ms and not is_dangling:
+                should_split = True
+                split_pause = True
             elif accum_dur >= self.max_utterance_ms:
                 should_split = True
-                split_pause = False  # 强制超时切断，非自然停顿
-            elif gap_ms >= 100 and accum_dur >= self.min_utterance_ms and last_seg["text"].rstrip().endswith(("吧", "呢", "呀", "啊", "了", "好", "对", "入", "色", "套", "单")):
+                split_pause = not is_dangling
+            elif gap_ms >= 100 and accum_dur >= self.min_utterance_ms and last_text.endswith(("吧", "呢", "呀", "啊", "了", "好", "对", "入", "色", "套", "单")):
                 should_split = True
                 split_pause = True
 
@@ -182,7 +197,12 @@ class UtteranceAligner:
         if cur_group:
             # 尾段检查是否以句末标点或自然停顿闭合
             last_text = cur_group[-1].get("text", "")
-            end_pause = _ends_with_sentence_punct(last_text)
+            tail_dangling = any(last_text.rstrip().endswith(t) for t in (
+                "因为", "所以", "但是", "如果", "虽然", "而且", "不仅",
+                "并且", "以及", "采用", "采用的是", "比如", "这个", "那个", "这件",
+                "这是", "它是", "就是", "然后", "还有", "和", "跟", "与", "或", "或者", "稍"
+            )) or _ends_with_clause_punct(last_text)
+            end_pause = _ends_with_sentence_punct(last_text) or not tail_dangling
             _flush_group(cur_group, u_idx, is_pause_break=end_pause)
 
         return utterances

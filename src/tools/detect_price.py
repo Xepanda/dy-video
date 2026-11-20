@@ -85,8 +85,8 @@ WHITELIST_UNITS = [
 
 _WHITELIST_TAIL = "|".join(map(re.escape, WHITELIST_UNITS))
 _WHITELIST_PATTERNS = [
-    # 数字 + 白名单单位（允许"的"间隔，如 165的身高 / 160码）
-    re.compile(rf"\d+(?:\.\d+)?\s*的?\s*(?:{_WHITELIST_TAIL})(?![块米元钱毛])"),
+    # 数字 + 白名单单位（允许"的/个/的一个"间隔，如 165的身高 / 160码 / 31的一个绵羊毛）
+    re.compile(rf"\d+(?:\.\d+)?\s*(?:的|个|的一个)?\s*(?:{_WHITELIST_TAIL})(?![块米元钱毛])"),
     # 中文数字 + "码"（三码 / 拍小码）
     re.compile(rf"{CN_NUM_RE}?\s*码"),
     # 常见非价格技术数字（版本号/型号/分辨率）
@@ -110,12 +110,13 @@ DETECTOR_VERSION = "chinese_numeral_v1"
 
 def _whitelisted(text: str, start: int, end: int) -> bool:
     """判断 [start, end) 的价格命中是否落在白名单语境内。"""
-    # 向前看 2 字符、向后看 4 字符构造上下文
-    ctx = text[max(0, start - 2): min(len(text), end + 4)]
+    # 向前看 4 字符、向后看 8 字符构造上下文（覆盖"的一个绵羊毛"等成分语境）
+    offset = max(0, start - 4)
+    ctx = text[offset: min(len(text), end + 8)]
     for pat in _WHITELIST_PATTERNS:
         for m in pat.finditer(ctx):
             # 白名单匹配需要覆盖住价格命中的核心区域
-            if m.start() <= (start - max(0, start - 2)) + 1 and m.end() >= (end - max(0, start - 2)) - 1:
+            if m.start() <= (start - offset) + 1 and m.end() >= (end - offset) - 1:
                 return True
     return False
 

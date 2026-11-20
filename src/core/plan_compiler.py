@@ -144,7 +144,7 @@ def compile_v3_plan(
             "desc": (cand["text"][:24] + "…") if len(cand["text"]) > 24 else cand["text"],
             "full_text": cand["text"],
             "text": cand["text"],
-            "source_file": cand.get("source_id") or raw_video_path or "",
+            "source_file": cand.get("source_file") or cand.get("source_id") or raw_video_path or "",
             "source_id": cand.get("source_id") or "",
             "source_tag": os.path.basename(str(cand.get("source_id") or "")),
             "duration_in_range": True,

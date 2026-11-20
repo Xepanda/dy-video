@@ -51,39 +51,20 @@ class CandidateRanker:
         sku_name = product_profile.get("name", "")
         scores_list = []
 
-        # 重叠聚类辅助：按 source 分组并在时序窗口内聚类，避免 O(N^2) 笛卡尔积卡死
+        # 重叠聚类辅助：按源和首个意群锚点（以及高相似口播台词）聚类，
+        # 既防止同一发话点变体被重复入选，又避免链式重叠将整段视频全量锁死为一个聚类
         clusters: Dict[str, str] = {}
-        cluster_counter = 1
-
-        # 先按 source_id 分组
-        by_source: Dict[str, List[Dict[str, Any]]] = {}
         for c in candidates:
+            cid = c["candidate_id"]
             sid = str(c.get("source_id", "src_0"))
-            by_source.setdefault(sid, []).append(c)
-
-        for sid, src_cands in by_source.items():
-            # 保证按起始时间排序
-            src_cands.sort(key=lambda x: x["source_start_ms"])
-            n_src = len(src_cands)
-            for i in range(n_src):
-                c1 = src_cands[i]
-                cid1 = c1["candidate_id"]
-                if cid1 not in clusters:
-                    clusters[cid1] = f"cluster_{cluster_counter:03d}"
-                    cluster_counter += 1
-
-                s1, e1 = c1["source_start_ms"], c1["source_end_ms"]
-                for j in range(i + 1, n_src):
-                    c2 = src_cands[j]
-                    s2, e2 = c2["source_start_ms"], c2["source_end_ms"]
-                    if s2 >= e1:
-                        # 后续候选起点已超过 c1 终点，不可能再有重叠
-                        break
-                    overlap = max(0, min(e1, e2) - max(s1, s2))
-                    min_dur = min(e1 - s1, e2 - s2)
-                    if min_dur > 0 and (overlap / min_dur) >= 0.5:
-                        cid2 = c2["candidate_id"]
-                        clusters[cid2] = clusters[cid1]
+            uids = c.get("utterance_ids", [])
+            first_uid = uids[0] if uids else str(c.get("source_start_ms", 0) // 2500)
+            text_norm = re.sub(r"[^\w]", "", c.get("text", "")).strip()
+            if text_norm and len(text_norm) >= 8:
+                cl_key = f"cl_sem_{text_norm[:24]}"
+            else:
+                cl_key = f"cl_{sid}_{first_uid}"
+            clusters[cid] = cl_key
 
         for cand in candidates:
             cid = cand["candidate_id"]
@@ -150,26 +131,44 @@ class CandidateRanker:
                 any(re.search(p, text) for p in styling_patterns)
             )
 
-            # 品类冲突硬过滤（仅在非搭配且主讲非本品时拦截）
+            # 品类负向冲突硬过滤
             cat_name = str(product_profile.get("category", "") or product_profile.get("name", "")).lower()
+            try:
+                from src.tools.verify_clip_product_alignment import CATEGORY_NEGATIVE_TERMS, infer_product_category
+                inferred_cat = infer_product_category(cat_name)
+                # 排除本品自身标题中包含的词（如本品就是羽绒服时，"羽绒"不是负向词）
+                neg_terms = [
+                    t for t in CATEGORY_NEGATIVE_TERMS.get(inferred_cat, [])
+                    if t not in cat_name
+                ]
+            except Exception:
+                neg_terms = []
+
+            # 搭配识别：如果是真正搭配语境（如"上衣搭西裤"），不作为负向冲突误杀，而是认定为合规搭配 (ACCESSORY_OR_STYLING)
+            styling_patterns = (
+                r"搭(配)?(一条|个|件)?(裤|裙|鞋|包|开衫|马甲|西裤|打底)",
+                r"配(一条|个|件)?(裤|裙|鞋|包|开衫|马甲|西裤|打底)",
+                r"脚上(穿|搭)", r"下半身(搭|配)", r"里面(搭|穿)",
+            )
+            # 但若台词核心是在主推下装/换款（如"主推的裤子"、"裤子给大家安排"、"这条裤"），绝非合规搭配
+            promotes_other_item = bool(re.search(r"(主推|拍|买|这款|这条|这件裤|给大家|安排|换下).*(裤|裙)", text))
+
+            is_styling_context = (
+                not promotes_other_item and (
+                    relation == "ACCESSORY_OR_STYLING" or
+                    any(re.search(p, text) for p in styling_patterns)
+                )
+            )
+
             if is_styling_context:
                 if relation != "OTHER_SKU":
                     relation = "ACCESSORY_OR_STYLING"
             else:
-                if any(k in cat_name for k in ("上衣", "毛衣", "针织", "衫", "外套", "大衣", "开衫")):
-                    top_neg_terms = ("裤长", "毛呢裤", "毛泥裤", "裤腿", "西裤", "卫裤", "皮裤", "加绒裤", "侧缝", "腿在裤", "石墨烯裤")
-                    hits = [nt for nt in top_neg_terms if nt in text and not any(k in text for k in (cat_name, "毛衣", "针织", "这件", "上衣"))]
-                    if hits or relation == "OTHER_SKU":
-                        eligible = False
-                        relation = "OTHER_SKU"
-                        rejection_reasons.append(f"品类负向冲突: 主品为上衣但台词主推下装 {hits}")
-                elif any(k in cat_name for k in ("裤", "裙", "半裙", "短裤", "长裤", "阔腿")):
-                    bottom_neg_terms = ("毛衣", "针织衫", "衬衫", "吊带", "大衣", "风衣")
-                    hits = [nt for nt in bottom_neg_terms if nt in text and not any(k in text for k in (cat_name, "裤", "裙", "这条"))]
-                    if hits or relation == "OTHER_SKU":
-                        eligible = False
-                        relation = "OTHER_SKU"
-                        rejection_reasons.append(f"品类负向冲突: 主品为下装但台词主推上衣 {hits}")
+                hits = [nt for nt in neg_terms if nt in text]
+                if hits or relation == "OTHER_SKU":
+                    eligible = False
+                    relation = "OTHER_SKU"
+                    rejection_reasons.append(f"品类负向冲突（非主推商品或属于换款/主推他款）: {hits}")
 
             # 句子完整性硬约束：禁止未闭合或断句截断的碎片入选
             risks = cand.get("risks") or []
@@ -256,7 +255,7 @@ class CandidateRanker:
                 "product_relation": relation,
                 "subscores": subscores,
                 "narrative_role": narrative_role,
-                "duplicate_cluster_id": clusters.get(cid, "cluster_001"),
+                "duplicate_cluster_id": clusters.get(cid, f"cluster_{cid}"),
                 "evidence_refs": cand.get("selling_point_evidence_refs") or [],
                 "rejection_reasons": rejection_reasons,
                 "missing_evidence": missing_evidence,

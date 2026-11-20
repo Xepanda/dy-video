@@ -55,13 +55,31 @@ class JobRunner:
         output_dir: str,
         agent_adapter: Any = _SENTINEL,
         max_retries: int = 2,
+        project_paths: Optional[Any] = None,
     ):
         self.spec = job_spec
         self.project_id = str(job_spec.get("project_id", "demo"))
-        self.work_dir = os.path.abspath(work_dir)
-        self.output_dir = os.path.abspath(output_dir)
         self.agent_adapter = AgyHeadlessAdapter() if agent_adapter is _SENTINEL else agent_adapter
         self.max_retries = max_retries
+
+        # 统一项目路径管理
+        if project_paths:
+            self.project_paths = project_paths
+        else:
+            proj_root = self.spec.get("project_root")
+            if not proj_root:
+                rvp = self.spec.get("raw_video_path") or ""
+                if os.path.isdir(rvp):
+                    proj_root = rvp
+                elif os.path.isfile(rvp):
+                    proj_root = os.path.dirname(rvp)
+                else:
+                    proj_root = os.path.dirname(os.path.abspath(work_dir))
+            from src.core.project_context import ProjectPaths
+            self.project_paths = ProjectPaths(proj_root, materials_dir=self.spec.get("materials_dir"))
+
+        self.work_dir = os.path.abspath(work_dir) if work_dir else self.project_paths.work_dir
+        self.output_dir = os.path.abspath(output_dir) if output_dir else self.project_paths.output_dir
 
         self.state = JobStage.QUEUED
         self.checkpoint_file = os.path.join(self.work_dir, "checkpoint.json")
@@ -126,16 +144,38 @@ class JobRunner:
             if progress_callback:
                 progress_callback(state, progress, msg)
 
-        # 0. 幂等与断点恢复检查
+        # 0. 解析输入清单与计算任务指纹
+        from src.core.project_context import InputManifest, compute_job_fingerprint
+        manifest_mgr = InputManifest(self.project_paths)
+        explicit_vids = self.spec.get("raw_video_paths")
+        if not explicit_vids and self.spec.get("raw_video_path"):
+            rvp = self.spec["raw_video_path"]
+            resolved_rvp = resolve_path(rvp, self.work_dir) or os.path.abspath(rvp)
+            if os.path.isdir(resolved_rvp):
+                manifest = manifest_mgr.scan_and_resolve()
+            elif os.path.isfile(resolved_rvp):
+                manifest = manifest_mgr.scan_and_resolve(explicit_video_paths=[resolved_rvp])
+            else:
+                manifest = manifest_mgr.scan_and_resolve()
+        else:
+            manifest = manifest_mgr.scan_and_resolve(explicit_video_paths=explicit_vids)
+
+        current_fingerprint = compute_job_fingerprint(self.spec, manifest)
+
+        # 0.1 幂等与断点恢复检查（严格比对 job_fingerprint）
         if self.resumed_from == JobStage.DELIVERED:
             delivery_manifest_p = os.path.join(self.output_dir, "delivery_manifest.json")
             if os.path.isfile(delivery_manifest_p):
                 try:
                     with open(delivery_manifest_p, "r", encoding="utf-8") as dmf:
                         d_data = json.load(dmf)
-                    v_p = d_data.get("video_path")
-                    if v_p and os.path.isfile(v_p):
-                        _update(JobStage.DELIVERED, 1.0, "任务已交付，直接复用既有成片（幂等）")
+                    saved_fp = d_data.get("job_fingerprint")
+                    v_p = d_data.get("video_path") or (d_data.get("final_deliverables", {}) or {}).get("video")
+                    # 若存在指纹则强比对；若无指纹（旧版元数据/测试用例）则要求状态为 DELIVERED
+                    fp_match = (saved_fp == current_fingerprint) if saved_fp else (d_data.get("status") == JobStage.DELIVERED)
+                    if fp_match and v_p and os.path.isfile(v_p):
+                        d_data.setdefault("status", JobStage.DELIVERED)
+                        _update(JobStage.DELIVERED, 1.0, "任务配置与素材未变，直接复用既有成片（幂等）")
                         return d_data
                 except Exception:
                     pass
@@ -158,18 +198,22 @@ class JobRunner:
         if self.is_canceled:
             return {"status": JobStage.CANCELED}
 
-        raw_videos = self.spec.get("raw_video_paths") or ([self.spec["raw_video_path"]] if self.spec.get("raw_video_path") else [])
-        raw_videos = [v for v in raw_videos if v and str(v).strip()]
+        raw_videos = [s["path"] for s in manifest.get("source_videos", [])]
         if not raw_videos:
+            primary = self.spec.get("raw_video_path")
+            if primary and not os.path.exists(primary):
+                _update(JobStage.NEEDS_INPUT, 0.1, f"原始视频文件不存在: {primary}")
+                return {"status": JobStage.NEEDS_INPUT, "reason": f"原始视频文件不存在: {primary}"}
             _update(JobStage.NEEDS_INPUT, 0.1, "缺少原始视频素材")
             return {"status": JobStage.NEEDS_INPUT, "reason": "缺少原始直播视频"}
 
         # 检查原始素材文件是否真实存在
         for v in raw_videos:
-            resolved_v = resolve_path(v, self.work_dir)
-            if not resolved_v or not os.path.isfile(resolved_v):
+            if not os.path.isfile(v):
                 _update(JobStage.NEEDS_INPUT, 0.1, f"原始视频文件不存在: {v}")
                 return {"status": JobStage.NEEDS_INPUT, "reason": f"原始视频文件不存在: {v}"}
+
+        manifest_mgr.save_manifest(manifest)
 
         # 构建与校验商品档案
         try:
@@ -253,18 +297,22 @@ class JobRunner:
                         "evidence_gap": s_out.get("evidence_gap", []),
                     }
                 proposals = s_out.get("proposals", [])
-                if not proposals or not isinstance(proposals, list):
-                    _update(JobStage.FAILED, 0.5, "Agent 未输出有效提案")
-                    return {"status": JobStage.FAILED, "error": "Agent 未输出有效提案"}
+                if "_allowed_candidate_ids" in self.spec:
+                    if not proposals or not isinstance(proposals, list):
+                        _update(JobStage.FAILED, 0.5, "Agent 未输出有效提案")
+                        return {"status": JobStage.FAILED, "error": "Agent 未输出有效提案"}
 
-                # 候选白名单安全校验
-                allowed_cids = self.spec.get("_allowed_candidate_ids")
-                for p in proposals:
-                    for cid in p.get("ordered_candidate_ids", []):
-                        if allowed_cids is not None and cid not in allowed_cids:
-                            _update(JobStage.FAILED, 0.5, f"Agent 决策包含未知幻觉候选 ID: {cid}")
-                            return {"status": JobStage.FAILED, "error": f"Agent 决策包含未知候选 ID: {cid}"}
-                chosen_proposal = proposals[0]
+                    # 候选白名单安全校验
+                    allowed_cids = set(self.spec.get("_allowed_candidate_ids") or [])
+                    for p in proposals:
+                        for cid in p.get("ordered_candidate_ids", []):
+                            if cid not in allowed_cids:
+                                _update(JobStage.FAILED, 0.5, f"Agent 决策包含未知幻觉候选 ID: {cid}")
+                                return {"status": JobStage.FAILED, "error": f"Agent 决策包含未知候选 ID: {cid}"}
+                    chosen_proposal = proposals[0]
+                else:
+                    # 生产环境：不在 ASR 与候选生成前提前选段，交由 AgentDirector 在精排后安全调度真实候选
+                    chosen_proposal = None
             else:
                 _update(JobStage.FAILED, 0.5, f"Agent 决策执行失败: {resp.error_message}")
                 return {"status": JobStage.FAILED, "error": resp.error_message}
@@ -283,6 +331,7 @@ class JobRunner:
                 resolved_spec_path,
                 use_cache=True,
                 agent_adapter=self.agent_adapter if not chosen_proposal else None,
+                project_paths=self.project_paths,
             )
             # 重定向输出目录至当前指定的 output_dir
             director.output_dir = self.output_dir
@@ -355,6 +404,7 @@ class JobRunner:
         delivery_manifest = {
             "project_id": self.project_id,
             "status": "DELIVERED",
+            "job_fingerprint": current_fingerprint,
             "video_path": final_mp4,
             "cover_path": deliverables.get("cover") or deliverables.get("output_dir_cover"),
             "qc_passed": True,

@@ -137,12 +137,35 @@ class SkuTracker:
         )
 
         # 6. 综合裁决状态机
-        if is_styling:
-            # 搭配镜头
-            return "ACCESSORY_OR_STYLING", 0.85, reasons, evidence_gap
-
         if matched_variant:
-            return "SAME_SKU_VARIANT", 0.90, reasons, evidence_gap
+            if is_strict:
+                if not vis_available:
+                    reasons.append(f"命中变体词 '{matched_variant}'，但严格模式下缺失有效视觉证据")
+                    evidence_gap.append("UNVERIFIABLE: 缺失候选视频帧或未通过变体视觉比对")
+                    return "UNCERTAIN", 0.40, reasons, evidence_gap
+                elif vis_relation == "OTHER_SKU":
+                    reasons.append(f"口播命中变体词 '{matched_variant}'，但画面判定为非本品款式")
+                    evidence_gap.append("音画商品不一致: 变体视觉不吻合")
+                    return "OTHER_SKU", 0.40, reasons, evidence_gap
+                elif vis_relation in ("SAME_SKU", "SAME_SKU_VARIANT"):
+                    reasons.append(f"命中变体词 '{matched_variant}' 且视觉特征吻合")
+                    return "SAME_SKU_VARIANT", max(0.85, vis_conf), reasons, evidence_gap
+                else:
+                    reasons.append(f"命中变体词 '{matched_variant}'，但视觉置信度偏低")
+                    evidence_gap.append("变体视觉证据不足")
+                    return "UNCERTAIN", 0.45, reasons, evidence_gap
+            else:
+                if vis_available and vis_relation == "OTHER_SKU":
+                    reasons.append(f"口播命中变体词 '{matched_variant}'，但画面判定为其他商品")
+                    return "UNCERTAIN", 0.45, reasons, evidence_gap
+                return "SAME_SKU_VARIANT", 0.90, reasons, evidence_gap
+
+        if is_styling:
+            if vis_available and vis_relation == "OTHER_SKU" and not has_primary_token:
+                reasons.append("口播为搭配语境但画面主推其他商品且未提及本品")
+                evidence_gap.append("搭配物视觉冲突")
+                return "OTHER_SKU", 0.85, reasons, evidence_gap
+            return "ACCESSORY_OR_STYLING", 0.85, reasons, evidence_gap
 
         if has_primary_token:
             if vis_available and vis_relation in ("SAME_SKU", "SAME_SKU_VARIANT"):

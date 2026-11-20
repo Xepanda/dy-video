@@ -49,7 +49,8 @@ class LocalCVVisionBackend(VisionBackend):
     def _calc_hist(self, img_path: str) -> Optional[np.ndarray]:
         if not os.path.isfile(img_path):
             return None
-        img = cv2.imread(img_path)
+        from src.core.path_resolver import cv2_imread
+        img = cv2_imread(img_path)
         if img is None:
             return None
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)

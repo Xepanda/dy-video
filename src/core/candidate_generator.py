@@ -13,6 +13,7 @@ candidate_generator.py - 高召回候选片段与多模态证据生成（V3 PR-0
 import os
 import sys
 import json
+import re
 from typing import Dict, Any, List, Optional, Tuple
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -47,6 +48,12 @@ class CandidateGenerator:
         candidates: List[Dict[str, Any]] = []
         if not utterances:
             return []
+
+        # 确保 source_id 不含路径分隔符或非法文件名字符
+        clean_source_id = str(source_id).strip()
+        if "\\" in clean_source_id or "/" in clean_source_id or ":" in clean_source_id:
+            stem = os.path.splitext(os.path.basename(clean_source_id))[0]
+            clean_source_id = re.sub(r"[^\w\-]", "_", stem).strip("_") or "src_0"
 
         selling_points = product_profile.get("selling_points", [])
         sku_name = product_profile.get("name", "")
@@ -116,13 +123,14 @@ class CandidateGenerator:
 
                     # 关联帧索引（中点帧）
                     mid_ms = (eff_start_ms + eff_end_ms) // 2
-                    frame_id = f"f_{source_id}_{mid_ms}"
+                    frame_id = f"f_{clean_source_id}_{mid_ms}"
 
-                    cid = f"c_{source_id}_{cand_idx:03d}"
+                    cid = f"c_{clean_source_id}_{cand_idx:03d}"
                     cand = {
                         "schema_version": "3.0",
                         "candidate_id": cid,
-                        "source_id": source_id,
+                        "source_id": clean_source_id,
+                        "source_file": str(source_id),
                         "source_start_ms": eff_start_ms,
                         "source_end_ms": eff_end_ms,
                         "product_relation": product_relation,

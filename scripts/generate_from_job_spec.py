@@ -43,6 +43,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
 from src.core.path_resolver import resolve_path
+from src.core.project_context import is_historical_output, ProjectPaths, InputManifest
 
 VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".avi", ".flv", ".m4v", ".ts")
 SPECS_DIR = os.path.join(PROJECT_ROOT, "specs")
@@ -78,28 +79,20 @@ def _ffprobe_ok(video_path: str) -> dict:
 
 
 def collect_source_videos(spec: dict, spec_dir: str) -> list:
-    """按契约优先级收集直播素材（返回绝对路径列表，顺序稳定）。
-
-    排除本任务自身的产物（2026-11-01）：交付物写入素材目录
-    （`{project_id}.mp4` / `.jpg`），与 raw_video_path 同目录。
-    重跑时若不排除，上一轮的**成片**会被当成第 N+1 段原始素材重新摄入
-    → 素材清单污染（实测 6 段变 7 段，多出的正是上轮成片）。
-    """
+    """按契约优先级收集直播素材（返回绝对路径列表，顺序稳定），严格排除历史成品。"""
     paths = []
     pid = str(spec.get("project_id") or "")
 
-    def _is_own_artifact(name: str) -> bool:
-        if not pid:
-            return False
-        stem = os.path.splitext(name)[0]
-        return stem in {pid, f"{pid}_final", f"{pid}_cover"}
+    def _is_invalid(path: str) -> bool:
+        is_hist, _ = is_historical_output(path, pid)
+        return is_hist
 
     # 1) 显式列表优先（强隔离：存在显式清单时立即返回，绝不穿透扫描目录；全部失效时显式报错）
     explicit_paths = spec.get("raw_video_paths")
     if explicit_paths:
         for p in explicit_paths:
             rp = resolve_path(p, spec_dir)
-            if rp and os.path.exists(rp) and os.path.isfile(rp) and not _is_own_artifact(os.path.basename(rp)):
+            if rp and os.path.exists(rp) and os.path.isfile(rp) and not _is_invalid(rp):
                 ap = os.path.abspath(rp)
                 if ap not in paths:
                     paths.append(ap)
@@ -114,12 +107,12 @@ def collect_source_videos(spec: dict, spec_dir: str) -> list:
         primary_abs = resolve_path(primary, spec_dir) or os.path.abspath(primary)
         if os.path.isdir(primary_abs):
             for name in sorted(os.listdir(primary_abs)):
-                if name.lower().endswith(VIDEO_EXTS) and not _is_own_artifact(name):
+                if name.lower().endswith(VIDEO_EXTS):
                     ap = os.path.abspath(os.path.join(primary_abs, name))
-                    if ap not in paths:
+                    if not _is_invalid(ap) and ap not in paths:
                         paths.append(ap)
         elif os.path.isfile(primary_abs):
-            if primary_abs not in paths:
+            if not _is_invalid(primary_abs) and primary_abs not in paths:
                 paths.insert(0, primary_abs)
         else:
             raise FileNotFoundError(
