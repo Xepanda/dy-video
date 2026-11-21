@@ -17,6 +17,7 @@ import os
 import sys
 import json
 import time
+import threading
 import subprocess
 from typing import Dict, Any, List, Tuple, Optional
 from PIL import Image, ImageDraw, ImageFont
@@ -43,8 +44,8 @@ OUT_W, OUT_H, FPS = 1080, 1920, 60
 FONT_BOLD = "C:/Windows/Fonts/msyhbd.ttc" if os.name == "nt" else "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 
-def run_cmd(cmd: List[str], cwd: str = None, desc: str = "", cancel_token: Any = None) -> str:
-    """运行子进程并实时捕获输出，支持取消令牌中断"""
+def run_cmd(cmd: List[str], cwd: str = None, desc: str = "", cancel_token: Any = None, timeout: Optional[float] = None) -> str:
+    """运行子进程并实时排空输出，支持取消令牌中断与进程树终止，杜绝管道缓冲死锁"""
     if cancel_token:
         is_c = getattr(cancel_token, "is_canceled", False)
         if callable(is_c):
@@ -66,6 +67,28 @@ def run_cmd(cmd: List[str], cwd: str = None, desc: str = "", cancel_token: Any =
     if cancel_token and hasattr(cancel_token, "register_process"):
         cancel_token.register_process(proc)
 
+    stdout_chunks: List[str] = []
+    stderr_chunks: List[str] = []
+
+    def _drain(stream, chunks):
+        try:
+            for line in iter(stream.readline, ""):
+                chunks.append(line)
+        except Exception:
+            pass
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    t_out = threading.Thread(target=_drain, args=(proc.stdout, stdout_chunks), daemon=True)
+    t_err = threading.Thread(target=_drain, args=(proc.stderr, stderr_chunks), daemon=True)
+    t_out.start()
+    t_err.start()
+
+    start_t = time.time()
+    ret = None
     try:
         while True:
             if cancel_token:
@@ -83,14 +106,30 @@ def run_cmd(cmd: List[str], cwd: str = None, desc: str = "", cancel_token: Any =
                             pass
                     from src.runtime.job_runner import JobCanceledError
                     raise JobCanceledError(f"FFmpeg 执行已被用户取消 ({desc})")
+
+            if timeout and (time.time() - start_t) > timeout:
+                try:
+                    from src.runtime.job_runner import terminate_process_tree
+                    terminate_process_tree(proc)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                raise TimeoutError(f"FFmpeg 执行超时 ({timeout}s) ({desc})")
+
             ret = proc.poll()
             if ret is not None:
-                stdout, stderr = proc.communicate()
                 break
             time.sleep(0.05)
     finally:
         if cancel_token and hasattr(cancel_token, "unregister_process"):
             cancel_token.unregister_process(proc)
+
+    t_out.join(timeout=2.0)
+    t_err.join(timeout=2.0)
+    stdout = "".join(stdout_chunks)
+    stderr = "".join(stderr_chunks)
 
     if ret != 0:
         err_msg = stderr[-1500:] if stderr else "未知错误"

@@ -106,57 +106,97 @@ dy-live-ecommerce-editor/
 > 转场/放大镜特效集成、违规词三通道处理、全阶段审核机制。
 > 完整阶段宪法见 [`workflows/standard_pipeline_v2.md`](workflows/standard_pipeline_v2.md)。
 
-### 0. 准备素材与商品信息 (生成任务契约)
-剪辑前，用户需提供原始直播录像与商品信息以建立契约上下文。
-双击运行根目录的：
-```bash
-启动任务配置器.exe  # 或 SpecCreator.exe
-```
-*(或在终端执行 `python src/tools/spec_creator.py`)*
-系统将在浏览器自动打开可视化表单页面，点选视频素材、商品平铺图、填写品牌名与核心面料/版型卖点，点击“导出任务文件”即可生成标准 `job_spec.json`。
-**Agent 将以此文件为依据，读取素材路径与商品领域指纹，启动后续的检测、判断与决策执行。**
+## 🚀 V3.2 Agent-First 协同剪辑操作流程 (Workflow)
 
-### 1. 环境准备
-确保 Python 3.10+ 及 FFmpeg（已加入系统环境变量 PATH）：
-```bash
-pip install -r requirements.txt
-```
+> **2026-11-21 V3.2 架构重整（ADR-001）**：外部 Agent（AGY / Codex / Claude Code）作为工作流执行者与总导演；Windows EXE 仅用于配置项目与生成任务交接；通用确定性 CLI（`python -m src.cli`）执行媒体处理与双层质量验收硬门禁。
+> 详见 [`docs/superpowers/plans/2026-11-21-adr-001-agent-first-architecture.md`](docs/superpowers/plans/2026-11-21-adr-001-agent-first-architecture.md)。
 
-### 2. 运行模式
-
-#### 模式一：Agent 自主协同调度 (Autonomous Agent Mode)
-Agent 直接调用调度层，依据内置电商决策模型自主完成候选审阅、分镜规划与组装：
-```bash
-python src/main_pipeline.py --spec job_spec.json
-```
-
-#### 模式二：Agent 细粒度干预执行 (Interactive / Override Mode)
-Agent 亦可显式介入每一处决策：
-1. **生成并审视封面候选**：
+### 0. 准备素材与任务交接 (Windows EXE 向导)
+用户只需完成基本点选操作，无需在 EXE 内选择/登录/启动 Agent：
+1. 双击运行根目录的：
    ```bash
-   python src/tools/extract_cover_candidates.py --video data/raw_samples/sample.mp4 --out-dir data/candidates/cover_candidates
+   启动任务配置器.exe  # 或 SpecCreator.exe
    ```
-   *Agent 查看 `cover_candidates.json` 并选定如 `cand_01`。*
+2. 在可视化向导中点选或新建项目目录、勾选原始直播录像素材、添加商品平铺参考图、确认商品事实与风格。
+3. 点击 **「生成任务并交给 Agent」**：
+   - 自动生成原子配置 `素材/job_spec.json`；
+   - 自动在项目根目录生成 `AGENT_TASK.md` 任务指南；
+   - 提供一键复制的标准任务指令，方便直接粘贴给外部 Agent。
 
-2. **生成并审视台词叙事池**：
-   ```bash
-   python src/tools/analyze_story_segments.py --video data/raw_samples/sample.mp4 --spec job_spec.json --out-json data/candidates/story_candidates.json
-   ```
-   *Agent 审阅分镜池，剔除价格信息，调整分镜编排生成 `my_plan.json`。*
+---
 
-3. **指定 Agent 决策执行总装**：
-   ```bash
-   python src/main_pipeline.py --spec job_spec.json --cover-id cand_01 --plan my_plan.json
-   ```
+### 1. 外部 Agent 通用 CLI 阶段化流水线 (Universal CLI Pipeline)
+
+外部 Agent 获取项目交接后，在终端按以下阶段依次调度 CLI：
+
+#### 阶段 1: 准备环境与资产白名单 (`prepare`)
+```bash
+python -m src.cli prepare --spec "<path_to_job_spec.json>"
+```
+- 严格解析并登记用户确认的源视频入库 `input_manifest.json`；
+- 隔离所有历史成片与系统导出文件，绝对避免旧文件二次污染；
+- 冻结 `spec_snapshot.json` 并生成 `work/<run_id>/` 隔离工作区。
+
+#### 阶段 2: 多模态候选池分析与哈希冻结 (`analyze`)
+```bash
+python -m src.cli analyze --run "<work_dir>"
+```
+- 分段执行 ASR 转录、停顿气口对齐、镜头边界切点与最佳封面候选提取；
+- 依据商品参考图与 SkuTracker 判定商品相关性（`SAME_SKU`, `ACCESSORY`, `OTHER_SKU`, `UNCERTAIN`）；
+- 导出 `analysis/candidates.json`，并由工具计算不可篡改的 `candidate_pool_hash` 冻结候选池。
+
+#### 阶段 3: Agent 审美裁决与编排提案 (Directorial Decision)
+外部 Agent 审阅候选清单与多模态证据，选定镜头并在 `<work_dir>/decisions/sequence_proposal.json` 提交提案：
+```json
+{
+  "schema_version": "3.2",
+  "run_id": "<run_id>",
+  "candidate_pool_hash": "<candidate_pool_hash>",
+  "proposal_id": "agent_proposal_01",
+  "ordered_candidate_ids": ["c_src_01_001", "c_src_02_005"],
+  "chosen_cover_id": "cand_01",
+  "style": "balanced",
+  "decision_reasons": ["开场 2.5s 痛点抓取完整", "核心羊毛混纺质感展示充分", "行动号召语义完整"]
+}
+```
+
+#### 阶段 4: 提案审计与计划校验 (`validate-plan`)
+```bash
+python -m src.cli validate-plan --run "<work_dir>" --proposal "<work_dir>/decisions/sequence_proposal.json"
+```
+- 硬门禁校验：候选 ID 白名单校验、同源镜头时间戳防重叠校验、总时长合法性 [45, 65]s 校验、封面门禁校验；
+- 校验通过后编译出冻结的 `validated_plan.json`。
+
+#### 阶段 5: 物理混流装配与封面渲染 (`render`)
+```bash
+python -m src.cli render --run "<work_dir>"
+```
+- FFmpeg 物理音画 PTS 锁定装配，统一 60FPS (1080×1920) 高清输出；
+- 烧录动态发光字幕、Hook 标题卡 (720×168) 与挂角贴纸；
+- 先在临时文件渲染，校验完整性后原子移动至 `output/<run_id>/final.mp4` 与 `cover.jpg`。
+
+#### 阶段 6: 双层质量验收门禁 (`qc`)
+```bash
+python -m src.cli qc --run "<work_dir>"
+```
+- **工程技术 QC**：黑帧、静音、响度（-14 LUFS）、字幕零价格、封面几何与清晰度复测；
+- **内容 Editorial QC**：违规极限词扫描、原声口播完整度、卖点真实性。
+
+#### 阶段 7: 正式出库交付签署 (`deliver`)
+```bash
+python -m src.cli deliver --run "<work_dir>"
+```
+- 硬核准则：**只有技术 QC PASS 且内容 QC PASS 且任务指纹与文件真实有效时，才允许签发出库**；
+- 生成 `output/<run_id>/delivery_manifest.json`，并原子更新 `output/latest.json`。
 
 ---
 
 ## 🎯 交付成果说明
 
-流程执行完成后，系统会在 `output/<project_id>/` 目录下生成：
-- `*_final.mp4`：1080×1920 高清竖屏成片（45~65s，纯产品介绍，100% 物理咬合原声，−14 LUFS 响度归一）；
-- `*_cover.jpg`：MIXCITY 风格高点击率品牌封面（水平 1:6:1 构图 + 金色渐变商品名）；
-- `*_cover_render_meta.json`：封面渲染几何 meta（QC 像素级复测依据）；
-- `qc_report.json`：constraints 驱动的全项量化质检报告（BLOCK/WARN 分级）；
-- `asr_verification_report.json`：ASR 语境同音字校正详细审计报告；
-- `agent_decision_manifest.json`：Agent 总导演全程决策记录清单（含选段审计与质检警告）。
+流程执行完成后，系统会在 `output/<run_id>/` 目录下生成：
+- `final.mp4`：1080×1920 60FPS 高清竖屏成片（45~65s，纯产品介绍，100% 物理咬合原声，−14 LUFS 响度归一）；
+- `cover.jpg`：MIXCITY 风格高点击率品牌封面（水平 1:6:1 构图 + 金色渐变商品名）；
+- `copywriting.md`：自动生成的带货文案与核心卖点提炼；
+- `technical_qc.json`：constraints 驱动的工程技术量化质检报告；
+- `editorial_qc.json`：内容合规与语境事实审核报告；
+- `delivery_manifest.json`：带有全局数字指纹的双层质检交付清单。

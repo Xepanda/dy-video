@@ -124,7 +124,7 @@ class JobRunner:
     ):
         self.spec = job_spec
         self.project_id = str(job_spec.get("project_id", "demo"))
-        self.agent_adapter = AgyHeadlessAdapter() if agent_adapter is _SENTINEL else agent_adapter
+        self.agent_adapter = None if agent_adapter is _SENTINEL else agent_adapter
         self.max_retries = max_retries
 
         # 统一项目路径管理
@@ -271,17 +271,21 @@ class JobRunner:
                         else:
                             print("[JOB-RUNNER][WARN] 发现旧版交付清单缺少 job_fingerprint 且缺失原始历史输入，拒绝直接复用，强制重新生成")
 
-                    has_qc = bool(
-                        d_data.get("qc_passed") is True or
-                        (d_data.get("editorial_qc") or {}).get("passed") is True
-                    )
+                    has_status = bool(d_data.get("status") in (JobStage.DELIVERED, "DELIVERED"))
+                    tech_qc_ok = bool(d_data.get("qc_passed") is True)
+                    ed_qc = d_data.get("editorial_qc") or (d_data.get("director_manifest") or {}).get("editorial_qc") or {}
+                    if isinstance(ed_qc, dict) and "passed" in ed_qc:
+                        ed_qc_ok = bool(ed_qc.get("passed") is True and ed_qc.get("block_count", 0) == 0)
+                    else:
+                        ed_qc_ok = True
+                    has_qc = bool(tech_qc_ok and ed_qc_ok)
                     is_valid_video = bool(v_p and os.path.isfile(v_p) and os.path.getsize(v_p) > 0)
-                    if fp_match and has_qc and is_valid_video:
+                    if fp_match and has_status and has_qc and is_valid_video:
                         d_data.setdefault("status", JobStage.DELIVERED)
-                        _update(JobStage.DELIVERED, 1.0, "任务配置与素材未变，且既有质检通过，直接复用既有成片（幂等）")
+                        _update(JobStage.DELIVERED, 1.0, "任务配置与素材未变，且既有双层质检通过，直接复用既有成片（幂等）")
                         return d_data
                     elif fp_match:
-                        print("[JOB-RUNNER][WARN] 虽指纹匹配但既有成片不存在、文件为空或质检未通过，拒绝直接复用，强制重新生成")
+                        print("[JOB-RUNNER][WARN] 虽指纹匹配但状态非DELIVERED、既有成片不存在、文件为空或质检未双通过，拒绝直接复用，强制重新生成")
                 except Exception:
                     pass
 

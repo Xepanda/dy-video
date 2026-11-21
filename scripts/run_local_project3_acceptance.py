@@ -102,11 +102,8 @@ def main():
     print(f"work 目录: {paths.work_dir}")
     print(f"output 目录: {paths.output_dir}")
 
-    # 环境探查：探测 AGY 与本地引擎
-    from src.runtime.adapters.agy_headless import AgyHeadlessAdapter
-    adapter = AgyHeadlessAdapter()
-    is_avail, avail_msg = adapter.check_availability()
-    print(f"AGY CLI 可用性探测: {'可用' if is_avail else '不可用'} ({avail_msg})")
+    # V3.2 Agent-First：零 AGY 适配器强绑定
+    print("V3.2 Agent-First 模式：由外部 Agent 驱动或执行高确定性内置引擎，零 AGY 依赖。")
 
     if args.dry_run:
         print("\n[DRY-RUN] 模式启动：执行只读预检与路径安全隔离断言，跳过耗时渲染。")

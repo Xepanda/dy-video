@@ -237,8 +237,8 @@ def main() -> int:
     # —— 3. 派生文案并落盘可执行 spec（项目目录隔离：work/<run_id>/）——
     from src.core.project_context import ProjectPaths
     run_id = f"run_{time.strftime('%Y%m%d_%H%M%S')}"
-    proj_root = os.path.dirname(os.path.abspath(spec_path))
-    paths = ProjectPaths(project_root=proj_root, run_id=run_id)
+    paths = ProjectPaths(project_root=spec_path, run_id=run_id)
+    proj_root = paths.project_root
     paths.ensure_runtime_dirs()
 
     texts = derive_texts(spec)

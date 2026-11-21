@@ -45,6 +45,126 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 
+def assign_sticker_sides(plan: Dict[str, Any], constraints: Optional[Dict[str, Any]] = None, default_raw_video: Optional[str] = None) -> None:
+    """为每个分镜挑选**不压脸**的挂角贴纸边（左/右与高度）。
+
+    在该分镜的贴纸活跃时段内抽帧测人脸水平位置，
+    选离人脸更远的一侧；两侧都压则把贴纸整体下移到人脸下方。
+    结果写入 clip["sticker_side"] / clip["sticker_y"]，
+    装配器逐镜读取（原先只读全局配置）。
+    """
+    try:
+        import cv2
+        from src.tools.detect_face import FaceAnalyzer, _load_pose_landmarks
+    except Exception as e:
+        print(f"  [STICKER-SIDE] 人脸检测不可用，沿用默认边: {e}")
+        return
+    constraints = constraints or {}
+    st_c = (constraints.get("video_sticker", {}) or {})
+    size = int(st_c.get("size", 220) or 220)
+    mx = int(st_c.get("margin_x", 40) or 40)
+    my = int(st_c.get("margin_y", 300) or 300)
+    default_side = str(st_c.get("side", "right") or "right")
+    fa = FaceAnalyzer()
+    out_w = 1080
+    for c in plan.get("clips", []):
+        src = c.get("source_file") or default_raw_video
+        st = float(c.get("st", 0.0))
+        dur = float(c.get("dur", 0.0))
+        if dur <= 0.2:
+            continue
+        delay_r = float(st_c.get("delay_ratio", 0.10) or 0.10)
+        hold_r = float(st_c.get("hold_ratio", 0.72) or 0.72)
+        t_in = st + dur * delay_r
+        t_out = min(st + dur * (delay_r + hold_r), st + dur - 0.05)
+
+        faces = []
+        span = max(0.1, t_out - t_in)
+        for k in range(3):
+            t = t_in + span * (k + 0.5) / 3.0
+            try:
+                cap = cv2.VideoCapture(src)
+                cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, t) * 1000)
+                ok, fr = cap.read()
+                cap.release()
+                if not ok or fr is None:
+                    continue
+                lm = _load_pose_landmarks(fr)
+                if lm is None:
+                    continue
+                face = fa.analyze(fr, pose_landmarks=lm)
+                if not face or not face.get("face_detected"):
+                    continue
+                bbox = face["face_bbox_norm"]
+                fh, fw = fr.shape[:2]
+                x_off = (fw - out_w) / 2.0 if fw > out_w else 0.0
+                fx0 = (bbox[0] * fw - x_off) * (out_w / float(fw))
+                fx1 = (bbox[2] * fw - x_off) * (out_w / float(fw))
+                fy0 = bbox[1] * fh
+                fy1 = bbox[3] * fh
+                faces.append((fx0, fy0, fx1, fy1))
+            except Exception:
+                continue
+        if not faces:
+            c["sticker_side"] = default_side
+            c["sticker_y"] = my
+            continue
+
+        if str(c.get("effect") or "") == "hflip":
+            faces = [
+                (out_w - fx1, fy0, out_w - fx0, fy1)
+                for (fx0, fy0, fx1, fy1) in faces
+            ]
+
+        z = float(c.get("zoom", 1.0) or 1.0)
+        if z > 1.0:
+            zc = (constraints.get("zoom_effect", {}) or {})
+            ya = float(c.get("y_anchor", zc.get("y_anchor", 0.35)) or 0.35)
+            out_h = 1920
+            x_c = out_w * (1.0 - 1.0 / z) / 2.0
+            y_c = out_h * ya * (1.0 - 1.0 / z)
+            faces = faces + [
+                ((fx0 - x_c) * z, (fy0 - y_c) * z,
+                 (fx1 - x_c) * z, (fy1 - y_c) * z)
+                for (fx0, fy0, fx1, fy1) in faces
+            ]
+
+        def _gap(rect, face_rect):
+            ax0, ay0, ax1, ay1 = rect
+            bx0, by0, bx1, by1 = face_rect
+            dx = max(bx0 - ax1, ax0 - bx1)
+            dy = max(by0 - ay1, ay0 - by1)
+            if dx >= 0 and dy >= 0:
+                return (dx * dx + dy * dy) ** 0.5
+            if dx < 0 and dy < 0:
+                return -((min(ax1, bx1) - max(ax0, bx0)) *
+                         (min(ay1, by1) - max(ay0, by0))) ** 0.5
+            if dx < 0:
+                return float(dy)
+            return float(dx)
+
+        def _best_at(sy):
+            opts = []
+            for side in ("right", "left"):
+                sx = (out_w - size - mx) if side == "right" else mx
+                rect = (sx, sy, sx + size, sy + size)
+                opts.append((min(_gap(rect, f) for f in faces), side, sx, sy))
+            return max(opts, key=lambda x: x[0])
+
+        best = _best_at(my)
+        if best[0] < 30:
+            lowered = [_best_at(sy) for sy in (my + 220, my + 440, my + 660)]
+            safe = [x for x in lowered if x[0] >= 30]
+            if safe:
+                best = min(safe, key=lambda x: x[3])
+        worst, side, sx, sy = best
+        c["sticker_side"] = side
+        c["sticker_y"] = int(sy)
+        _flag = "OK" if worst >= 30 else ("紧" if worst >= 0 else "压脸")
+        print(f"  [STICKER-SIDE] {c['id']}: 边={side} y={sy} "
+              f"最坏帧人脸间距 {worst:.0f}px [{_flag}]")
+
+
 class AgentDirector:
     def __init__(
         self,
@@ -207,150 +327,8 @@ class AgentDirector:
         return paths
 
     def _assign_sticker_sides(self, plan: Dict[str, Any]) -> None:
-        """为每个分镜挑选**不压脸**的挂角贴纸边（左/右）。
-
-        背景（2026-11-01）：挂角贴纸此前是**全局固定**位置（right, y=300），
-        而人脸位置逐镜不同——某镜模特偏右时贴纸正好压脸，
-        被 QC「叠加层人脸安全」判 BLOCK（实测 project-1 的 c03_fit）。
-
-        本方法与 Hook 卡避让（§11.2 #5 多帧采样取最高人脸顶）同源思路：
-        在该分镜的贴纸活跃时段内抽帧测人脸水平位置，
-        选离人脸更远的一侧；两侧都压则把贴纸整体下移到人脸下方。
-        结果写入 clip["sticker_side"] / clip["sticker_y"]，
-        装配器逐镜读取（原先只读全局配置）。
-        """
-        try:
-            import cv2
-            from src.tools.detect_face import FaceAnalyzer, _load_pose_landmarks
-        except Exception as e:
-            print(f"  [STICKER-SIDE] 人脸检测不可用，沿用默认边: {e}")
-            return
-        st_c = (self.constraints.get("video_sticker", {}) or {})
-        size = int(st_c.get("size", 220) or 220)
-        mx = int(st_c.get("margin_x", 40) or 40)
-        my = int(st_c.get("margin_y", 300) or 300)
-        default_side = str(st_c.get("side", "right") or "right")
-        fa = FaceAnalyzer()
-        out_w = 1080
-        for c in plan.get("clips", []):
-            src = c.get("source_file") or self.raw_video
-            st = float(c.get("st", 0.0))
-            dur = float(c.get("dur", 0.0))
-            if dur <= 0.2:
-                continue
-            # 贴纸活跃时段（与装配器一致：delay_ratio + hold_ratio）
-            delay_r = float(st_c.get("delay_ratio", 0.10) or 0.10)
-            hold_r = float(st_c.get("hold_ratio", 0.72) or 0.72)
-            t_in = st + dur * delay_r
-            t_out = min(st + dur * (delay_r + hold_r), st + dur - 0.05)
-
-            # 在活跃时段内多帧采样人脸 bbox（与 QC check_overlay_face_safety
-            # 同一口径：活跃时段内取样、算"贴纸矩形 vs 人脸 bbox"的间距）。
-            faces = []
-            span = max(0.1, t_out - t_in)
-            for k in range(3):
-                t = t_in + span * (k + 0.5) / 3.0
-                try:
-                    cap = cv2.VideoCapture(src)
-                    cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, t) * 1000)
-                    ok, fr = cap.read()
-                    cap.release()
-                    if not ok or fr is None:
-                        continue
-                    lm = _load_pose_landmarks(fr)
-                    if lm is None:
-                        continue
-                    face = fa.analyze(fr, pose_landmarks=lm)
-                    if not face or not face.get("face_detected"):
-                        continue
-                    bbox = face["face_bbox_norm"]
-                    fh, fw = fr.shape[:2]
-                    x_off = (fw - out_w) / 2.0 if fw > out_w else 0.0
-                    fx0 = (bbox[0] * fw - x_off) * (out_w / float(fw))
-                    fx1 = (bbox[2] * fw - x_off) * (out_w / float(fw))
-                    fy0 = bbox[1] * fh
-                    fy1 = bbox[3] * fh
-                    faces.append((fx0, fy0, fx1, fy1))
-                except Exception:
-                    continue
-            if not faces:
-                c["sticker_side"] = default_side
-                c["sticker_y"] = my
-                continue
-
-            # 镜像分镜（effect=hflip）：成片画面左右翻转，人脸水平位置随之互换。
-            # 若仍按源帧人脸位置选贴纸边，选出的"安全侧"在成片上正好压脸
-            # （2026-11-04 project-4 实测：c07_fit 源帧间距 357px 判 OK，
-            #  成片 QC「叠加层人脸安全」却判 BLOCK 压脸）。
-            # 采样人脸 bbox 按成片画幅左右镜像后再参与避让计算，保证判定对象
-            # 与实际交付对象一致（§11.2 #4）。注意必须是「替换」而非「并集」：
-            # 并集会把源帧里并不存在的人脸也算进去，两侧都被判为压脸，
-            # 反而选不出安全位置。镜像若因遮挡覆盖率不足被装配器放弃，
-            # QC 的成片级人脸安全复检会兜底拦截（当前任务 mirror_abandoned=0）。
-            if str(c.get("effect") or "") == "hflip":
-                faces = [
-                    (out_w - fx1, fy0, out_w - fx0, fy1)
-                    for (fx0, fy0, fx1, fy1) in faces
-                ]
-
-            # 推镜分镜（zoom>1）：装配器用 zoompan 以「水平居中 + y_anchor」裁剪后
-            # 放大，源帧人脸 bbox 在成片里会被放大并平移。挂角贴纸是成片坐标系里的
-            # 固定矩形，若按未推镜的源帧判定，选出的"安全侧"推镜后可能正好压脸
-            # （2026-11-04 project-4 v2 实测：c08_styling zoom=1.3 源帧判 right OK，
-            #  成片 QC「叠加层人脸安全」却判 BLOCK 压脸 38px）。
-            # 按 zoompan 同款公式把人脸映射到成片坐标系；推镜是缓入的，因此同时
-            # 保留「未推镜」与「推镜完成」两种真实形态，取最坏帧间距最大者。
-            z = float(c.get("zoom", 1.0) or 1.0)
-            if z > 1.0:
-                zc = (self.constraints.get("zoom_effect", {}) or {})
-                ya = float(c.get("y_anchor", zc.get("y_anchor", 0.35)) or 0.35)
-                out_h = 1920
-                x_c = out_w * (1.0 - 1.0 / z) / 2.0
-                y_c = out_h * ya * (1.0 - 1.0 / z)
-                faces = faces + [
-                    ((fx0 - x_c) * z, (fy0 - y_c) * z,
-                     (fx1 - x_c) * z, (fy1 - y_c) * z)
-                    for (fx0, fy0, fx1, fy1) in faces
-                ]
-
-            def _gap(rect, face_rect):
-                """矩形间距（与 QC 的 _rect_overlap_gap 同一符号约定）。"""
-                ax0, ay0, ax1, ay1 = rect
-                bx0, by0, bx1, by1 = face_rect
-                dx = max(bx0 - ax1, ax0 - bx1)
-                dy = max(by0 - ay1, ay0 - by1)
-                if dx >= 0 and dy >= 0:
-                    return (dx * dx + dy * dy) ** 0.5
-                if dx < 0 and dy < 0:
-                    return -((min(ax1, bx1) - max(ax0, bx0)) *
-                             (min(ay1, by1) - max(ay0, by0))) ** 0.5
-                if dx < 0:
-                    return float(dy)
-                return float(dx)
-
-            # 先在默认挂角高度上择优；只有确实"紧/压脸"（<30px）才允许整体下移。
-            # 不能一味取"离脸最远"——那会把所有贴纸推到画面中部，破坏挂角版式。
-            # 下移时取满足安全间距且 y 最小者，尽量贴近原始挂角位置。
-            def _best_at(sy):
-                opts = []
-                for side in ("right", "left"):
-                    sx = (out_w - size - mx) if side == "right" else mx
-                    rect = (sx, sy, sx + size, sy + size)
-                    opts.append((min(_gap(rect, f) for f in faces), side, sx, sy))
-                return max(opts, key=lambda x: x[0])
-
-            best = _best_at(my)
-            if best[0] < 30:
-                lowered = [_best_at(sy) for sy in (my + 220, my + 440, my + 660)]
-                safe = [x for x in lowered if x[0] >= 30]
-                if safe:
-                    best = min(safe, key=lambda x: x[3])
-            worst, side, sx, sy = best
-            c["sticker_side"] = side
-            c["sticker_y"] = int(sy)
-            _flag = "OK" if worst >= 30 else ("紧" if worst >= 0 else "压脸")
-            print(f"  [STICKER-SIDE] {c['id']}: 边={side} y={sy} "
-                  f"最坏帧人脸间距 {worst:.0f}px [{_flag}]")
+        """委托模块级 assign_sticker_sides 处理。"""
+        assign_sticker_sides(plan, self.constraints, self.raw_video)
 
     def _detect_speech_pauses(self) -> dict:
         """检测各源素材的语音气口（切片规则 R1 的数据源）。

@@ -59,12 +59,23 @@ class VideoFrameProvider:
                             self.source_registry[str(sid)] = os.path.abspath(sp)
                         if s.get("filename") and sp:
                             self.source_registry[s["filename"]] = os.path.abspath(sp)
+                            stem, ext = os.path.splitext(s["filename"])
+                            ext_clean = ext.lstrip(".").lower()
+                            if ext_clean:
+                                self.source_registry[f"{stem}_{ext_clean}"] = os.path.abspath(sp)
             except Exception:
                 pass
 
     def register_source(self, source_id: str, file_path: str) -> None:
         if file_path:
-            self.source_registry[str(source_id)] = os.path.abspath(file_path)
+            abs_p = os.path.abspath(file_path)
+            self.source_registry[str(source_id)] = abs_p
+            base = os.path.basename(abs_p)
+            self.source_registry[base] = abs_p
+            stem, ext = os.path.splitext(base)
+            ext_clean = ext.lstrip(".").lower()
+            if ext_clean:
+                self.source_registry[f"{stem}_{ext_clean}"] = abs_p
 
     def register_sources(self, sources: Union[Dict[str, str], List[Dict[str, Any]]]) -> None:
         if isinstance(sources, dict):

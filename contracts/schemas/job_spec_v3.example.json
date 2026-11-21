@@ -39,9 +39,8 @@
       "render_profile": "branded"
     },
     "automation": {
-      "pipeline_version": 3,
+      "pipeline_version": 3.2,
       "auto_edit": true,
-      "agent_provider": "agy_headless",
       "quality_policy": "strict",
       "visual_verification": "required",
       "max_replan_rounds": 2

@@ -317,6 +317,71 @@ def test_api_status_and_open_helpers() -> None:
     print("  [PASS] DesktopSpecApi：状态机与打开路径防护正常")
 
 
+def test_api_generate_agent_task_branded_unbranded_and_zero_selection() -> None:
+    """测试 A02 核心改造：生成任务交接包、零勾选阻断、支持空品牌/有品牌。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        api = DesktopSpecApi()
+        mat_dir = os.path.join(td, "素材")
+        os.makedirs(mat_dir, exist_ok=True)
+        dummy_v1 = os.path.join(mat_dir, "v1.mp4")
+        with open(dummy_v1, "wb") as f:
+            f.write(b"dummy_video_bytes")
+
+        # 1. 零勾选阻断
+        zero_payload = {
+            "project_id": "test_p",
+            "project_root": td,
+            "raw_video_paths": [],
+            "product_title_l1": "商品第一行",
+            "product_title_l2": "商品第二行",
+        }
+        res_zero = api.generate_agent_task(zero_payload)
+        assert res_zero["success"] is False
+        assert res_zero["status"] == "NEEDS_INPUT"
+
+        # 2. 空品牌合法生成
+        unbranded_payload = {
+            "project_id": "test_unbranded",
+            "project_root": td,
+            "raw_video_paths": [dummy_v1],
+            "brand_en": "",
+            "brand_cn": "",
+            "product_title_l1": "无品牌羊毛开衫",
+            "product_title_l2": "质感百搭",
+        }
+        res_unbranded = api.generate_agent_task(unbranded_payload)
+        assert res_unbranded["success"] is True
+        assert os.path.isfile(res_unbranded["task_md_path"])
+        with open(res_unbranded["task_md_path"], "r", encoding="utf-8") as f:
+            content = f.read()
+            assert "python -m src.cli prepare" in content
+
+        with open(res_unbranded["spec_path"], "r", encoding="utf-8") as f:
+            saved_spec = json.load(f)
+            assert saved_spec["brand"]["title_en"] == ""
+            assert saved_spec["brand"]["subtitle_cn"] == ""
+
+        # 3. 有品牌合法生成
+        branded_payload = {
+            "project_id": "test_branded",
+            "project_root": td,
+            "raw_video_paths": [dummy_v1],
+            "brand_en": "NEW_BRAND",
+            "brand_cn": "高端设计",
+            "product_title_l1": "品牌羊毛大衣",
+            "product_title_l2": "优雅大气",
+        }
+        res_branded = api.generate_agent_task(branded_payload)
+        assert res_branded["success"] is True
+        with open(res_branded["spec_path"], "r", encoding="utf-8") as f:
+            saved_spec_b = json.load(f)
+            assert saved_spec_b["brand"]["title_en"] == "NEW_BRAND"
+            assert saved_spec_b["brand"]["subtitle_cn"] == "高端设计"
+
+    print("  [PASS] DesktopSpecApi：任务交接生成、零勾选阻断与空品牌/有品牌支持完全正确")
+
+
 def main() -> int:
     tests = [
         test_spec_manager_build_spec_dict,
@@ -333,6 +398,7 @@ def main() -> int:
         test_api_create_new_project_with_parent_dir,
         test_spec_manager_subtitle_and_cover_strategy,
         test_api_status_and_open_helpers,
+        test_api_generate_agent_task_branded_unbranded_and_zero_selection,
         test_html_content_embedded_js_syntax,
     ]
     failed = 0

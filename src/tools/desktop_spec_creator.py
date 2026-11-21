@@ -163,9 +163,10 @@ class SpecManager:
         # 品牌英文为选填项；留空表示“无品牌包装”（plain packaging），不作为必填校验阻断
         # 若填写则作为封面品牌主标题使用
 
-        p_l1 = str(payload.get("product_title_l1") or "").strip()
-        p_l2 = str(payload.get("product_title_l2") or "").strip()
-        p_name = str(payload.get("product_name") or payload.get("name") or "").strip()
+        prod = payload.get("product", {}) if isinstance(payload.get("product"), dict) else {}
+        p_l1 = str(payload.get("product_title_l1") or prod.get("title_line1") or "").strip()
+        p_l2 = str(payload.get("product_title_l2") or prod.get("title_line2") or "").strip()
+        p_name = str(payload.get("product_name") or payload.get("name") or prod.get("name") or "").strip()
         if not p_l1 and not p_l2 and not p_name:
             errors.append("商品名称至少填写一行")
 
@@ -303,6 +304,8 @@ class DesktopSpecApi:
         self._lock = threading.Lock()
         self._job_thread: Optional[threading.Thread] = None
         self._current_runner = None
+        self._last_project_root: Optional[str] = None
+        self._last_spec_path: Optional[str] = None
         self._job_state: Dict[str, Any] = {
             "status": "IDLE",
             "state": "IDLE",
@@ -608,6 +611,9 @@ class DesktopSpecApi:
                 if os.path.abspath(p_spec) != os.path.abspath(target_path):
                     shutil.copy2(target_path, p_spec)
 
+            self._last_project_root = paths.project_root if "paths" in locals() else material_dir
+            self._last_spec_path = target_path
+
             if not self._custom_spec_path and not os.environ.get("PYTEST_CURRENT_TEST"):
                 try:
                     if os.name == "nt":
@@ -627,6 +633,148 @@ class DesktopSpecApi:
             }
         except Exception as e:
             return {"success": False, "message": f"保存配置失败: {str(e)}"}
+
+    def generate_agent_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """原子保存 job_spec.json 并生成 AGENT_TASK.md，提供可复制的任务指令，绝不隐式启动 Agent 进程。"""
+        raw_vids = payload.get("raw_video_paths")
+        if raw_vids is not None and len(raw_vids) == 0:
+            return {
+                "success": False,
+                "status": "NEEDS_INPUT",
+                "message": "未勾选任何原始视频素材，请在素材清单中勾选至少一段原始直播视频！",
+            }
+
+        save_res = self.save_spec(payload)
+        if not save_res.get("success"):
+            return save_res
+
+        spec = save_res["spec"]
+        target_path = save_res["target_path"]
+        material_dir = save_res["material_dir"]
+
+        from src.core.project_context import ProjectPaths
+        paths = ProjectPaths(project_root=material_dir)
+        project_root = paths.project_root
+        self._last_project_root = project_root
+        self._last_spec_path = target_path
+
+        vids = spec.get("raw_video_paths") or ([spec.get("raw_video_path")] if spec.get("raw_video_path") else [])
+        vids_str = "\n".join(f"- `{os.path.basename(str(v))}`" for v in vids) or "- 无显式列表"
+
+        prod_name = (spec.get("product") or {}).get("name") or (spec.get("product") or {}).get("title_line1") or "带货商品"
+        project_id = spec.get("project_id", "project")
+
+        agent_task_content = f"""# dy-video V3.2 带货视频剪辑任务指令
+
+> 本任务由 Windows EXE 配置向导生成。EXE 仅作为配置器与交接器，不启动任何 Agent 进程。
+> 请外部 Agent（AGY / Codex / Claude Code）作为总导演，调用统一 CLI 执行带货视频制作流水线。
+
+## 1. 任务元信息
+- **任务代号**: `{project_id}`
+- **推荐商品**: {prod_name}
+- **项目根目录**: `{project_root}`
+- **任务契约文件**: `{target_path}`
+- **选定源素材清单**:
+{vids_str}
+
+## 2. 外部 Agent 标准工作流规范 (ADR-001)
+所有媒体处理、候选提取、时间线编译、音画渲染与双层质检门禁均由仓库统一 CLI 承载。
+请在当前 Agent 会话的终端中，依次执行以下确定性阶段命令：
+
+### 阶段 1: 初始化项目与白名单
+```bash
+python -m src.cli prepare --spec "{target_path}"
+```
+*记录标准输出 JSON 中的 `work_dir`（如 `work/<run_id>`）和 `spec_fingerprint`。*
+
+### 阶段 2: 提取 ASR、镜头切点与分镜候选池
+```bash
+python -m src.cli analyze --run "<work_dir>"
+```
+*该阶段完成后流程停靠，生成 `<work_dir>/analysis/candidates.json` 与冻结的 `candidate_pool_hash`。*
+
+### 阶段 3: 审查候选并编写分镜提案
+外部 Agent 依据商品卖点、口播完整度与视觉证据，编写并保存 `<work_dir>/decisions/sequence_proposal.json`：
+```json
+{{
+  "schema_version": "3.2",
+  "run_id": "<run_id>",
+  "candidate_pool_hash": "<candidate_pool_hash>",
+  "proposal_id": "agent_proposal_01",
+  "ordered_candidate_ids": ["c_..."],
+  "style": "balanced",
+  "decision_reasons": ["开场语义完整", "主品卖点展示证据充足"]
+}}
+```
+
+### 阶段 4: 提案审计与计划校验
+```bash
+python -m src.cli validate-plan --run "<work_dir>" --proposal "<work_dir>/decisions/sequence_proposal.json"
+```
+
+### 阶段 5: 渲染成片与封面
+```bash
+python -m src.cli render --run "<work_dir>"
+```
+
+### 阶段 6: 执行双层质量门禁审计
+```bash
+python -m src.cli qc --run "<work_dir>"
+```
+
+### 阶段 7: 正式交付签署
+```bash
+python -m src.cli deliver --run "<work_dir>"
+```
+
+## 3. 安全纪律
+- 严禁修改、删除、改名或覆盖既有历史成片与原始视频。
+- 所有产物严格写入当前运行的 `work/<run_id>/` 与 `output/<run_id>/`。
+- 双层质检（工程技术 QC 与内容 Editorial QC）双通过才允许执行 `deliver`。
+"""
+        task_md_path = os.path.join(project_root, "AGENT_TASK.md")
+        with open(task_md_path, "w", encoding="utf-8") as f:
+            f.write(agent_task_content)
+
+        task_prompt = (
+            f"请按照 dy-video 标准工作流制作带货视频：\n"
+            f"项目根目录: {project_root}\n"
+            f"配置契约: {target_path}\n"
+            f"任务指南: {task_md_path}\n\n"
+            f"请依次在终端执行通用 CLI 阶段命令：\n"
+            f'1. python -m src.cli prepare --spec "{target_path}"\n'
+            f'2. python -m src.cli analyze --run "<work_dir>"\n'
+            f'3. 审查候选池并保存 decisions/sequence_proposal.json\n'
+            f'4. python -m src.cli validate-plan --run "<work_dir>" --proposal "<work_dir>/decisions/sequence_proposal.json"\n'
+            f'5. python -m src.cli render --run "<work_dir>"\n'
+            f'6. python -m src.cli qc --run "<work_dir>"\n'
+            f'7. python -m src.cli deliver --run "<work_dir>"'
+        )
+
+        return {
+            "success": True,
+            "status": "TASK_GENERATED",
+            "message": "任务包已生成！任务说明已写入 AGENT_TASK.md，可直接复制任务指令交给 Agent。",
+            "task_prompt": task_prompt,
+            "spec_path": target_path,
+            "task_md_path": task_md_path,
+            "project_root": project_root,
+            "material_dir": material_dir,
+        }
+
+    def open_project_directory(self, project_root: Optional[str] = None) -> Dict[str, Any]:
+        """打开项目根目录。"""
+        target = project_root or self._last_project_root
+        if not target or not os.path.exists(target):
+            return {"success": False, "message": f"项目目录不存在: {target}"}
+        return self.open_path(target)
+
+    def open_spec_file(self, spec_path: Optional[str] = None) -> Dict[str, Any]:
+        """打开配置文件。"""
+        target = spec_path or self._last_spec_path
+        if not target or not os.path.exists(target):
+            return {"success": False, "message": f"配置文件不存在: {target}"}
+        return self.open_path(target)
 
     def start_pipeline(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """校验、保存配置并调度 JobRunner 端到端执行一键全自动智能剪辑（同步执行，兼顾测试）。"""
@@ -765,8 +913,31 @@ class DesktopSpecApi:
             }
 
     def get_job_status(self) -> Dict[str, Any]:
-        """获取当前后台任务的实时进度与日志状态。"""
+        """获取当前任务的实时进度与日志状态（支持只读读取外部 Agent 阶段 CLI 生成的 run_state.json）。"""
         with self._lock:
+            if self._job_thread and self._job_thread.is_alive():
+                return dict(self._job_state)
+
+            if self._last_project_root and os.path.isdir(self._last_project_root):
+                work_base = os.path.join(self._last_project_root, "work")
+                if os.path.isdir(work_base):
+                    subdirs = [os.path.join(work_base, d) for d in os.listdir(work_base) if os.path.isdir(os.path.join(work_base, d))]
+                    if subdirs:
+                        subdirs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                        state_file = os.path.join(subdirs[0], "run_state.json")
+                        if os.path.isfile(state_file):
+                            try:
+                                with open(state_file, "r", encoding="utf-8") as f:
+                                    s_data = json.load(f)
+                                st = s_data.get("status", "IDLE")
+                                pct = s_data.get("progress", 0.0)
+                                msg = s_data.get("message", "")
+                                self._job_state["status"] = st
+                                self._job_state["state"] = st
+                                self._job_state["progress"] = pct
+                                self._job_state["message"] = msg
+                            except Exception:
+                                pass
             return dict(self._job_state)
 
     def cancel_pipeline(self) -> Dict[str, Any]:
@@ -1578,22 +1749,38 @@ def get_html_content() -> str:
 
                 <div class="step-actions">
                     <button type="button" class="btn-prev" onclick="goToStep(3)">⬅ 返回上一步</button>
-                    <button type="button" class="btn-next" onclick="goToStep(5)">下一步：启动剪辑 ➔</button>
+                    <button type="button" class="btn-next" onclick="goToStep(5)">下一步：生成任务 ➔</button>
                 </div>
             </div>
 
             <!-- ================= STEP 5: 执行与交付监控 ================= -->
             <div class="step-panel" id="step5">
                 <div class="card">
-                    <div class="card-title">🚀 5. 智能剪辑执行与实时监控</div>
+                    <div class="card-title">🚀 5. 任务交接与工作流执行</div>
                     
                     <div style="display:flex;gap:12px;margin-bottom:14px;">
-                        <button type="button" class="btn-run-primary" id="btnRunMain" style="flex:2;" onclick="runPipelineOneClick()">
-                            🚀 开始一键全自动智能剪辑
+                        <button type="button" class="btn-run-primary" id="btnRunMain" style="flex:2;" onclick="generateAgentTaskAction()">
+                            📋 生成任务并交给 Agent
                         </button>
                         <button type="button" class="btn-prev" id="btnSaveOnly" style="flex:1;" onclick="saveOnly()">
-                            💾 仅保存任务配置
+                            💾 仅保存配置
                         </button>
+                    </div>
+
+                    <!-- 任务交接卡片（生成后展示） -->
+                    <div id="agentTaskHandoffCard" style="display:none;background:#1e293b;border:1px solid #3b82f6;border-radius:8px;padding:14px;margin-bottom:14px;">
+                        <div style="font-weight:700;color:#60a5fa;margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+                            <span>📋 Agent 任务包已就绪</span>
+                        </div>
+                        <p class="hint" style="color:#cbd5e1;margin-bottom:8px;">
+                            任务说明已落盘至项目根目录 <code>AGENT_TASK.md</code>。请将下方任务指令一键复制，并直接粘贴到已打开的 AGY、Codex 或 Claude Code 会话中：
+                        </p>
+                        <textarea id="taskPromptText" readonly style="width:100%;height:110px;background:#0f172a;color:#93c5fd;font-family:monospace;font-size:12px;padding:8px;border-radius:6px;border:1px solid #334155;resize:vertical;"></textarea>
+                        <div style="display:flex;gap:10px;margin-top:10px;">
+                            <button type="button" class="btn-action btn-action-primary" onclick="copyTaskPrompt()">📋 复制任务指令</button>
+                            <button type="button" class="btn-action btn-action-secondary" onclick="actionOpenProjectDir()">📁 打开项目目录</button>
+                            <button type="button" class="btn-action btn-action-secondary" onclick="actionOpenSpecFile()">📄 查看配置文件</button>
+                        </div>
                     </div>
 
                     <!-- 状态阶段流 -->
@@ -2184,6 +2371,71 @@ def get_html_content() -> str:
         async function actionOpenQcReport() {
             if (window.pywebview && window.pywebview.api && lastQcReport) {
                 await window.pywebview.api.open_qc_report(lastQcReport);
+            }
+        }
+
+        async function generateAgentTaskAction() {
+            if (!validateStep(4)) return;
+            const payload = collectFormData();
+            if (payload.raw_video_paths && payload.raw_video_paths.length === 0) {
+                showAlert(false, "未勾选任何原始视频素材，请在素材清单中勾选至少一段原始直播视频！");
+                return;
+            }
+
+            if (!window.pywebview || !window.pywebview.api) return;
+
+            const btn = document.getElementById('btnRunMain');
+            const btnSave = document.getElementById('btnSaveOnly');
+            btn.disabled = true;
+            btnSave.disabled = true;
+            btn.innerText = "⏳ 正在生成任务包...";
+
+            try {
+                const res = await window.pywebview.api.generate_agent_task(payload);
+                btn.disabled = false;
+                btnSave.disabled = false;
+                btn.innerText = "📋 生成任务并交给 Agent";
+
+                if (!res.success) {
+                    showAlert(false, res.message || "生成任务包失败");
+                    return;
+                }
+
+                showAlert(true, res.message);
+                document.getElementById('agentTaskHandoffCard').style.display = 'block';
+                document.getElementById('taskPromptText').value = res.task_prompt || "";
+
+                if (jobPollInterval) clearInterval(jobPollInterval);
+                jobPollInterval = setInterval(pollJobProgress, 1000);
+            } catch (e) {
+                btn.disabled = false;
+                btnSave.disabled = false;
+                btn.innerText = "📋 生成任务并交给 Agent";
+                showAlert(false, "生成任务包异常: " + e);
+            }
+        }
+
+        function copyTaskPrompt() {
+            const ta = document.getElementById('taskPromptText');
+            if (!ta || !ta.value) return;
+            navigator.clipboard.writeText(ta.value).then(() => {
+                showAlert(true, "任务指令已复制到剪贴板！可直接粘贴给 Agent 执行");
+            }).catch(() => {
+                ta.select();
+                document.execCommand('copy');
+                showAlert(true, "任务指令已复制到剪贴板！");
+            });
+        }
+
+        async function actionOpenProjectDir() {
+            if (window.pywebview && window.pywebview.api) {
+                await window.pywebview.api.open_project_directory();
+            }
+        }
+
+        async function actionOpenSpecFile() {
+            if (window.pywebview && window.pywebview.api) {
+                await window.pywebview.api.open_spec_file();
             }
         }
 

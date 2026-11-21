@@ -99,7 +99,6 @@ def migrate_job_spec(raw_spec: Dict[str, Any], project_root: str = None) -> Dict
     automation = options.setdefault("automation", {})
     automation.setdefault("pipeline_version", 3)
     automation.setdefault("auto_edit", True)
-    automation.setdefault("agent_provider", "agy_headless")
     automation.setdefault("quality_policy", "standard")
     automation.setdefault("visual_verification", "optional")
     automation.setdefault("max_replan_rounds", 2)

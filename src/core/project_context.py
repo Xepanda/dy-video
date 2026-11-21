@@ -39,6 +39,14 @@ class ProjectPaths:
         if os.path.isfile(norm_root):
             norm_root = os.path.dirname(norm_root)
 
+        # 保护：若路径指向 work 或 output 运行时子目录，自动回溯到真实的 project_root
+        sep_work = os.sep + "work"
+        sep_output = os.sep + "output"
+        if sep_work in norm_root:
+            norm_root = norm_root[:norm_root.find(sep_work)]
+        elif sep_output in norm_root:
+            norm_root = norm_root[:norm_root.find(sep_output)]
+
         if os.path.basename(norm_root) in ("素材", "materials", "input"):
             materials_dir = materials_dir or norm_root
             self.project_root = os.path.dirname(norm_root)
@@ -257,7 +265,9 @@ class InputManifest:
                     })
                     continue
 
-                source_id = f"src_{src_idx:02d}"
+                stem = os.path.splitext(os.path.basename(abs_p))[0]
+                ext = os.path.splitext(os.path.basename(abs_p))[1].lstrip('.').lower()
+                source_id = f"src_{src_idx:02d}_{sanitize_id(stem)}_{ext}" if ext else f"src_{src_idx:02d}_{sanitize_id(stem)}"
                 src_idx += 1
                 self.sources.append({
                     "source_id": source_id,
@@ -290,7 +300,9 @@ class InputManifest:
                         })
                         continue
 
-                    source_id = f"src_{src_idx:02d}"
+                    stem = os.path.splitext(fname)[0]
+                    ext = os.path.splitext(fname)[1].lstrip('.').lower()
+                    source_id = f"src_{src_idx:02d}_{sanitize_id(stem)}_{ext}" if ext else f"src_{src_idx:02d}_{sanitize_id(stem)}"
                     src_idx += 1
                     self.sources.append({
                         "source_id": source_id,
@@ -369,16 +381,27 @@ def compute_job_fingerprint(spec: Dict[str, Any], manifest: Optional[Dict[str, A
             else:
                 h.update(im.encode("utf-8"))
 
-    # 3. 商品核心要素与规则配置
+    # 3. 品牌要素指纹（修改品牌必换指纹）
+    brand = spec.get("brand", {}) or {}
+    brand_core = {
+        "title_en": str(brand.get("title_en", "")).strip(),
+        "subtitle_cn": str(brand.get("subtitle_cn", "")).strip(),
+    }
+    h.update(json.dumps(brand_core, sort_keys=True, ensure_ascii=False).encode("utf-8"))
+
+    # 4. 商品核心要素与规则配置
     prod = spec.get("product", {}) or {}
     opts = spec.get("options", {}) or {}
     config_core = {
         "sku_id": str(prod.get("sku_id", "")),
         "name": str(prod.get("name") or prod.get("title_line1", "")),
         "category": str(prod.get("category", "")),
+        "title_line1": str(prod.get("title_line1", "")),
+        "title_line2": str(prod.get("title_line2", "")),
         "attributes": dict(sorted((str(k), str(v)) for k, v in (prod.get("attributes") or {}).items())),
         "allowed_variants": sorted(str(x) for x in (prod.get("allowed_variants") or [])),
         "selling_points": sorted(str(x) for x in (prod.get("selling_points") or [])),
+        "reference_images": sorted(str(x) for x in (prod.get("reference_images") or [])),
         "item_images": sorted(str(x) for x in (prod.get("item_images") or [])),
         "duration_range": str(opts.get("duration_range", "45-65")),
         "style_preset": str(opts.get("style_preset", "balanced")),
@@ -387,6 +410,7 @@ def compute_job_fingerprint(spec: Dict[str, Any], manifest: Optional[Dict[str, A
         "cover_strategy": str(opts.get("cover_strategy", "smart_frontal")),
         "features": opts.get("features", {}),
         "automation": opts.get("automation", {}),
+        "tool_version": "3.2",
     }
     h.update(json.dumps(config_core, sort_keys=True, ensure_ascii=False).encode("utf-8"))
     return h.hexdigest()[:24]

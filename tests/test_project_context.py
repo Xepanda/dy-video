@@ -223,8 +223,45 @@ def test_compute_job_fingerprint_sensitivity():
     spec_img["product"]["item_images"] = ["img2.png"]
     assert compute_job_fingerprint(spec_img) != fp_base, "修改商品图片必须改变任务指纹"
 
-    # 7. 相同配置指纹保持完全一致
+    # 7. 添加或修改品牌信息必须改变任务指纹
+    spec_brand = json.loads(json.dumps(base_spec))
+    spec_brand["brand"] = {"title_en": "NEW_BRAND", "subtitle_cn": "高端女装"}
+    assert compute_job_fingerprint(spec_brand) != fp_base, "添加或修改品牌信息必须改变任务指纹"
+
+    spec_brand2 = json.loads(json.dumps(base_spec))
+    spec_brand2["brand"] = {"title_en": "OTHER_BRAND"}
+    assert compute_job_fingerprint(spec_brand2) != compute_job_fingerprint(spec_brand), "不同品牌必须生成不同指纹"
+
+    # 8. 相同配置指纹保持完全一致
     assert compute_job_fingerprint(base_spec) == fp_base, "相同配置任务指纹必须保持确定性幂等"
+
+
+def test_same_stem_different_extension_source_ids():
+    """验证同 stem 不同扩展名的文件具有完全不冲突的 source_id 与 candidate_id。"""
+    from src.core.candidate_generator import CandidateGenerator
+    with tempfile.TemporaryDirectory() as tmpdir:
+        proj_root = os.path.join(tmpdir, "proj_same_stem")
+        mat_dir = os.path.join(proj_root, "素材")
+        os.makedirs(mat_dir, exist_ok=True)
+        v_mp4 = os.path.join(mat_dir, "live01.mp4")
+        v_mov = os.path.join(mat_dir, "live01.mov")
+        with open(v_mp4, "wb") as f: f.write(b"mp4_data")
+        with open(v_mov, "wb") as f: f.write(b"mov_data")
+
+        paths = ProjectPaths(proj_root)
+        manifest_mgr = InputManifest(paths)
+        manifest = manifest_mgr.scan_and_resolve(explicit_video_paths=[v_mp4, v_mov])
+        src_ids = [s["source_id"] for s in manifest["source_videos"]]
+        assert len(src_ids) == 2
+        assert src_ids[0] != src_ids[1], f"同 stem 不同扩展名 source_id 严禁冲突: {src_ids}"
+
+        # 验证 CandidateGenerator 生成的 candidate_id 也继承且不冲突
+        cg = CandidateGenerator()
+        utts = [{"utterance_id": "u1", "start_ms": 0, "end_ms": 2500, "text": "面料非常舒服", "ends_sentence": True}]
+        c1 = cg.generate_candidates(utts, {"name": "卫衣"}, source_id=v_mp4, source_file=v_mp4)
+        c2 = cg.generate_candidates(utts, {"name": "卫衣"}, source_id=v_mov, source_file=v_mov)
+        assert c1[0]["candidate_id"] != c2[0]["candidate_id"], "同 stem 不同扩展名的 candidate_id 严禁冲突"
+        assert c1[0]["frame_ids"][0] != c2[0]["frame_ids"][0], "同 stem 不同扩展名的 frame_id 严禁冲突"
 
 
 def main():
@@ -235,6 +272,7 @@ def main():
     test_input_manifest_explicit_list_rejects_historical_output()
     test_input_manifest_product_images_discovery()
     test_compute_job_fingerprint_sensitivity()
+    test_same_stem_different_extension_source_ids()
     print("[PASS] All project_context tests passed!")
 
 

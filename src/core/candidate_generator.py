@@ -50,11 +50,15 @@ class CandidateGenerator:
         if not utterances:
             return []
 
-        # 确保 source_id 不含路径分隔符或非法文件名字符
+        # 确保 source_id 不含路径分隔符或非法文件名字符，且能区分同名不同扩展名（如 live01.mp4 与 live01.mov）
         clean_source_id = str(source_id).strip()
-        if "\\" in clean_source_id or "/" in clean_source_id or ":" in clean_source_id:
-            stem = os.path.splitext(os.path.basename(clean_source_id))[0]
-            clean_source_id = re.sub(r"[^\w\-]", "_", stem).strip("_") or "src_0"
+        if "\\" in clean_source_id or "/" in clean_source_id or ":" in clean_source_id or "." in clean_source_id:
+            stem, ext = os.path.splitext(os.path.basename(clean_source_id))
+            ext_clean = ext.lstrip(".").lower()
+            if ext_clean:
+                clean_source_id = f"{re.sub(r'[^\w\-]', '_', stem).strip('_')}_{ext_clean}"
+            else:
+                clean_source_id = re.sub(r"[^\w\-]", "_", stem).strip("_") or "src_0"
 
         selling_points = product_profile.get("selling_points", [])
         sku_name = product_profile.get("name", "")

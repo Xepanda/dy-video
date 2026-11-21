@@ -475,7 +475,7 @@ def wire_into_verifier() -> None:
 
     AsrContextVerifier.verify_and_correct = _patched
     AsrContextVerifier._review_gate_wired = True
-    print("[ASR-REVIEW] 审核门禁已挂载到 AsrContextVerifier.verify_and_correct")
+    print("[ASR-REVIEW] 审核门禁已挂载到 AsrContextVerifier.verify_and_correct", file=sys.stderr)
 
 
 # 模块导入即挂载（幂等）
