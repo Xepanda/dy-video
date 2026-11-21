@@ -43,6 +43,7 @@ class CandidateGenerator:
         source_id: str = "src_0",
         source_sha256: str = "",
         shots: Optional[List[Dict[str, Any]]] = None,
+        source_file: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """基于 utterances 和可选的 shots 生成 candidates 列表。"""
         candidates: List[Dict[str, Any]] = []
@@ -130,7 +131,7 @@ class CandidateGenerator:
                         "schema_version": "3.0",
                         "candidate_id": cid,
                         "source_id": clean_source_id,
-                        "source_file": str(source_id),
+                        "source_file": str(source_file or source_id),
                         "source_start_ms": eff_start_ms,
                         "source_end_ms": eff_end_ms,
                         "product_relation": product_relation,

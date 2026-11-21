@@ -42,6 +42,49 @@ class JobStage:
     CANCELED = "CANCELED"
 
 
+class JobCanceledError(Exception):
+    """任务在执行中被用户主动取消。"""
+    pass
+
+
+class CancellationToken:
+    """可协作的中断令牌，支持向子任务和子进程传播取消信号。"""
+
+    def __init__(self):
+        import threading
+        self._canceled = False
+        self._lock = threading.Lock()
+        self._subprocesses = set()
+
+    def cancel(self):
+        with self._lock:
+            self._canceled = True
+            for p in list(self._subprocesses):
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+
+    @property
+    def is_canceled(self) -> bool:
+        with self._lock:
+            return self._canceled
+
+    def register_process(self, proc: Any) -> None:
+        with self._lock:
+            if self._canceled:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            else:
+                self._subprocesses.add(proc)
+
+    def unregister_process(self, proc: Any) -> None:
+        with self._lock:
+            self._subprocesses.discard(proc)
+
+
 _SENTINEL = object()
 
 
@@ -85,6 +128,7 @@ class JobRunner:
         self.checkpoint_file = os.path.join(self.work_dir, "checkpoint.json")
         self.events_log = os.path.join(self.work_dir, "events.jsonl")
         self.is_canceled = False
+        self.cancel_token = CancellationToken()
         self.history: List[Dict[str, Any]] = []
         self.retry_count = 0
         self.resumed_from = None
@@ -105,8 +149,10 @@ class JobRunner:
         os.makedirs(self.output_dir, exist_ok=True)
 
     def cancel(self):
-        """取消当前任务。"""
+        """取消当前任务，并向下游子任务及子进程下发中断信号。"""
         self.is_canceled = True
+        if hasattr(self, "cancel_token") and self.cancel_token:
+            self.cancel_token.cancel()
         self._record_state(JobStage.CANCELED, "用户主动取消任务")
 
     def _record_state(self, new_state: str, message: str = "", metadata: Optional[Dict[str, Any]] = None):
@@ -148,7 +194,10 @@ class JobRunner:
         from src.core.project_context import InputManifest, compute_job_fingerprint
         manifest_mgr = InputManifest(self.project_paths)
         explicit_vids = self.spec.get("raw_video_paths")
-        if not explicit_vids and self.spec.get("raw_video_path"):
+        if explicit_vids is not None:
+            # 严格依据用户确认的显式列表，若传入 [] 则表示用户全部取消勾选，绝不降级为全量扫描
+            manifest = manifest_mgr.scan_and_resolve(explicit_video_paths=explicit_vids)
+        elif self.spec.get("raw_video_path"):
             rvp = self.spec["raw_video_path"]
             resolved_rvp = resolve_path(rvp, self.work_dir) or os.path.abspath(rvp)
             if os.path.isdir(resolved_rvp):
@@ -158,7 +207,7 @@ class JobRunner:
             else:
                 manifest = manifest_mgr.scan_and_resolve()
         else:
-            manifest = manifest_mgr.scan_and_resolve(explicit_video_paths=explicit_vids)
+            manifest = manifest_mgr.scan_and_resolve()
 
         current_fingerprint = compute_job_fingerprint(self.spec, manifest)
 
@@ -171,8 +220,25 @@ class JobRunner:
                         d_data = json.load(dmf)
                     saved_fp = d_data.get("job_fingerprint")
                     v_p = d_data.get("video_path") or (d_data.get("final_deliverables", {}) or {}).get("video")
-                    # 若存在指纹则强比对；若无指纹（旧版元数据/测试用例）则要求状态为 DELIVERED
-                    fp_match = (saved_fp == current_fingerprint) if saved_fp else (d_data.get("status") == JobStage.DELIVERED)
+                    # 严格比对 job_fingerprint；缺失指纹（旧版元数据）强制重验，严禁单凭 DELIVERED 状态无条件复用
+                    if saved_fp:
+                        fp_match = bool(saved_fp == current_fingerprint)
+                    else:
+                        # 旧格式缺指纹强制重验：必须同时满足视频存在、既有 QC 显式通过且 checkpoint 确为 DELIVERED
+                        has_qc = bool(d_data.get("qc_passed") is True or (d_data.get("editorial_qc") or {}).get("passed") is True)
+                        chk_delivered = bool(self.resumed_from == JobStage.DELIVERED)
+                        if has_qc and chk_delivered and v_p and os.path.isfile(v_p):
+                            print("[JOB-RUNNER][WARN] 旧版交付清单缺失 job_fingerprint，经门禁重验通过后回填指纹升级并复用")
+                            d_data["job_fingerprint"] = current_fingerprint
+                            try:
+                                with open(delivery_manifest_p, "w", encoding="utf-8") as dmf_w:
+                                    json.dump(d_data, dmf_w, ensure_ascii=False, indent=2)
+                            except Exception:
+                                pass
+                            fp_match = True
+                        else:
+                            fp_match = False
+
                     if fp_match and v_p and os.path.isfile(v_p):
                         d_data.setdefault("status", JobStage.DELIVERED)
                         _update(JobStage.DELIVERED, 1.0, "任务配置与素材未变，直接复用既有成片（幂等）")
@@ -204,8 +270,8 @@ class JobRunner:
             if primary and not os.path.exists(primary):
                 _update(JobStage.NEEDS_INPUT, 0.1, f"原始视频文件不存在: {primary}")
                 return {"status": JobStage.NEEDS_INPUT, "reason": f"原始视频文件不存在: {primary}"}
-            _update(JobStage.NEEDS_INPUT, 0.1, "缺少原始视频素材")
-            return {"status": JobStage.NEEDS_INPUT, "reason": "缺少原始直播视频"}
+            _update(JobStage.NEEDS_INPUT, 0.1, "缺少原始视频素材（用户确认素材列表为空）")
+            return {"status": JobStage.NEEDS_INPUT, "reason": "缺少原始直播视频，请勾选至少一段视频"}
 
         # 检查原始素材文件是否真实存在
         for v in raw_videos:
@@ -251,41 +317,43 @@ class JobRunner:
             return {"status": JobStage.CANCELED}
 
         # 4. DECIDING
-        _update(JobStage.DECIDING, 0.5, "编排全局序列与选段决策...")
+        _update(JobStage.DECIDING, 0.45, "预检 Agent 环境并准备总导演决策...")
         if self.is_canceled:
             return {"status": JobStage.CANCELED}
 
-        chosen_proposal = None
         if self.agent_adapter:
             is_avail, avail_msg = self.agent_adapter.check_availability()
             if not is_avail:
-                _update(JobStage.AGENT_AUTH_REQUIRED, 0.5, f"AGY 命令行工具未就绪: {avail_msg}")
+                _update(JobStage.AGENT_AUTH_REQUIRED, 0.45, f"AGY 命令行工具未就绪: {avail_msg}")
                 return {
                     "status": JobStage.AGENT_AUTH_REQUIRED,
                     "error": avail_msg,
                     "reason": "AGY CLI 未安装或未加入 PATH",
                 }
 
+        # 5. RENDERING
+        _update(JobStage.RENDERING, 0.60, "启动 Agent 总导演进行多模态候选分析与编排...")
+        if self.is_canceled:
+            return {"status": JobStage.CANCELED}
+
+        # 调用 AgentDirector 执行确定性分析、候选挖掘、多模态精排与总装
+        chosen_proposal = self.spec.get("custom_sequence_proposal")
+        # 兼容单测隔离场景：仅当显式指定 _allowed_candidate_ids 这一特定测试桩时在 Runner 侧预调度
+        if "_allowed_candidate_ids" in self.spec and self.agent_adapter and not chosen_proposal:
+            from src.runtime.adapters.agent_protocol import AgentStatus
             schema_p = os.path.join(PROJECT_ROOT, "contracts", "schemas", "sequence_proposals.schema.json")
             prompt = (
                 f"任务ID: {self.project_id}\n"
-                f"商品档案: {json.dumps(profile, ensure_ascii=False)}\n"
-                "请依据 sequence_proposals.schema.json 契约生成优选镜头序列提案。"
+                f"商品档案: {json.dumps(self.spec.get('product') or {}, ensure_ascii=False)}\n"
+                "请依据 sequence_proposals.schema.json 契约，输出 3 套镜头序列提案。"
             )
             resp = self.agent_adapter.invoke(prompt, schema_p, self.work_dir)
             if resp.status == AgentStatus.AUTH_REQUIRED:
-                _update(JobStage.AGENT_AUTH_REQUIRED, 0.5, f"AGY 凭证失效: {resp.error_message}")
+                _update(JobStage.AGENT_AUTH_REQUIRED, 0.5, "AGY 未登录，需要人工授权: agy auth login")
                 return {
                     "status": JobStage.AGENT_AUTH_REQUIRED,
+                    "reason": "AGY 未登录",
                     "error": resp.error_message,
-                    "reason": "AGY 未登录或凭证过期",
-                }
-            elif resp.status == AgentStatus.PERMISSION_DENIED:
-                _update(JobStage.AGENT_PERMISSION_DENIED, 0.5, f"AGY 权限被软拒绝: {resp.error_message}")
-                return {
-                    "status": JobStage.AGENT_PERMISSION_DENIED,
-                    "error": resp.error_message,
-                    "reason": "AGY 工具执行权限被拒绝",
                 }
             elif resp.status == AgentStatus.SUCCESS:
                 s_out = resp.structured_output or {}
@@ -297,36 +365,27 @@ class JobRunner:
                         "evidence_gap": s_out.get("evidence_gap", []),
                     }
                 proposals = s_out.get("proposals", [])
-                if "_allowed_candidate_ids" in self.spec:
-                    if not proposals or not isinstance(proposals, list):
-                        _update(JobStage.FAILED, 0.5, "Agent 未输出有效提案")
-                        return {"status": JobStage.FAILED, "error": "Agent 未输出有效提案"}
-
-                    # 候选白名单安全校验
-                    allowed_cids = set(self.spec.get("_allowed_candidate_ids") or [])
-                    for p in proposals:
-                        for cid in p.get("ordered_candidate_ids", []):
-                            if cid not in allowed_cids:
-                                _update(JobStage.FAILED, 0.5, f"Agent 决策包含未知幻觉候选 ID: {cid}")
-                                return {"status": JobStage.FAILED, "error": f"Agent 决策包含未知候选 ID: {cid}"}
-                    chosen_proposal = proposals[0]
-                else:
-                    # 生产环境：不在 ASR 与候选生成前提前选段，交由 AgentDirector 在精排后安全调度真实候选
-                    chosen_proposal = None
+                if not proposals or not isinstance(proposals, list):
+                    _update(JobStage.FAILED, 0.5, "Agent 未输出有效提案")
+                    return {"status": JobStage.FAILED, "error": "Agent 未输出有效提案"}
+                allowed_cids = set(self.spec.get("_allowed_candidate_ids") or [])
+                for p in proposals:
+                    for cid in p.get("ordered_candidate_ids", []):
+                        if cid not in allowed_cids:
+                            _update(JobStage.FAILED, 0.5, f"Agent 决策包含未知幻觉候选 ID: {cid}")
+                            return {"status": JobStage.FAILED, "error": f"Agent 决策包含未知候选 ID: {cid}"}
+                chosen_proposal = proposals[0]
             else:
                 _update(JobStage.FAILED, 0.5, f"Agent 决策执行失败: {resp.error_message}")
                 return {"status": JobStage.FAILED, "error": resp.error_message}
-
-        # 5. RENDERING
-        _update(JobStage.RENDERING, 0.7, "合成音视频、特效与字幕...")
-        if self.is_canceled:
-            return {"status": JobStage.CANCELED}
-
-        # 调用 AgentDirector 执行确定性分析与总装
         try:
             from src.agent.agent_director import AgentDirector
             from src.core.sequence_optimizer import InsufficientEvidenceError
             from src.runtime.adapters.agent_protocol import AgentAuthRequiredError, AgentPermissionDeniedError
+
+            def _director_progress(st: str, pct: float, msg: str):
+                _update(st, pct, msg)
+
             director = AgentDirector(
                 resolved_spec_path,
                 use_cache=True,
@@ -335,7 +394,11 @@ class JobRunner:
             )
             # 重定向输出目录至当前指定的 output_dir
             director.output_dir = self.output_dir
-            manifest = director.run_director_workflow(custom_sequence_proposal=chosen_proposal)
+            manifest = director.run_director_workflow(
+                custom_sequence_proposal=chosen_proposal,
+                cancel_token=self.cancel_token,
+                progress_callback=_director_progress,
+            )
         except AgentAuthRequiredError as ae:
             _update(JobStage.AGENT_AUTH_REQUIRED, 0.75, f"AGY 授权失效: {str(ae)}")
             return {"status": JobStage.AGENT_AUTH_REQUIRED, "error": str(ae), "reason": "AGY 未登录或凭证过期"}
@@ -346,6 +409,9 @@ class JobRunner:
             _update(JobStage.NEEDS_INPUT, 0.75, f"素材证据不足: {str(ie)}")
             return {"status": JobStage.NEEDS_INPUT, "reason": str(ie)}
         except Exception as e:
+            if self.is_canceled or isinstance(e, JobCanceledError):
+                _update(JobStage.CANCELED, 0.75, "任务已取消")
+                return {"status": JobStage.CANCELED, "message": "任务已取消"}
             _update(JobStage.FAILED, 0.75, f"视频渲染与组装失败: {str(e)}")
             return {"status": JobStage.FAILED, "error": str(e)}
 

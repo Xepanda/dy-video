@@ -93,32 +93,40 @@ class EditorialQcAuditor:
             })
 
         # 2. Selling Point Coverage Gate (卖点覆盖证据门禁)
-        all_covered_sp = set()
-        for c in clips:
-            text = c.get("text") or c.get("desc") or ""
-            for sp in required_selling_points:
-                if sp and sp in text:
-                    all_covered_sp.add(sp)
-
-        missing_sp = [sp for sp in required_selling_points if sp not in all_covered_sp]
-        if missing_sp:
+        if not required_selling_points:
             checks.append({
                 "gate": "SellingPointEvidenceGate",
-                "status": "WARN" if len(all_covered_sp) > 0 else "BLOCK",
-                "detail": f"以下配置卖点在成片中未见口播证据: {missing_sp}",
-                "missing_points": missing_sp,
-            })
-            if len(all_covered_sp) == 0 and required_selling_points:
-                block_count += 1
-            else:
-                warn_count += 1
-        else:
-            checks.append({
-                "gate": "SellingPointEvidenceGate",
-                "status": "AUTOMATED_PASS",
-                "detail": f"全部配置卖点均在成片中获得证实: {list(all_covered_sp)}",
+                "status": "NOT_EVALUATED",
+                "detail": "未配置卖点检查依据，跳过卖点口播证据审查",
                 "missing_points": [],
             })
+        else:
+            all_covered_sp = set()
+            for c in clips:
+                text = c.get("text") or c.get("desc") or ""
+                for sp in required_selling_points:
+                    if sp and sp in text:
+                        all_covered_sp.add(sp)
+
+            missing_sp = [sp for sp in required_selling_points if sp not in all_covered_sp]
+            if missing_sp:
+                checks.append({
+                    "gate": "SellingPointEvidenceGate",
+                    "status": "WARN" if len(all_covered_sp) > 0 else "BLOCK",
+                    "detail": f"以下配置卖点在成片中未见口播证据: {missing_sp}",
+                    "missing_points": missing_sp,
+                })
+                if len(all_covered_sp) == 0 and required_selling_points:
+                    block_count += 1
+                else:
+                    warn_count += 1
+            else:
+                checks.append({
+                    "gate": "SellingPointEvidenceGate",
+                    "status": "AUTOMATED_PASS",
+                    "detail": f"全部配置卖点均在成片中获得证实: {list(all_covered_sp)}",
+                    "missing_points": [],
+                })
 
         # 3. Language Integrity Gate (语句完整性门禁)
         broken_speech = []
@@ -145,7 +153,9 @@ class EditorialQcAuditor:
 
         # 4. Seam Continuity Gate (接缝连续性门禁)
         if continuity_review:
-            seam_blocks = [s for s in continuity_review.get("seams", []) if s.get("severity") == "BLOCK"]
+            seams = continuity_review.get("seams", [])
+            seam_blocks = [s for s in seams if s.get("severity") == "BLOCK"]
+            seam_warns = [s for s in seams if s.get("severity") == "WARN"]
             if seam_blocks:
                 checks.append({
                     "gate": "SeamContinuityGate",
@@ -153,11 +163,19 @@ class EditorialQcAuditor:
                     "detail": f"存在未修复的阻断级接缝: {[s['seam_id'] for s in seam_blocks]}",
                 })
                 block_count += 1
+            elif seam_warns:
+                checks.append({
+                    "gate": "SeamContinuityGate",
+                    "status": "WARN",
+                    "detail": f"存在视听连续性跳变警告: {[s['seam_id'] for s in seam_warns]} (共 {len(seam_warns)} 处跳变)",
+                    "warn_seams": [s['seam_id'] for s in seam_warns],
+                })
+                warn_count += 1
             else:
                 checks.append({
                     "gate": "SeamContinuityGate",
                     "status": "AUTOMATED_PASS",
-                    "detail": "全部视听接缝审查通过",
+                    "detail": "全部视听接缝审查通过，无跳变",
                 })
 
         # 总结

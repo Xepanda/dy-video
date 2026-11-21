@@ -69,6 +69,8 @@ logs/pr_body*.md
 # 运行时产物（含机器专属绝对路径，不入库）
 specs/*.resolved.json
 specs/product_profile_*.json
+local_project3_*_report.json
+data/placeholders/test_*
 
 *.spec
 *.exe

@@ -177,7 +177,7 @@ class AgentDirector:
 
         manifest_mgr = InputManifest(self.project_paths)
         explicit_paths = self.spec.get("raw_video_paths")
-        if explicit_paths:
+        if explicit_paths is not None:
             manifest = manifest_mgr.scan_and_resolve(explicit_video_paths=explicit_paths)
         else:
             primary = self.spec.get("raw_video_path")
@@ -192,6 +192,7 @@ class AgentDirector:
             else:
                 manifest = manifest_mgr.scan_and_resolve()
 
+        self.manifest = manifest
         paths = [s["path"] for s in manifest.get("source_videos", [])]
         if not paths:
             # 兼容既有初始化容错契约（仅当未显式指定 raw_video_paths 时）
@@ -553,10 +554,28 @@ class AgentDirector:
         edited_timeline_path: Optional[str] = None,
         custom_sequence_proposal: Optional[Dict[str, Any]] = None,
         agent_adapter: Optional[Any] = None,
+        cancel_token: Optional[Any] = None,
+        progress_callback: Optional[Any] = None,
     ) -> Dict[str, Any]:
         if agent_adapter is not None:
             self.agent_adapter = agent_adapter
         start_time = time.time()
+
+        def _check_cancel():
+            if cancel_token:
+                is_c = getattr(cancel_token, "is_canceled", False)
+                if callable(is_c):
+                    is_c = is_c()
+                if is_c:
+                    from src.runtime.job_runner import JobCanceledError
+                    raise JobCanceledError("任务已被用户取消")
+
+        def _report(state: str, pct: float, msg: str):
+            if progress_callback:
+                progress_callback(state, pct, msg)
+
+        _check_cancel()
+        _report("ANALYZING", 0.15, "正在初始化项目环境与候选池扫描...")
         # 外部干预模式（指定封面/自定义计划/人工精修时间线）禁用阶段缓存，保证每次重算
         if chosen_cover_id or custom_plan_path or edited_timeline_path:
             self.use_cache = False
@@ -643,9 +662,45 @@ class AgentDirector:
         elif filtered:
             print(f"    [WARN] 全部候选清晰度 <{sharp_min}，保留原池交由网关裁决")
 
+        # 消费 cover_strategy 策略卡
+        cover_strat = str(self.options.get("cover_strategy", "smart_frontal")).strip().lower()
+        if cover_strat == "product_image":
+            raw_imgs = []
+            for im in self.product_info.get("item_images", []):
+                if im and os.path.isfile(im):
+                    raw_imgs.append(os.path.abspath(im))
+            if hasattr(self, "manifest") and self.manifest:
+                for im in self.manifest.get("product_images", []):
+                    if im.get("path") and os.path.isfile(im["path"]):
+                        raw_imgs.append(os.path.abspath(im["path"]))
+            if raw_imgs:
+                top_img = raw_imgs[0]
+                p_cand = {
+                    "id": "cand_product_image_01",
+                    "timestamp": 0.0,
+                    "image_path": top_img,
+                    "frontal_score": 9999.0,
+                    "strategy": "product_image",
+                    "framing": {
+                        "post_scale_sharpness": 800.0,
+                        "knees_visible": True,
+                        "achieved_width_ratio": 0.75,
+                    },
+                    "description": f"商品主图优先封面: {os.path.basename(top_img)}",
+                }
+                cover_candidates.insert(0, p_cand)
+                print(f"    [COVER-STRATEGY] 已根据商品主图优先策略注入封面候选: {top_img}")
+
+        if not cover_candidates:
+            cover_candidates = [{
+                "id": "cand_fallback_01",
+                "timestamp": 0.0,
+                "strategy": "fallback_placeholder",
+                "frontal_score": 100.0,
+                "description": "兜底占位封面帧",
+            }]
+
         # 统一候选池落盘（按多目标分数降序，[0] 即 Agent 选定项，与 QC 读取约定一致）
-        # 注意：QC._audit_cover_width 按数组读取 candidates[0]；排序键为 frontal_score
-        # （与 extract_cover_candidates 内部排序一致），跨源时才能选出全局最优帧。
         cover_candidates.sort(key=lambda c: c.get("frontal_score", 0), reverse=True)
         with open(os.path.join(cover_cand_dir, "cover_candidates.json"), "w",
                   encoding="utf-8") as f:
@@ -766,8 +821,10 @@ class AgentDirector:
             verified_cache = os.path.join(self.work_dir, "whisper_segments_verified.json")
             if not os.path.exists(verified_cache):
                 verified_cache = os.path.join(self.work_dir, "whisper_segments.json")
-            with open(verified_cache, "r", encoding="utf-8") as f:
-                segments = json.load(f)
+            segments = []
+            if os.path.exists(verified_cache):
+                with open(verified_cache, "r", encoding="utf-8") as f:
+                    segments = json.load(f)
 
             # —— V3 Agent 总导演决策流（PR-01~PR-08 全链路编排）——
             plan = None
@@ -803,7 +860,9 @@ class AgentDirector:
                 all_candidates = []
                 for src, utts in utterances_by_source.items():
                     shots_for_src = scene_cuts_by_source.get(src, [])
-                    cands = generator.generate_candidates(utts, product_profile, source_id=src, shots=shots_for_src)
+                    cands = generator.generate_candidates(
+                        utts, product_profile, source_id=src, shots=shots_for_src, source_file=src
+                    )
                     all_candidates.extend(cands)
 
                 # 4. 商品关系追踪（真实接通候选视频帧与视觉比对）
@@ -816,7 +875,21 @@ class AgentDirector:
                     self.spec.get("options", {}).get("automation", {}).get("visual_verification") == "required" or
                     self.options.get("automation", {}).get("quality_policy") == "strict"
                 )
-                frame_provider = VideoFrameProvider(work_dir=self.work_dir, default_video_path=self.raw_video)
+                source_reg = {}
+                if hasattr(self, "manifest") and self.manifest:
+                    for s in self.manifest.get("source_videos", []):
+                        source_reg[s["source_id"]] = s["path"]
+                        if s.get("filename"):
+                            source_reg[s["filename"]] = s["path"]
+                if hasattr(self, "raw_videos"):
+                    for idx, rv in enumerate(self.raw_videos, 1):
+                        source_reg[f"src_{idx:02d}"] = rv
+                        source_reg[os.path.basename(rv)] = rv
+                frame_provider = VideoFrameProvider(
+                    work_dir=self.work_dir,
+                    default_video_path=self.raw_video,
+                    source_registry=source_reg,
+                )
                 sku_tracker = SkuTracker()
                 relation_decisions = sku_tracker.track_candidates(
                     all_candidates, product_profile, frame_provider=frame_provider, strict_vision=is_strict_policy
@@ -839,9 +912,6 @@ class AgentDirector:
                 allowed_cids_set = {c["candidate_id"] for c in eligible_candidates}
                 dur_range = (self.constraints.get("video", {}) or {}).get("duration_range", [45, 65])
 
-                if len(eligible_candidates) == 0:
-                    raise InsufficientEvidenceError("本品素材证据不足: 所有候选片段均未通过精排门禁 (eligible=True)")
-
                 if custom_sequence_proposal:
                     for cid in custom_sequence_proposal.get("ordered_candidate_ids", []):
                         if cid not in allowed_cids_set:
@@ -863,8 +933,10 @@ class AgentDirector:
                         }
                         for c in eligible_candidates
                     ]
+                    style_preset = str(self.options.get("style_preset", "balanced")).strip().lower()
                     prompt = (
                         f"任务ID: {self.project_id}\n"
+                        f"风格偏好: {style_preset}\n"
                         f"商品档案: {json.dumps(product_profile, ensure_ascii=False)}\n"
                         f"候选片段池: {json.dumps(eligible_summary, ensure_ascii=False)}\n"
                         f"目标成片时长区间: {dur_range[0]}s ~ {dur_range[1]}s\n"
@@ -901,10 +973,17 @@ class AgentDirector:
                     else:
                         raise RuntimeError(f"Agent 决策调用失败: {resp.error_message}")
                 else:
+                    if len(eligible_candidates) == 0:
+                        raise InsufficientEvidenceError("本品素材证据不足: 所有候选片段均未通过精排门禁 (eligible=True)")
+                    style_preset = str(self.options.get("style_preset", "balanced")).strip().lower()
                     opt = SequenceOptimizer(
-                        target_min_ms=int(dur_range[0] * 1000), target_max_ms=int(dur_range[1] * 1000)
+                        target_min_ms=int(dur_range[0] * 1000),
+                        target_max_ms=int(dur_range[1] * 1000),
+                        preferred_style=style_preset,
                     )
-                    opt_res = opt.optimize_sequence(all_candidates, candidate_scores, product_profile)
+                    opt_res = opt.optimize_sequence(
+                        all_candidates, candidate_scores, product_profile, preferred_style=style_preset
+                    )
 
                 if opt_res.get("status") == "PROPOSED" and opt_res.get("proposals"):
                     chosen_proposal = opt_res["proposals"][0]

@@ -199,16 +199,38 @@ def main():
         "delivery_manifest": result
     }
 
+    # 原始完整验收报告保留于当前任务输出目录 output/<run_id>/，绝不污染仓库根目录
     report_path = os.path.join(paths.output_dir, "acceptance_report.json")
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(acceptance_report, f, ensure_ascii=False, indent=2)
 
-    report_file_name = "local_project3_dry_run_report.json" if args.dry_run else "local_project3_acceptance_report.json"
-    with open(report_file_name, "w", encoding="utf-8") as f:
-        json.dump(acceptance_report, f, ensure_ascii=False, indent=2)
+    # 仓库仅保留脱敏后的简要审计摘要，防止泄漏本地绝对路径与用户隐私数据
+    sanitized_summary = {
+        "timestamp": acceptance_report["timestamp"],
+        "project_id": "project-3",
+        "run_id": run_id,
+        "execution_status": status,
+        "source_videos_count": len(chosen_videos),
+        "quarantined_files_count": len(excluded_files),
+        "anti_tampering_intact": bool(not missing and not tampered),
+        "qc_passed": bool(result.get("qc_passed", False) or (status == "PRECHECK_PASSED")),
+        "is_success": bool(status in ("DELIVERED", "PRECHECK_PASSED") and not missing and not tampered),
+    }
 
-    print(f"\n验收报告已保存至:\n  - {report_path}\n  - {report_file_name}")
-    return 0
+    summary_file_name = "local_project3_dry_run_summary.json" if args.dry_run else "local_project3_acceptance_summary.json"
+    with open(summary_file_name, "w", encoding="utf-8") as f:
+        json.dump(sanitized_summary, f, ensure_ascii=False, indent=2)
+
+    is_ok = bool(status in ("DELIVERED", "PRECHECK_PASSED") and not missing and not tampered)
+    if is_ok:
+        print(f"\n[PASS] 本地验收与防篡改验证全部合格！")
+        print(f"原始完整报告已保存至: {report_path}")
+        print(f"脱敏摘要已保存至: {summary_file_name}")
+        return 0
+    else:
+        print(f"\n[FAIL] 验收未能全部通过: status={status}, missing={missing}, tampered={tampered}")
+        print(f"异常报告已记录至: {report_path}")
+        return 1
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -234,32 +234,40 @@ def main() -> int:
     except Exception as pe:
         print(f"  [WARN] 商品档案构建降级（不阻断）: {pe}")
 
-    # —— 3. 派生文案并落盘可执行 spec ——
+    # —— 3. 派生文案并落盘可执行 spec（项目目录隔离：work/<run_id>/）——
+    from src.core.project_context import ProjectPaths
+    run_id = f"run_{time.strftime('%Y%m%d_%H%M%S')}"
+    proj_root = os.path.dirname(os.path.abspath(spec_path))
+    paths = ProjectPaths(project_root=proj_root, run_id=run_id)
+    paths.ensure_runtime_dirs()
+
     texts = derive_texts(spec)
     resolved_spec = build_resolved_spec(spec, videos, texts)
-    os.makedirs(SPECS_DIR, exist_ok=True)
     if product_profile:
-        profile_path = os.path.join(SPECS_DIR, f"product_profile_{project_id}.json")
+        profile_path = os.path.join(paths.work_dir, f"product_profile_{project_id}.json")
         save_product_profile(product_profile, profile_path)
         resolved_spec["product_profile_path"] = profile_path
     resolved_path = os.path.join(
-        SPECS_DIR, f"job_spec_{project_id}.resolved.json")
+        paths.work_dir, f"job_spec_{project_id}.resolved.json")
     with open(resolved_path, "w", encoding="utf-8") as f:
         json.dump(resolved_spec, f, ensure_ascii=False, indent=2)
-    print(f"\n[3/5] 可执行 spec 已落盘: {resolved_path}")
+    print(f"\n[3/5] 可执行 spec 已隔离落盘至工作目录: {resolved_path}")
     print(f"  Hook 卡文案 : {texts['hook_card_text']}")
     print(f"  CTA 文案    : {texts['cta_text']}")
 
     # —— 4. 端到端流水线 ——
     print(f"\n[4/5] 启动 Agent 剪辑导演中枢（端到端）...")
     from src.agent.agent_director import AgentDirector
-    director = AgentDirector(resolved_path, cache_key=args.cache_key, use_cache=not args.no_cache)
+    director = AgentDirector(
+        resolved_path,
+        cache_key=args.cache_key,
+        use_cache=not args.no_cache,
+        project_paths=paths,
+    )
     manifest = director.run_director_workflow()
 
-    # —— 5. 交付汇总 ——
-    material_dir = director.get_material_dir()
-    os.makedirs(material_dir, exist_ok=True)
-    print(f"\n[5/5] 交付物汇总（已直接保存至素材目录: {material_dir}）:")
+    # —— 5. 交付汇总（严格隔离至 output/<run_id>/）——
+    print(f"\n[5/5] 交付物汇总（已隔离保存至输出目录: {director.output_dir}）:")
     deliverables = manifest.get("final_deliverables", {})
     gen_manifest = {
         "project_id": project_id,
@@ -276,9 +284,6 @@ def main() -> int:
     gen_path = os.path.join(director.output_dir, "generation_manifest.json")
     with open(gen_path, "w", encoding="utf-8") as f:
         json.dump(gen_manifest, f, ensure_ascii=False, indent=2)
-    material_manifest = os.path.join(material_dir, f"{project_id}_generation_manifest.json")
-    if os.path.abspath(gen_path) != os.path.abspath(material_manifest):
-        shutil.copy2(gen_path, material_manifest)
 
     # —— 5.1 人工复核清单（统一开关 manual_review 的消费点）——
     # 34 项自检里 13 项机器判不了（情绪、话术与画面匹配、搭配完整性等），
@@ -322,12 +327,9 @@ def main() -> int:
             _lines += ["", f"审核人：____　日期：____", ""]
             with open(mr_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(_lines))
-            material_mr = os.path.join(material_dir, f"{project_id}_manual_review.md")
-            if os.path.abspath(mr_path) != os.path.abspath(material_mr):
-                shutil.copy2(mr_path, material_mr)
-            gen_manifest["manual_review"] = material_mr
+            gen_manifest["manual_review"] = mr_path
             if isinstance(deliverables, dict):
-                deliverables["manual_review"] = material_mr
+                deliverables["manual_review"] = mr_path
             with open(gen_path, "w", encoding="utf-8") as f:
                 json.dump(gen_manifest, f, ensure_ascii=False, indent=2)
             print(f"  [✓] manual_review: {material_mr}（13 项预填，勾异常即可）")

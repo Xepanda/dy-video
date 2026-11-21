@@ -30,17 +30,31 @@ class InsufficientEvidenceError(RuntimeError):
 
 
 class SequenceOptimizer:
-    """全片序列编排器。"""
+    """全片序列编排器。
+
+    支持依据不同带货风格（balanced, fast, detailed）进行多路全局 Beam Search 求解，
+    并在满足时长范围、卖点覆盖与同源时间无重叠的前提下输出优选提案。
+    """
+
+    STYLE_ALIASES = {
+        "fast": "fast",
+        "fast_paced": "fast",
+        "detailed": "detailed",
+        "showcase": "detailed",
+        "balanced": "balanced",
+    }
 
     def __init__(
         self,
         target_min_ms: int = 45000,
         target_max_ms: int = 65000,
         beam_width: int = 5,
+        preferred_style: Optional[str] = None,
     ):
         self.target_min_ms = target_min_ms
         self.target_max_ms = target_max_ms
         self.beam_width = beam_width
+        self.preferred_style = self.STYLE_ALIASES.get((preferred_style or "balanced").strip().lower(), "balanced")
 
     def _is_overlapping(self, cand_a: Dict[str, Any], cand_b: Dict[str, Any]) -> bool:
         """检查两个候选是否在同一素材源上存在时间重叠。"""
@@ -58,6 +72,8 @@ class SequenceOptimizer:
         product_profile: Dict[str, Any],
         target_min_ms: Optional[int] = None,
         target_max_ms: Optional[int] = None,
+        preferred_style: Optional[str] = None,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """执行全局序列优化，生成三套合法提案。"""
         min_ms = target_min_ms or self.target_min_ms
@@ -101,18 +117,27 @@ class SequenceOptimizer:
                 ],
             }
 
-        # 区分风格生成提案：balanced, fast_paced, showcase
+        # 区分风格生成提案：balanced, fast, detailed
         proposals = []
 
         # 参数类内容（面料/做工）占比上限约束（决策 6：QC 严格门禁 <= 25%，此处收敛为 23%）
         max_fabric_ms = int(max_ms * 0.23)
 
-        for style in ("balanced", "fast_paced", "showcase"):
+        effective_style = preferred_style or kwargs.get("preferred_style") or self.preferred_style or "balanced"
+        pref = self.STYLE_ALIASES.get(str(effective_style).strip().lower(), "balanced")
+        if pref == "fast":
+            style_order = ("fast", "balanced", "detailed")
+        elif pref == "detailed":
+            style_order = ("detailed", "balanced", "fast")
+        else:
+            style_order = ("balanced", "fast", "detailed")
+
+        for style in style_order:
             # 偏好排序与候选池配置
             pool = list(eligible_cands)
-            if style == "fast_paced":
+            if style == "fast":
                 pool.sort(key=lambda x: (x["dur"] > 5000, -x["composite"]))
-            elif style == "showcase":
+            elif style == "detailed":
                 pool.sort(key=lambda x: (x["role"] not in ("FABRIC", "PROOF", "STYLING"), -x["composite"]))
             else:
                 pool.sort(key=lambda x: -x["composite"])

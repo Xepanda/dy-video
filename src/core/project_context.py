@@ -125,6 +125,33 @@ def is_historical_output(file_path: str, project_id: str) -> Tuple[bool, str]:
     if os.path.isfile(os.path.join(parent_dir, "delivery_manifest.json")) and stem_lower in ("final", pid_lower):
         return True, "同目录下存在交付清单，判定为成片"
 
+    # 4. 结合历史交付 Manifest 深度比对（无论是否位于标准子目录）
+    try:
+        # 扫描同级或上级 output/work 目录下的历史交付记录
+        candidate_manifest_paths = []
+        dm_curr = os.path.join(parent_dir, "delivery_manifest.json")
+        if os.path.isfile(dm_curr):
+            candidate_manifest_paths.append(dm_curr)
+        out_sub = os.path.join(parent_dir, "output")
+        if os.path.isdir(out_sub):
+            for root, _, files in os.walk(out_sub):
+                if "delivery_manifest.json" in files:
+                    candidate_manifest_paths.append(os.path.join(root, "delivery_manifest.json"))
+                if "generation_manifest.json" in files:
+                    candidate_manifest_paths.append(os.path.join(root, "generation_manifest.json"))
+
+        for mp in candidate_manifest_paths[:5]:  # 限制最多检查5个清单，兼顾性能
+            with open(mp, "r", encoding="utf-8") as f:
+                m_data = json.load(f)
+            # 检查输出路径或视频文件名匹配
+            deliv = m_data.get("final_deliverables", {}) or {}
+            target_v = m_data.get("video_path") or deliv.get("video") or deliv.get("final_video")
+            if target_v:
+                if os.path.abspath(target_v) == norm_p or os.path.basename(target_v) == base_name:
+                    return True, f"命中历史交付清单 ({os.path.basename(mp)}) 记录的成片"
+    except Exception:
+        pass
+
     return False, ""
 
 
@@ -196,8 +223,8 @@ class InputManifest:
                             "sha256": compute_file_sha256(fpath),
                         })
 
-        if explicit_video_paths:
-            # 严格依据用户确认的显式列表
+        if explicit_video_paths is not None:
+            # 严格依据用户确认的显式列表（若显式传入空列表 []，表示用户取消勾选全部视频，严禁回退扫描）
             src_idx = 1
             for raw_p in explicit_video_paths:
                 if not raw_p or not str(raw_p).strip():

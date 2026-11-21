@@ -181,9 +181,11 @@ class SpecManager:
     def build_spec_dict(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         project_id = str(payload.get("project_id") or "demo").strip()
         raw_video_path = str(payload.get("raw_video_path") or "").strip()
-        raw_video_paths = payload.get("raw_video_paths") or []
-        if not isinstance(raw_video_paths, list):
-            raw_video_paths = []
+        explicit_vpaths = payload.get("raw_video_paths")
+        if explicit_vpaths is not None:
+            raw_video_paths = [str(p).strip() for p in explicit_vpaths if str(p).strip()]
+        else:
+            raw_video_paths = [raw_video_path] if raw_video_path else []
 
         brand_en = str(payload.get("brand_en") or "").strip()
         brand_cn = str(payload.get("brand_cn") or "").strip()
@@ -337,8 +339,8 @@ class DesktopSpecApi:
             "project_id": "demo_project",
             "raw_video_path": "",
             "raw_video_paths": [],
-            "brand_en": "MIXCITY",
-            "brand_cn": "高端女装",
+            "brand_en": "",
+            "brand_cn": "",
             "product_title_l1": "",
             "product_title_l2": "",
             "product_img_1": "",
@@ -468,8 +470,8 @@ class DesktopSpecApi:
                     "raw_video_path": "",
                     "raw_video_paths": [],
                     "brand": {
-                        "title_en": "MIXCITY",
-                        "subtitle_cn": "高端女装"
+                        "title_en": "",
+                        "subtitle_cn": ""
                     },
                     "product": {
                         "title_line1": "",
@@ -629,6 +631,14 @@ class DesktopSpecApi:
 
     def start_pipeline(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """校验、保存配置并调度 JobRunner 端到端执行一键全自动智能剪辑（同步执行，兼顾测试）。"""
+        raw_vids = payload.get("raw_video_paths")
+        if raw_vids is not None and len(raw_vids) == 0:
+            return {
+                "success": False,
+                "status": "NEEDS_INPUT",
+                "message": "未勾选任何原始视频素材，请在素材清单中勾选至少一段原始直播视频！",
+            }
+
         save_res = self.save_spec(payload)
         if not save_res.get("success"):
             return save_res
@@ -663,6 +673,14 @@ class DesktopSpecApi:
 
     def start_pipeline_async(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """后台异步启动剪辑流水线，支持实时状态与阶段轮询。"""
+        raw_vids = payload.get("raw_video_paths")
+        if raw_vids is not None and len(raw_vids) == 0:
+            return {
+                "success": False,
+                "status": "NEEDS_INPUT",
+                "message": "未勾选任何原始视频素材，请在素材清单中勾选至少一段原始直播视频！",
+            }
+
         with self._lock:
             if self._job_thread and self._job_thread.is_alive():
                 return {"success": False, "message": "任务正在执行中，请等待完成或取消后再试"}
@@ -1393,12 +1411,12 @@ def get_html_content() -> str:
 
                     <div class="grid-2">
                         <div class="form-group">
-                            <label>品牌英文主标 (Brand EN)</label>
-                            <input type="text" id="brand_en" value="MIXCITY" required>
+                            <label>品牌英文主标 (Brand EN，留空为无品牌包装)</label>
+                            <input type="text" id="brand_en" value="" placeholder="选填，例如: MIXCITY (留空为无品牌包装)">
                         </div>
                         <div class="form-group">
                             <label>品牌中文副标 (Brand CN)</label>
-                            <input type="text" id="brand_cn" value="高端女装" required>
+                            <input type="text" id="brand_cn" value="" placeholder="选填，例如: 高端女装">
                         </div>
                     </div>
 
@@ -1902,7 +1920,7 @@ def get_html_content() -> str:
             return {
                 project_id: document.getElementById('project_id').value.trim(),
                 project_root: pRoot,
-                raw_video_path: vList.length > 0 ? vList[0] : (projectScannedData ? projectScannedData.materials_dir : pRoot),
+                raw_video_path: vList.length > 0 ? vList[0] : "",
                 raw_video_paths: vList,
                 brand_en: document.getElementById('brand_en').value.trim(),
                 brand_cn: document.getElementById('brand_cn').value.trim(),
@@ -2000,8 +2018,9 @@ def get_html_content() -> str:
 
         async function runPipelineOneClick() {
             const payload = collectPayload();
-            if (!payload.raw_video_path && (!payload.raw_video_paths || payload.raw_video_paths.length === 0)) {
+            if (!payload.raw_video_paths || payload.raw_video_paths.length === 0) {
                 showAlert(false, "请先在素材清单中勾选至少一段原始直播视频！");
+                goToStep(2);
                 return;
             }
             if (!payload.product_name) {
