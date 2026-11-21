@@ -43,6 +43,7 @@ from src.qc.editorial_qc import EditorialQcAuditor
 from src.qc.continuity_qc import ContinuityAuditor
 from src.core.cut_optimizer import CutOptimizer
 from src.core.video_assembler import VideoAssembler
+from src.core.project_context import compute_job_fingerprint
 
 
 class TestPR16Regressions(unittest.TestCase):
@@ -356,6 +357,7 @@ class TestPR16Regressions(unittest.TestCase):
             delivery_manifest = {
                 "project_id": "resume_test",
                 "status": "DELIVERED",
+                "job_fingerprint": compute_job_fingerprint(spec),
                 "video_path": dummy_mp4,
                 "qc_passed": True,
             }

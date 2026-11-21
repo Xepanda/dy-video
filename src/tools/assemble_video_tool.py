@@ -18,7 +18,7 @@ import os
 import sys
 import json
 import argparse
-from typing import Tuple
+from typing import Tuple, Any, Optional
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
@@ -32,6 +32,7 @@ def assemble_video_tool(
     work_dir: str = None,
     cache_key: str = None,
     constraints: dict = None,
+    cancel_token: Any = None,
 ) -> Tuple[str, float]:
     """根据剪辑计划 plan.json 执行确定性总装。
 
@@ -76,7 +77,7 @@ def assemble_video_tool(
             print(f"[ASSEMBLE-TOOL] 命中阶段缓存，跳过总装: {cached_video} ({duration:.2f}s)")
             return cached_video, duration
 
-    assembler = VideoAssembler(work_dir, constraints=constraints)
+    assembler = VideoAssembler(work_dir, constraints=constraints, cancel_token=cancel_token)
     out_mp4, duration = assembler.assemble_final_video(plan, output_mp4_path)
     print(f"[ASSEMBLE-TOOL] 成片总装完成: {out_mp4} (实测物理时长: {duration:.2f}s)")
 

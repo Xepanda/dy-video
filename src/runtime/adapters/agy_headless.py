@@ -14,6 +14,7 @@ import os
 import sys
 import re
 import json
+import time
 import shutil
 import subprocess
 from typing import Dict, Any, Optional, Tuple, List
@@ -155,8 +156,20 @@ class AgyHeadlessAdapter(AgentAdapter):
         schema_path: str,
         work_dir: str,
         timeout_sec: int = 300,
+        cancellation_token: Optional[Any] = None,
     ) -> AgentResponse:
-        """执行无交互结构化决策生成。"""
+        """执行无交互结构化决策生成，支持取消令牌实时中断。"""
+        if cancellation_token:
+            is_c = getattr(cancellation_token, "is_canceled", False)
+            if callable(is_c):
+                is_c = is_c()
+            if is_c:
+                return AgentResponse(
+                    status=AgentStatus.ERROR,
+                    error_message="AGY 调用已被用户取消",
+                    exit_code=-5,
+                )
+
         is_avail, msg = self.check_availability()
         if not is_avail:
             return AgentResponse(
@@ -181,17 +194,71 @@ class AgyHeadlessAdapter(AgentAdapter):
             "--print-timeout", f"{timeout_sec}s",
         ]
 
+        proc = None
+        raw_out, raw_err = "", ""
+        returncode = 0
         try:
-            proc = subprocess.run(
-                cmd,
-                cwd=work_dir,
-                capture_output=True,
-                text=True,
-                timeout=timeout_sec + 15,
-                shell=(os.name == "nt"),
-                encoding="utf-8",
-                errors="replace",
-            )
+            if cancellation_token:
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=work_dir,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    shell=(os.name == "nt"),
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                if hasattr(cancellation_token, "register_process"):
+                    cancellation_token.register_process(proc)
+
+                start_t = time.time()
+                while True:
+                    is_c = getattr(cancellation_token, "is_canceled", False)
+                    if callable(is_c):
+                        is_c = is_c()
+                    if is_c:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        return AgentResponse(
+                            status=AgentStatus.ERROR,
+                            error_message="AGY 调用已被用户取消",
+                            exit_code=-5,
+                        )
+
+                    ret = proc.poll()
+                    if ret is not None:
+                        raw_out, raw_err = proc.communicate()
+                        returncode = ret
+                        break
+
+                    if time.time() - start_t > timeout_sec + 15:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        return AgentResponse(
+                            status=AgentStatus.TIMEOUT,
+                            error_message=f"AGY 调用超时 ({timeout_sec}s)",
+                            exit_code=-3,
+                        )
+                    time.sleep(0.05)
+            else:
+                proc = subprocess.run(
+                    cmd,
+                    cwd=work_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_sec + 15,
+                    shell=(os.name == "nt"),
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                raw_out = proc.stdout or ""
+                raw_err = proc.stderr or ""
+                returncode = proc.returncode
         except subprocess.TimeoutExpired:
             return AgentResponse(
                 status=AgentStatus.TIMEOUT,
@@ -204,13 +271,13 @@ class AgyHeadlessAdapter(AgentAdapter):
                 error_message=f"启动 AGY 进程失败: {str(e)}",
                 exit_code=-4,
             )
-
-        raw_out = proc.stdout or ""
-        raw_err = proc.stderr or ""
+        finally:
+            if proc and cancellation_token and hasattr(cancellation_token, "unregister_process"):
+                cancellation_token.unregister_process(proc)
 
         try:
             with open(os.path.join(work_dir, "agy_debug.log"), "w", encoding="utf-8") as f:
-                f.write(f"=== RETCODE ===\n{proc.returncode}\n\n")
+                f.write(f"=== RETCODE ===\n{returncode}\n\n")
                 f.write(f"=== STDOUT ===\n{raw_out}\n\n")
                 f.write(f"=== STDERR ===\n{raw_err}\n\n")
         except Exception:
@@ -218,27 +285,27 @@ class AgyHeadlessAdapter(AgentAdapter):
 
         # 检查是否命中未授权/登录态过期
         lower_err = (raw_out + " " + raw_err).lower()
-        if "not logged in" in lower_err or "login required" in lower_err or "auth" in lower_err and proc.returncode != 0:
+        if "not logged in" in lower_err or "login required" in lower_err or "auth" in lower_err and returncode != 0:
             return AgentResponse(
                 status=AgentStatus.AUTH_REQUIRED,
                 raw_output=raw_out,
                 error_message="AGY 未登录或凭证过期，请先在终端运行 agy login 进行官方授权",
-                exit_code=proc.returncode,
+                exit_code=returncode,
             )
         if "permission denied" in lower_err or "access denied" in lower_err:
             return AgentResponse(
                 status=AgentStatus.PERMISSION_DENIED,
                 raw_output=raw_out,
                 error_message="AGY 工具执行权限被软拒绝",
-                exit_code=proc.returncode,
+                exit_code=returncode,
             )
 
-        if proc.returncode != 0:
+        if returncode != 0:
             return AgentResponse(
                 status=AgentStatus.ERROR,
                 raw_output=raw_out,
-                error_message=f"AGY 退出码非零 ({proc.returncode}): {raw_err.strip()}",
-                exit_code=proc.returncode,
+                error_message=f"AGY 退出码非零 ({returncode}): {raw_err.strip()}",
+                exit_code=returncode,
             )
 
         # 解析 JSON 输出（支持直接 JSON、Markdown 代码块与混合日志提取）

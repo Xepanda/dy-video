@@ -344,7 +344,7 @@ class DesktopSpecApi:
             "product_title_l2": "",
             "product_img_1": "",
             "product_img_2": "",
-            "category": "女装/毛针织",
+            "category": "",
             "allowed_variants": [],
             "selling_points": [],
             "duration_range": "45-65",
@@ -1396,6 +1396,7 @@ def get_html_content() -> str:
                         <div class="form-group">
                             <label>核心品类 (选择或输入)</label>
                             <select id="category" onchange="onCategoryChange(this.value)">
+                                <option value="" selected>-- 请选择商品品类（或基于名称智能推断）--</option>
                                 <option value="女装/毛针织">女装 / 毛针织衫</option>
                                 <option value="女装/大衣外套">女装 / 大衣外套</option>
                                 <option value="女装/连衣裙">女装 / 连衣裙</option>
@@ -1699,11 +1700,31 @@ def get_html_content() -> str:
             }
         }
 
+        let userManuallyChangedCategory = false;
+        function onCategoryChange(val) {
+            userManuallyChangedCategory = Boolean(val);
+        }
+
         function syncProductTitles() {
             const val = document.getElementById('product_name').value.trim();
             document.getElementById('product_title_l1').value = val;
             if (!document.getElementById('product_title_l2').value) {
                 document.getElementById('product_title_l2').value = val ? "直播精选" : "";
+            }
+            const catElem = document.getElementById('category');
+            if (catElem && !userManuallyChangedCategory && val) {
+                const n = val.toLowerCase();
+                let inferred = "";
+                if (n.includes("羽绒") || n.includes("大衣") || n.includes("外套") || n.includes("风衣") || n.includes("棉服")) inferred = "女装/大衣外套";
+                else if (n.includes("毛衣") || n.includes("针织") || n.includes("羊绒") || n.includes("羊毛") || n.includes("开衫")) inferred = "女装/毛针织";
+                else if (n.includes("裙") || n.includes("连衣裙")) inferred = "女装/连衣裙";
+                else if (n.includes("裤") || n.includes("西裤") || n.includes("阔腿")) inferred = "女装/裤装裙装";
+                else if (n.includes("衬衫") || n.includes("t恤") || n.includes("卫衣")) inferred = "女装/衬衫T恤";
+                else if (n.includes("包") || n.includes("饰品") || n.includes("皮带") || n.includes("鞋")) inferred = "箱包配饰";
+                else if (n.includes("口红") || n.includes("面霜") || n.includes("护肤") || n.includes("美妆")) inferred = "美妆护肤";
+                if (inferred) {
+                    catElem.value = inferred;
+                }
             }
         }
 

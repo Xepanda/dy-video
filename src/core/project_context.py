@@ -86,10 +86,15 @@ class ProjectPaths:
         os.makedirs(self.output_dir, exist_ok=True)
 
     def is_safe_to_clean(self, path: str) -> bool:
-        """检查指定路径是否严格属于当前 run 的 work 目录，防止误删任何外部或素材文件。"""
-        abs_p = os.path.abspath(path)
-        abs_work = os.path.abspath(self.work_dir)
-        return abs_p.startswith(abs_work) and abs_p != abs_work
+        """检查指定路径是否严格属于当前 run 的 work 目录子路径，防止误删任何外部或素材文件。"""
+        try:
+            real_p = os.path.realpath(os.path.abspath(path))
+            real_work = os.path.realpath(os.path.abspath(self.work_dir))
+            if real_p == real_work:
+                return False
+            return os.path.commonpath([real_p, real_work]) == real_work
+        except Exception:
+            return False
 
 
 def is_historical_output(file_path: str, project_id: str) -> Tuple[bool, str]:

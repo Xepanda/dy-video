@@ -224,21 +224,30 @@ class JobRunner:
                     if saved_fp:
                         fp_match = bool(saved_fp == current_fingerprint)
                     else:
-                        # 旧格式缺指纹强制重验：严禁单凭 DELIVERED 状态直接复用，必须同时满足成片物理存在且非空、既有 QC 显式通过且 checkpoint 确为 DELIVERED
-                        has_qc = bool(d_data.get("qc_passed") is True or (d_data.get("editorial_qc") or {}).get("passed") is True)
-                        chk_delivered = bool(self.resumed_from == JobStage.DELIVERED)
-                        if has_qc and chk_delivered and v_p and os.path.isfile(v_p) and os.path.getsize(v_p) > 0:
-                            print("[JOB-RUNNER][WARN] 发现旧版交付清单缺少 job_fingerprint，经完整性与 QC 重验通过后回填指纹并复用")
-                            d_data["job_fingerprint"] = current_fingerprint
+                        # 旧清单缺指纹时：直接拒绝跨任务复用并重新生成。
+                        # 严禁单凭 DELIVERED 与 QC 状态直接复用旧成片并用当前指纹盲目标记旧结果！
+                        # 只有能够从原始历史输入清单独立计算出相同指纹，才允许迁移与复用。
+                        hist_spec = d_data.get("spec") or d_data.get("job_spec")
+                        hist_manifest = d_data.get("input_manifest") or d_data.get("manifest")
+                        fp_match = False
+                        if hist_spec:
                             try:
-                                with open(delivery_manifest_p, "w", encoding="utf-8") as dmf_w:
-                                    json.dump(d_data, dmf_w, ensure_ascii=False, indent=2)
-                            except Exception:
-                                pass
-                            fp_match = True
+                                hist_fp = compute_job_fingerprint(hist_spec, hist_manifest)
+                                if hist_fp == current_fingerprint:
+                                    print("[JOB-RUNNER][INFO] 历史交付清单缺少 job_fingerprint，但从原始历史输入独立计算指纹一致，迁移指纹并复用")
+                                    d_data["job_fingerprint"] = current_fingerprint
+                                    try:
+                                        with open(delivery_manifest_p, "w", encoding="utf-8") as dmf_w:
+                                            json.dump(d_data, dmf_w, ensure_ascii=False, indent=2)
+                                    except Exception:
+                                        pass
+                                    fp_match = True
+                                else:
+                                    print(f"[JOB-RUNNER][WARN] 历史原始输入计算指纹 ({hist_fp}) 与当前任务指纹 ({current_fingerprint}) 不匹配，拒绝复用")
+                            except Exception as e:
+                                print(f"[JOB-RUNNER][WARN] 尝试从历史输入计算指纹失败: {e}")
                         else:
-                            print("[JOB-RUNNER][WARN] 发现旧版交付清单缺少 job_fingerprint 且未通过完整性重验，拒绝直接复用，强制重新执行")
-                            fp_match = False
+                            print("[JOB-RUNNER][WARN] 发现旧版交付清单缺少 job_fingerprint 且缺失原始历史输入，拒绝直接复用，强制重新生成")
 
                     if fp_match and v_p and os.path.isfile(v_p):
                         d_data.setdefault("status", JobStage.DELIVERED)

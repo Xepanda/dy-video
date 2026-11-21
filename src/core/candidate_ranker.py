@@ -122,17 +122,6 @@ class CandidateRanker:
                     rejection_reasons.append(f"命中叫卖/换款模式: '{pat}'")
                     break
 
-            # 搭配识别：如果是搭配语境（如"上衣搭西裤"），不作为负向冲突误杀，而是认定为合规搭配 (ACCESSORY_OR_STYLING)
-            styling_patterns = (
-                r"搭(配)?(一条|个|件)?(裤|裙|鞋|包|开衫|马甲|西裤|打底)",
-                r"配(一条|个|件)?(裤|裙|鞋|包|开衫|马甲|西裤|打底)",
-                r"脚上(穿|搭)", r"下半身(搭|配)", r"里面(搭|穿)",
-            )
-            is_styling_context = (
-                relation == "ACCESSORY_OR_STYLING" or
-                any(re.search(p, text) for p in styling_patterns)
-            )
-
             # 品类负向冲突硬过滤
             cat_name = str(product_profile.get("category", "") or product_profile.get("name", "")).lower()
             try:
@@ -148,29 +137,56 @@ class CandidateRanker:
 
             # 搭配识别：如果是真正搭配语境（如"上衣搭西裤"），不作为负向冲突误杀，而是认定为合规搭配 (ACCESSORY_OR_STYLING)
             styling_patterns = (
-                r"搭(配)?(一条|个|件)?(裤|裙|鞋|包|开衫|马甲|西裤|打底)",
-                r"配(一条|个|件)?(裤|裙|鞋|包|开衫|马甲|西裤|打底)",
-                r"脚上(穿|搭)", r"下半身(搭|配)", r"里面(搭|穿)",
+                r"搭(配)?.*?(裤|裙|鞋|包|开衫|马甲|西裤|打底)",
+                r"配.*?(裤|裙|鞋|包|开衫|马甲|西裤|打底)",
+                r"脚上(穿|搭)", r"下半身.*?(搭|配)", r"里面(搭|穿)",
             )
             # 但若台词核心是在主推下装/换款（如"主推的裤子"、"裤子给大家安排"、"这条裤"），绝非合规搭配
             promotes_other_item = bool(re.search(r"(主推|拍|买|这款|这条|这件裤|给大家|安排|换下).*(裤|裙)", text))
 
-            is_styling_context = (
-                not promotes_other_item and (
-                    relation == "ACCESSORY_OR_STYLING" or
-                    any(re.search(p, text) for p in styling_patterns)
-                )
-            )
+            hits = [nt for nt in neg_terms if nt in text]
+            has_styling_pattern = any(re.search(p, text) for p in styling_patterns)
 
-            if is_styling_context:
-                if relation != "OTHER_SKU":
-                    relation = "ACCESSORY_OR_STYLING"
-            else:
-                hits = [nt for nt in neg_terms if nt in text]
-                if hits or relation == "OTHER_SKU":
+            # CandidateRanker 只能降低或维持上游的身份可信度，严禁仅凭搭配话术将 UNCERTAIN 升级为已验证关系
+            if promotes_other_item or relation == "OTHER_SKU":
+                eligible = False
+                relation = "OTHER_SKU"
+                if promotes_other_item:
+                    rejection_reasons.append("口播主推他款/换款，非合规搭配片段")
+                else:
+                    rejection_reasons.append("上游已判定为非本品款式 (OTHER_SKU)")
+            elif relation in ("SAME_SKU", "SAME_SKU_VARIANT"):
+                if hits:
+                    if not promotes_other_item and has_styling_pattern:
+                        relation = "ACCESSORY_OR_STYLING"
+                    else:
+                        eligible = False
+                        relation = "OTHER_SKU"
+                        rejection_reasons.append(f"品类负向冲突（非主推商品或属于换款/主推他款）: {hits}")
+            elif relation == "ACCESSORY_OR_STYLING":
+                # 上游已核实为合规搭配片段；只要不主动推销其他商品，即使文本包含下装词（如"西裤"）也不被品类负向词误杀
+                pass
+            elif relation == "UNCERTAIN":
+                # 严禁将 UNCERTAIN 升级为 ACCESSORY_OR_STYLING！
+                if promotes_other_item:
                     eligible = False
                     relation = "OTHER_SKU"
-                    rejection_reasons.append(f"品类负向冲突（非主推商品或属于换款/主推他款）: {hits}")
+                    rejection_reasons.append("口播主推他款/换款，非合规搭配片段")
+                elif hits and not has_styling_pattern:
+                    eligible = False
+                    relation = "OTHER_SKU"
+                    rejection_reasons.append(f"品类负向冲突且身份未核实: {hits}")
+                else:
+                    # 包含搭配话术但上游未核实身份，坚决维持 UNCERTAIN，严禁升级为已验证关系
+                    relation = "UNCERTAIN"
+                    is_strict_profile = (
+                        product_profile.get("quality_policy") == "strict" or
+                        product_profile.get("visual_verification") == "required" or
+                        product_profile.get("strict") is True
+                    )
+                    if is_strict_profile:
+                        eligible = False
+                        rejection_reasons.append("严格模式下未通过身份核实 (UNCERTAIN)")
 
             # 句子完整性硬约束：禁止未闭合或断句截断的碎片入选
             risks = cand.get("risks") or []

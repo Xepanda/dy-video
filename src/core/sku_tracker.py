@@ -161,11 +161,29 @@ class SkuTracker:
                 return "SAME_SKU_VARIANT", 0.90, reasons, evidence_gap
 
         if is_styling:
-            if vis_available and vis_relation == "OTHER_SKU" and not has_primary_token:
-                reasons.append("口播为搭配语境但画面主推其他商品且未提及本品")
-                evidence_gap.append("搭配物视觉冲突")
-                return "OTHER_SKU", 0.85, reasons, evidence_gap
-            return "ACCESSORY_OR_STYLING", 0.85, reasons, evidence_gap
+            if is_strict:
+                # 严格模式下：搭配片段必须具备本品可见、主品身份已核实或其他明确关联证据
+                if vis_available and vis_relation == "OTHER_SKU":
+                    reasons.append("口播为搭配语境但画面判定为非本品款式")
+                    evidence_gap.append("搭配物视觉冲突: 画面非本品")
+                    return "OTHER_SKU", 0.85, reasons, evidence_gap
+                elif vis_available and vis_relation in ("SAME_SKU", "SAME_SKU_VARIANT"):
+                    reasons.append("口播为搭配语境且画面证实本品在场/为主品")
+                    return "ACCESSORY_OR_STYLING", max(0.85, vis_conf), reasons, evidence_gap
+                elif not vis_available:
+                    reasons.append("口播为搭配语境，但严格模式下缺失有效视觉证据证明本品在场")
+                    evidence_gap.append("UNVERIFIABLE: 缺失候选视频帧或未通过视觉比对")
+                    return "UNCERTAIN", 0.40, reasons, evidence_gap
+                else:
+                    reasons.append("口播为搭配语境，但视觉证据不足以确认为本品搭配")
+                    evidence_gap.append("搭配片段视觉证据不足")
+                    return "UNCERTAIN", 0.45, reasons, evidence_gap
+            else:
+                if vis_available and vis_relation == "OTHER_SKU" and not has_primary_token:
+                    reasons.append("口播为搭配语境但画面主推其他商品且未提及本品")
+                    evidence_gap.append("搭配物视觉冲突")
+                    return "OTHER_SKU", 0.85, reasons, evidence_gap
+                return "ACCESSORY_OR_STYLING", 0.85, reasons, evidence_gap
 
         if has_primary_token:
             if vis_available and vis_relation in ("SAME_SKU", "SAME_SKU_VARIANT"):

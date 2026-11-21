@@ -68,6 +68,8 @@ UNIT_TESTS = [
     "tests/test_editorial_qc.py",
     "tests/test_project_context.py",
     "tests/test_pr16_regressions.py",
+    "tests/test_pr16_round3_p0_p1.py",
+    "tests/test_pr16_round4_p0_p1.py",
 ]
 
 PYTHON = sys.executable

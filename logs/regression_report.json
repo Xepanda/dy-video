@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-11-19 01:12:37",
+  "timestamp": "2026-11-21 16:47:34",
   "layers": {
     "unit_tests": {
       "tests/test_improvements.py": {
@@ -10,7 +10,7 @@
       "tests/test_pipeline_units.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": "料【半岛棉】匹配))\n            [3.60s ~ 5.80s] 上身之后人都瘦眉了，而且超选瘦。 -> 上身之后人都瘦没了，而且超显瘦。 (瘦眉了|瘦美了|瘦梅了 -> 瘦没了 (修身显瘦夸张修辞【人都瘦没了】))\n            [6.00s ~ 8.00s] 平时如果拿不准的就不要卡马，正常按马术拍。 -> 平时如果拿不准的就不要卡码，正常按码数拍。 (卡马 -> 卡码 (服装尺码选购用语【卡码】))\n[ASR-AGENT] 质检审计报告已落盘: C:\\Users\\ePanda\\AppData\\Local\\Temp\\tmpj0loowz4.json\n[ASR-REVIEW] 审核通过：3/3 句有效，1 条 WARN（占比 0.00）→ 允许进入后续流程\n            [WARN A5_NO_DURATION] #-1 未提供媒体时长，跳过识别密度校验\n"
+        "tail": "料【半岛棉】匹配))\n            [3.60s ~ 5.80s] 上身之后人都瘦眉了，而且超选瘦。 -> 上身之后人都瘦没了，而且超显瘦。 (瘦眉了|瘦美了|瘦梅了 -> 瘦没了 (修身显瘦夸张修辞【人都瘦没了】))\n            [6.00s ~ 8.00s] 平时如果拿不准的就不要卡马，正常按马术拍。 -> 平时如果拿不准的就不要卡码，正常按码数拍。 (卡马 -> 卡码 (服装尺码选购用语【卡码】))\n[ASR-AGENT] 质检审计报告已落盘: C:\\Users\\ePanda\\AppData\\Local\\Temp\\tmpp810vgir.json\n[ASR-REVIEW] 审核通过：3/3 句有效，1 条 WARN（占比 0.00）→ 允许进入后续流程\n            [WARN A5_NO_DURATION] #-1 未提供媒体时长，跳过识别密度校验\n"
       },
       "tests/test_ocr_purity.py": {
         "status": "PASS",
@@ -20,7 +20,7 @@
       "tests/test_agent_correction_review.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": " 处 ASR 错词/语境歧义 (引擎: Agent review (file, 0 处修正))\n[ASR-AGENT] 引擎分歧审计: 2 句两引擎结果不一致（已记录供人工复核）\n[ASR-AGENT] 质检审计报告已落盘: C:\\Users\\ePanda\\AppData\\Local\\Temp\\tmp41hzsmik\\asr_report.json\n[ASR-REVIEW] 审核通过：3/3 句有效，2 条 WARN（占比 0.00）→ 允许进入后续流程\n            [WARN A5_NO_DURATION] #-1 未提供媒体时长，跳过识别密度校验\n            [WARN A8_LOW_SEMANTIC] #-1 全篇商品语义词命中仅 1 个，疑似非商品内容或识别失败\n[PASS] 用例5 index 越界拦截\n\n[TEST-AGENT-REVIEW] 全部通过\n"
+        "tail": " 处 ASR 错词/语境歧义 (引擎: Agent review (file, 0 处修正))\n[ASR-AGENT] 引擎分歧审计: 2 句两引擎结果不一致（已记录供人工复核）\n[ASR-AGENT] 质检审计报告已落盘: C:\\Users\\ePanda\\AppData\\Local\\Temp\\tmpoimo9j1s\\asr_report.json\n[ASR-REVIEW] 审核通过：3/3 句有效，2 条 WARN（占比 0.00）→ 允许进入后续流程\n            [WARN A5_NO_DURATION] #-1 未提供媒体时长，跳过识别密度校验\n            [WARN A8_LOW_SEMANTIC] #-1 全篇商品语义词命中仅 1 个，疑似非商品内容或识别失败\n[PASS] 用例5 index 越界拦截\n\n[TEST-AGENT-REVIEW] 全部通过\n"
       },
       "tests/test_chatcut_bridge.py": {
         "status": "PASS",
@@ -55,7 +55,7 @@
       "tests/test_stage_cache_fingerprint.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": "[PASS] code_fingerprint 稳定: 063a697e3eca1c91\n[PASS] 代码变更 → 指纹变化 → 还原后恢复\n[PASS] constraints 变更 → 指纹变化 → 还原后恢复\n[ASR-REVIEW] 审核门禁已挂载到 AsrContextVerifier.verify_and_correct\n[PASS] analyze_story_segments 的 ASR 缓存键已含代码指纹\n[PASS] 阶段缓存 save/load 往返正常\n[PASS] spec 变更 → pipeline key 变化\n\n[TEST-FINGERPRINT] 全部通过\n"
+        "tail": "[PASS] code_fingerprint 稳定: c62f51568267c8c4\n[PASS] 代码变更 → 指纹变化 → 还原后恢复\n[PASS] constraints 变更 → 指纹变化 → 还原后恢复\n[ASR-REVIEW] 审核门禁已挂载到 AsrContextVerifier.verify_and_correct\n[PASS] analyze_story_segments 的 ASR 缓存键已含代码指纹\n[PASS] 阶段缓存 save/load 往返正常\n[PASS] spec 变更 → pipeline key 变化\n\n[TEST-FINGERPRINT] 全部通过\n"
       },
       "tests/test_video_effects.py": {
         "status": "PASS",
@@ -85,7 +85,7 @@
       "tests/test_requirements_audit.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": "[PASS] 基线结构合法：47 条需求，ID 唯一\n[PASS] 全部 47 条需求的证据锚点均可解析\n[PASS] 死键集合与基线一致（48 个）\n[PASS] 48 个死键均已在基线中登记\n[PASS] 引擎自检通过（63 个源文件均可解析）\n\n[TEST-REQ-AUDIT] 全部通过\n"
+        "tail": "[PASS] 基线结构合法：47 条需求，ID 唯一\n[PASS] 全部 47 条需求的证据锚点均可解析\n[PASS] 死键集合与基线一致（48 个）\n[PASS] 48 个死键均已在基线中登记\n[PASS] 引擎自检通过（65 个源文件均可解析）\n\n[TEST-REQ-AUDIT] 全部通过\n"
       },
       "tests/test_dead_constraint_wiring.py": {
         "status": "PASS",
@@ -100,12 +100,12 @@
       "tests/test_zh_script_and_violation_policy.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": "[VIOLATION] 处置参数已生成: C:\\Users\\ePanda\\AppData\\Local\\Temp\\tmpb_9wyila\\violation_handling.json\n  候选 2 → 字幕删除 2 / 放行 0 | 复核引擎 fallback (agent review pending) | 消音 off / 打码 off\n"
+        "tail": "[VIOLATION] 处置参数已生成: C:\\Users\\ePanda\\AppData\\Local\\Temp\\tmprcgd1ho5\\violation_handling.json\n  候选 2 → 字幕删除 2 / 放行 0 | 复核引擎 fallback (agent review pending) | 消音 off / 打码 off\n"
       },
       "tests/test_desktop_spec_creator.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": "  [PASS] build_spec_dict：字段映射与关键词解析正确\n  [PASS] validate：缺失必填项报错 4 条\n  [PASS] save/load：往返一致\n  [PASS] DesktopSpecApi.save_spec：落盘成功\n  [PASS] DesktopSpecApi.save_spec：非法输入被拒且未写盘\n  [PASS] DesktopSpecApi：直接生成至素材目录且仓库内零修改\n  [PASS] 环境探测：root=dy-live-ecommerce-editor，解释器可解析\n\n[TEST-DESKTOP] 7/7 通过\n"
+        "tail": "eline：成功打通 EXE 与 JobRunner 调用链\n  [PASS] load_initial_data：无虚假材质预填\n  [PASS] DesktopSpecApi.scan_project：向导素材发现与历史成品隔离正确\n  [PASS] DesktopSpecApi.create_new_project：新建项目初始化结构正确\n  [PASS] DesktopSpecApi.create_new_project(parent, name)：子目录创建正确\n  [PASS] SpecManager：字幕与封面策略映射正确\n  [PASS] DesktopSpecApi：状态机与打开路径防护正常\n  [PASS] get_html_content：内嵌 JavaScript 经 node -c 编译器语法验证 100% 通过\n\n[TEST-DESKTOP] 15/15 通过\n"
       },
       "tests/test_feature_flags.py": {
         "status": "PASS",
@@ -145,7 +145,7 @@
       "tests/test_job_runner_and_adapters.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": "[TEST-JOB-RUNNER] 全部通过\n"
+        "tail": "k\\20261121-164831-0336\\candidates\\story_candidates.json\n                 源素材 1 个 | 合计校对后 0 句\n                 Hook 候选: 0 条 | 面料候选: 0 条\n                 显瘦候选: 0 条 | 搭配候选: 0 条\n                 淘汰杂质: 0 条 (价格/库存/切品)\n\n>>> [PHASE 1.5] 素材-契约一致性预检: PASS（0 条 WARN）\n  [对话脚本] 0 个完整语句（完整率 0%） | 0 个语句含违规词\n\n>>> [PHASE 2] Agent 启动决策与审美干预...\n  [自主仲裁] 优选封面: cand_fallback_01 (@0.0s) | 兜底占位封面帧\n[TEST-JOB-RUNNER] 全部通过\n"
       },
       "tests/test_cut_and_continuity.py": {
         "status": "PASS",
@@ -156,6 +156,26 @@
         "status": "PASS",
         "returncode": 0,
         "tail": "[TEST-EDITORIAL-QC] 全部通过\n"
+      },
+      "tests/test_project_context.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[PASS] All project_context tests passed!\n"
+      },
+      "tests/test_pr16_regressions.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "al\\Temp\\tmp92myjzd8\\work\\20261121-164853-c752\\candidates\\story_candidates.json\n                 源素材 1 个 | 合计校对后 0 句\n                 Hook 候选: 0 条 | 面料候选: 0 条\n                 显瘦候选: 0 条 | 搭配候选: 0 条\n                 淘汰杂质: 0 条 (价格/库存/切品)\n\n>>> [PHASE 1.5] 素材-契约一致性预检: PASS（0 条 WARN）\n  [对话脚本] 0 个完整语句（完整率 0%） | 0 个语句含违规词\n\n>>> [PHASE 2] Agent 启动决策与审美干预...\n  [自主仲裁] 优选封面: cand_fallback_01 (@0.0s) | 兜底占位封面帧\n"
+      },
+      "tests/test_pr16_round3_p0_p1.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "int 且缺失原始历史输入，拒绝直接复用，强制重新生成\n[FEATURES] 开关 v1 | 包装=branded 时长=standard 参数占比=strict 违禁词=delete 转场=on 放大镜=on\n[PLACEHOLDER] test_fallback_cover: 生成 2 张占位图并登记到 product.item_images\n[COVER] 商品图为空：跳过贴图渲染，封面仅保留直播画面 + 品牌区 + 商品名\n[COVER v2] MIXCITY 风格封面已生成（金色渐变商品名）: C:\\Users\\ePanda\\AppData\\Local\\Temp\\tmptsa5s26z\\out\\cover.jpg\n[COVER-TOOL] 高定封面渲染完成: C:\\Users\\ePanda\\AppData\\Local\\Temp\\tmptsa5s26z\\out\\cover.jpg\n"
+      },
+      "tests/test_pr16_round4_p0_p1.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[ASR-REVIEW] 审核门禁已挂载到 AsrContextVerifier.verify_and_correct\n[JOB-RUNNER][WARN] 历史原始输入计算指纹 (a77fed70ae6a244ab06cacbf) 与当前任务指纹 (65067b40a53056d234ae6d8e) 不匹配，拒绝复用\n[JOB-RUNNER][WARN] 发现旧版交付清单缺少 job_fingerprint 且缺失原始历史输入，拒绝直接复用，强制重新生成\n[JOB-RUNNER][INFO] 历史交付清单缺少 job_fingerprint，但从原始历史输入独立计算指纹一致，迁移指纹并复用\n[PLACEHOLDER] test_ph_isolation: 生成 2 张占位图并登记到 product.item_images\n"
       }
     },
     "batch": {

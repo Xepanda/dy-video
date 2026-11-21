@@ -151,8 +151,9 @@ class AgentDirector:
             return
         n_cards = int(self.options.get("placeholder_cards", 2) or 2)
         size = int((self.constraints.get("sticker", {}) or {}).get("size", 280) or 280)
+        ph_dir = os.path.join(self.work_dir, "placeholders")
         try:
-            ensure_placeholder_cards(self.spec, self.project_id, n_cards=n_cards, size=size)
+            ensure_placeholder_cards(self.spec, self.project_id, out_dir=ph_dir, n_cards=n_cards, size=size)
         except Exception as e:
             print(f"[WARN] 商品位占位补齐失败（不阻断，封面将无贴图）: {e}")
             return
@@ -559,6 +560,7 @@ class AgentDirector:
     ) -> Dict[str, Any]:
         if agent_adapter is not None:
             self.agent_adapter = agent_adapter
+        self.cancel_token = cancel_token
         start_time = time.time()
 
         def _check_cancel():
@@ -955,8 +957,15 @@ class AgentDirector:
                         f"目标成片时长区间: {dur_range[0]}s ~ {dur_range[1]}s\n"
                         "请依据 sequence_proposals.schema.json 契约，从候选片段池中选取片段并排序，生成优选镜头序列提案。"
                     )
-                    resp = self.agent_adapter.invoke(prompt, schema_p, self.work_dir)
-                    if resp.status == AgentStatus.AUTH_REQUIRED:
+                    try:
+                        resp = self.agent_adapter.invoke(prompt, schema_p, self.work_dir, cancellation_token=self.cancel_token)
+                    except TypeError:
+                        resp = self.agent_adapter.invoke(prompt, schema_p, self.work_dir)
+
+                    if resp.status == AgentStatus.ERROR and "取消" in (resp.error_message or ""):
+                        from src.runtime.job_runner import JobCanceledError
+                        raise JobCanceledError("AGY 调用已被用户取消")
+                    elif resp.status == AgentStatus.AUTH_REQUIRED:
                         raise AgentAuthRequiredError(resp.error_message or "AGY 未登录或凭证过期")
                     elif resp.status == AgentStatus.PERMISSION_DENIED:
                         raise AgentPermissionDeniedError(resp.error_message or "AGY 权限被软拒绝")
@@ -1305,6 +1314,7 @@ class AgentDirector:
             cache_key=ck,
             # 必须透传：含 features 派生（render_profile=plain 决定是否烧字幕）
             constraints=self.constraints,
+            cancel_token=self.cancel_token,
         )
 
         # -------------------------------------------------------------
