@@ -18,6 +18,7 @@ from src.core.project_context import (
     InputManifest,
     is_historical_output,
     sanitize_id,
+    compute_job_fingerprint,
 )
 
 
@@ -143,12 +144,97 @@ def test_input_manifest_explicit_list_rejects_historical_output():
         assert any("project-3.mp4" in e["path"] for e in res["excluded_files"])
 
 
+def test_input_manifest_product_images_discovery():
+    """验证商品图片发现与历史封面隔离。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        proj_root = os.path.join(tmpdir, "project-test")
+        mat_dir = os.path.join(proj_root, "素材")
+        os.makedirs(mat_dir, exist_ok=True)
+
+        # 真实商品图
+        img_front = os.path.join(mat_dir, "封面图.png")
+        with open(img_front, "wb") as f: f.write(b"img_data_front")
+
+        # 历史项目封面（应被隔离）
+        old_cover = os.path.join(mat_dir, "project-test.jpg")
+        with open(old_cover, "wb") as f: f.write(b"old_rendered_cover")
+
+        paths = ProjectPaths(proj_root, run_id="run_img_01")
+        manifest_mgr = InputManifest(paths)
+        res = manifest_mgr.scan_and_resolve()
+
+        img_names = [im["filename"] for im in res["product_images"]]
+        assert "封面图.png" in img_names
+        assert "project-test.jpg" not in img_names
+
+        excl_names = [os.path.basename(e["path"]) for e in res["excluded_files"]]
+        assert "project-test.jpg" in excl_names
+
+
+def test_compute_job_fingerprint_sensitivity():
+    """验证任务指纹对商品变体、风格、高亮词、属性与图片变动的敏感性（防止配置变更复用旧成片）。"""
+    base_spec = {
+        "project_id": "test_proj",
+        "product": {
+            "name": "高领羊绒衫",
+            "category": "女装/针织",
+            "allowed_variants": ["米白"],
+            "selling_points": ["亲肤保暖"],
+            "attributes": {"面料": "羊绒"},
+            "item_images": ["img1.png"],
+        },
+        "options": {
+            "duration_range": "45-65",
+            "style_preset": "balanced",
+            "split_strategy": "force_off",
+            "highlight_keywords": ["闭眼入"],
+            "cover_strategy": "smart_frontal",
+        }
+    }
+    fp_base = compute_job_fingerprint(base_spec)
+
+    # 1. 修改颜色变体
+    spec_variant = json.loads(json.dumps(base_spec))
+    spec_variant["product"]["allowed_variants"] = ["黑色"]
+    assert compute_job_fingerprint(spec_variant) != fp_base, "修改颜色变体必须改变任务指纹"
+
+    # 2. 修改剪辑风格
+    spec_style = json.loads(json.dumps(base_spec))
+    spec_style["options"]["style_preset"] = "fast"
+    assert compute_job_fingerprint(spec_style) != fp_base, "修改剪辑风格预设必须改变任务指纹"
+
+    # 3. 修改分屏策略
+    spec_split = json.loads(json.dumps(base_spec))
+    spec_split["options"]["split_strategy"] = "auto"
+    assert compute_job_fingerprint(spec_split) != fp_base, "修改分屏策略必须改变任务指纹"
+
+    # 4. 修改高亮词
+    spec_kw = json.loads(json.dumps(base_spec))
+    spec_kw["options"]["highlight_keywords"] = ["爆款推荐"]
+    assert compute_job_fingerprint(spec_kw) != fp_base, "修改字幕高亮词必须改变任务指纹"
+
+    # 5. 修改封面策略
+    spec_cov = json.loads(json.dumps(base_spec))
+    spec_cov["options"]["cover_strategy"] = "product_image"
+    assert compute_job_fingerprint(spec_cov) != fp_base, "修改封面策略必须改变任务指纹"
+
+    # 6. 修改商品贴图
+    spec_img = json.loads(json.dumps(base_spec))
+    spec_img["product"]["item_images"] = ["img2.png"]
+    assert compute_job_fingerprint(spec_img) != fp_base, "修改商品图片必须改变任务指纹"
+
+    # 7. 相同配置指纹保持完全一致
+    assert compute_job_fingerprint(base_spec) == fp_base, "相同配置任务指纹必须保持确定性幂等"
+
+
 def main():
     test_sanitize_id()
     test_project_paths_structure()
     test_historical_output_detection()
     test_input_manifest_scans_and_excludes_old_outputs()
     test_input_manifest_explicit_list_rejects_historical_output()
+    test_input_manifest_product_images_discovery()
+    test_compute_job_fingerprint_sensitivity()
     print("[PASS] All project_context tests passed!")
 
 

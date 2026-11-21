@@ -9,6 +9,7 @@ import json
 import time
 import hashlib
 import shutil
+import argparse
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
@@ -38,6 +39,10 @@ def hash_files(folder):
     return record
 
 def main():
+    parser = argparse.ArgumentParser(description="project-3 本地素材验收与防篡改验证")
+    parser.add_argument("--dry-run", action="store_true", help="仅执行只读素材盘点、隔离检验与环境预检，不触发全量重渲染")
+    args = parser.parse_args()
+
     print("=" * 70)
     print("【第一阶段：project-3 只读盘点与哈希基线记录】")
     print("=" * 70)
@@ -92,7 +97,7 @@ def main():
     spec["raw_video_paths"] = chosen_videos
 
     print("\n" + "=" * 70)
-    print(f"【第三阶段：执行真实闭环剪辑 (run_id: {run_id})】")
+    print(f"【第三阶段：环境与隔离执行 (run_id: {run_id}, dry_run={args.dry_run})】")
     print("=" * 70)
     print(f"work 目录: {paths.work_dir}")
     print(f"output 目录: {paths.output_dir}")
@@ -102,30 +107,47 @@ def main():
     adapter = AgyHeadlessAdapter()
     is_avail, avail_msg = adapter.check_availability()
     print(f"AGY CLI 可用性探测: {'可用' if is_avail else '不可用'} ({avail_msg})")
-    print("为确保本地全流程端到端稳定交付，采用内置高确定性 SequenceOptimizer 引擎执行排片。")
 
-    runner = JobRunner(spec, paths.work_dir, paths.output_dir, agent_adapter=None, project_paths=paths)
+    if args.dry_run:
+        print("\n[DRY-RUN] 模式启动：执行只读预检与路径安全隔离断言，跳过耗时渲染。")
+        paths.ensure_runtime_dirs()
+        assert paths.is_safe_to_clean(os.path.join(paths.work_dir, "test.tmp"))
+        assert not paths.is_safe_to_clean(os.path.join(PROJECT3_DIR, "20261023141614_20261023141937 (1).mp4"))
+        assert not paths.is_safe_to_clean(os.path.join(PROJECT3_DIR, "project-3.mp4"))
+        result = {
+            "status": "PRECHECK_PASSED",
+            "dry_run": True,
+            "manifest": manifest,
+            "paths": {
+                "materials_dir": paths.materials_dir,
+                "work_dir": paths.work_dir,
+                "output_dir": paths.output_dir,
+            }
+        }
+    else:
+        print("为确保本地全流程端到端稳定交付，采用内置高确定性 SequenceOptimizer 引擎执行排片。")
+        runner = JobRunner(spec, paths.work_dir, paths.output_dir, agent_adapter=None, project_paths=paths)
 
-    def progress_cb(st, pct, msg):
-        print(f"  [{time.strftime('%H:%M:%S')}] [{st:10s}] {pct*100:5.1f}% - {msg}")
+        def progress_cb(st, pct, msg):
+            print(f"  [{time.strftime('%H:%M:%S')}] [{st:10s}] {pct*100:5.1f}% - {msg}")
 
-    result = runner.run_pipeline(progress_callback=progress_cb)
+        result = runner.run_pipeline(progress_callback=progress_cb)
 
     print("\n" + "=" * 70)
     print("【第四阶段：输出与质检报告核验】")
     print("=" * 70)
     status = result.get("status")
     print(f"执行最终状态: {status}")
-    print(f"成片文件: {result.get('video_path') or result.get('final_video')}")
+    if not args.dry_run:
+        print(f"成片文件: {result.get('video_path') or result.get('final_video')}")
 
-    # 检查 delivery_manifest
-    delivery_p = os.path.join(paths.output_dir, "delivery_manifest.json")
-    if os.path.isfile(delivery_p):
-        with open(delivery_p, "r", encoding="utf-8") as f:
-            d_info = json.load(f)
-        print(f"交付清单状态: {d_info.get('status')}")
-        print(f"QC 结论: {'PASS' if d_info.get('qc_passed') else 'FAIL'}")
-        print(f"任务指纹: {d_info.get('job_fingerprint')}")
+        delivery_p = os.path.join(paths.output_dir, "delivery_manifest.json")
+        if os.path.isfile(delivery_p):
+            with open(delivery_p, "r", encoding="utf-8") as f:
+                d_info = json.load(f)
+            print(f"交付清单状态: {d_info.get('status')}")
+            print(f"QC 结论: {'PASS' if d_info.get('qc_passed') else 'FAIL'}")
+            print(f"任务指纹: {d_info.get('job_fingerprint')}")
 
     print("\n" + "=" * 70)
     print("【第五阶段：原始素材防篡改与旧成品未受影响核对】")
@@ -155,7 +177,7 @@ def main():
         print(f"[WARN] 根目录新增文件: {new_in_root}")
 
     if not missing and not tampered:
-        print("[PASS] 完美保护：项目根目录下全部 14 个原有素材与历史成片哈希 100% 一致，未发生任何覆盖或篡改！")
+        print(f"[PASS] 完美保护：项目根目录下全部 {len(before_hashes)} 个原有素材与历史成片哈希 100% 一致，未发生任何覆盖或篡改！")
 
     # 生成结构化验收报告
     acceptance_report = {
@@ -181,10 +203,11 @@ def main():
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(acceptance_report, f, ensure_ascii=False, indent=2)
 
-    with open("local_project3_acceptance_report.json", "w", encoding="utf-8") as f:
+    report_file_name = "local_project3_dry_run_report.json" if args.dry_run else "local_project3_acceptance_report.json"
+    with open(report_file_name, "w", encoding="utf-8") as f:
         json.dump(acceptance_report, f, ensure_ascii=False, indent=2)
 
-    print(f"\n验收报告已保存至:\n  - {report_path}\n  - local_project3_acceptance_report.json")
+    print(f"\n验收报告已保存至:\n  - {report_path}\n  - {report_file_name}")
     return 0
 
 if __name__ == "__main__":

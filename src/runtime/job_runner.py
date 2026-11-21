@@ -356,7 +356,12 @@ class JobRunner:
         _update(JobStage.VERIFYING, 0.9, "执行双层质量门禁审计...")
         tech_qc_passed = bool(manifest.get("qc_passed", False))
         editorial_qc = manifest.get("editorial_qc") or {}
-        editorial_qc_passed = bool(editorial_qc.get("passed", True) and editorial_qc.get("block_count", 0) == 0)
+        editorial_qc_passed = bool(
+            isinstance(editorial_qc, dict)
+            and bool(editorial_qc)
+            and editorial_qc.get("passed", False) is True
+            and editorial_qc.get("block_count", 0) == 0
+        )
         qc_passed = bool(tech_qc_passed and editorial_qc_passed)
 
         if self.is_canceled:

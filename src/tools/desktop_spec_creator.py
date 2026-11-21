@@ -16,6 +16,7 @@ import os
 import sys
 import json
 import time
+import base64
 import shutil
 import subprocess
 import threading
@@ -92,6 +93,57 @@ def probe_video_duration(path: str) -> float:
         return round(float(out.strip()), 1)
     except Exception:
         return 0.0
+
+
+def generate_image_thumbnail_b64(image_path: str, max_dim: int = 120) -> str:
+    """生成图片的 Base64 Data URL 缩略图。"""
+    if not image_path or not os.path.isfile(image_path):
+        return ""
+    try:
+        import cv2
+        from src.core.path_resolver import cv2_imread
+        img = cv2_imread(image_path)
+        if img is None:
+            return ""
+        h, w = img.shape[:2]
+        scale = min(max_dim / max(w, 1), max_dim / max(h, 1))
+        if scale < 1.0:
+            new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
+            img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 65])
+        if ok:
+            return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
+    except Exception:
+        pass
+    return ""
+
+
+def generate_video_thumbnail_b64(video_path: str, max_w: int = 120, max_h: int = 68) -> str:
+    """轻量抽取视频 1.0s 处关键帧生成 Base64 Data URL 缩略图。"""
+    if not video_path or not os.path.isfile(video_path):
+        return ""
+    try:
+        import cv2
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return ""
+        cap.set(cv2.CAP_PROP_POS_MSEC, 1000.0)
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ok, frame = cap.read()
+        cap.release()
+        if ok and frame is not None:
+            h, w = frame.shape[:2]
+            scale = min(max_w / max(w, 1), max_h / max(h, 1))
+            new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
+            small = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            ok, buf = cv2.imencode(".jpg", small, [int(cv2.IMWRITE_JPEG_QUALITY), 55])
+            if ok:
+                return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
+    except Exception:
+        pass
+    return ""
 
 
 class SpecManager:
@@ -192,14 +244,23 @@ class SpecManager:
         if selling_points:
             prod_dict["selling_points"] = selling_points
 
+        feat_dict = dict(payload.get("features") or {})
+        sub_strat = str(payload.get("subtitle_strategy") or "").strip()
+        if sub_strat in ("plain", "branded"):
+            feat_dict["render_profile"] = sub_strat
+        if payload.get("render_profile"):
+            feat_dict["render_profile"] = str(payload["render_profile"]).strip()
+
         opt_dict = {
             "duration_range": duration_range,
             "split_strategy": split_strategy,
             "highlight_keywords": keywords,
-            "features": dict(payload.get("features") or {}),
+            "features": feat_dict,
         }
         if "style_preset" in payload:
             opt_dict["style_preset"] = payload["style_preset"]
+        if "cover_strategy" in payload:
+            opt_dict["cover_strategy"] = str(payload["cover_strategy"]).strip()
         if automation:
             opt_dict["automation"] = automation
 
@@ -378,6 +439,63 @@ class DesktopSpecApi:
             return os.path.normpath(res[0])
         return None
 
+    def create_new_project(self, project_dir: str, project_id: Optional[str] = None) -> Dict[str, Any]:
+        """新建项目工作目录，初始化 素材/、work/ 与 output/ 结构。"""
+        if not project_dir:
+            return {"success": False, "message": "项目目录路径不能为空"}
+        try:
+            norm_input = os.path.normpath(os.path.abspath(project_dir))
+            # 兼容两种调用模式：
+            # 1) (parent_folder, project_name) -> 自动安全拼接子目录
+            # 2) (full_project_path, optional_project_id) -> 直接使用完整目录
+            if project_id and os.path.isdir(norm_input) and os.path.basename(norm_input) != project_id:
+                norm_dir = os.path.join(norm_input, project_id)
+                pid = project_id
+            else:
+                norm_dir = norm_input
+                pid = project_id or os.path.basename(norm_dir)
+
+            mat_dir = os.path.join(norm_dir, "素材")
+            os.makedirs(mat_dir, exist_ok=True)
+            from src.core.project_context import ProjectPaths
+            paths = ProjectPaths(project_root=norm_dir)
+            paths.ensure_runtime_dirs()
+
+            spec_p = paths.spec_path
+            if not os.path.isfile(spec_p):
+                init_spec = {
+                    "project_id": pid,
+                    "raw_video_path": "",
+                    "raw_video_paths": [],
+                    "brand": {
+                        "title_en": "MIXCITY",
+                        "subtitle_cn": "高端女装"
+                    },
+                    "product": {
+                        "title_line1": "",
+                        "title_line2": "",
+                        "item_images": []
+                    },
+                    "options": {
+                        "duration_range": "45-65",
+                        "split_strategy": "force_off",
+                        "style_preset": "balanced",
+                        "cover_strategy": "smart_frontal",
+                        "highlight_keywords": [],
+                        "features": {
+                            "render_profile": "branded"
+                        }
+                    }
+                }
+                with open(spec_p, "w", encoding="utf-8") as f:
+                    json.dump(init_spec, f, ensure_ascii=False, indent=2)
+
+            scan_res = self.scan_project(norm_dir)
+            scan_res["message"] = f"成功新建并初始化项目：{pid}"
+            return scan_res
+        except Exception as e:
+            return {"success": False, "message": f"新建项目失败: {str(e)}"}
+
     def scan_project(self, project_dir: str) -> Dict[str, Any]:
         """扫描项目目录，使用 ProjectPaths 和 InputManifest 分析素材与隔离历史成片。"""
         if not project_dir or not os.path.isdir(project_dir):
@@ -394,6 +512,7 @@ class DesktopSpecApi:
                 sz_mb = round(os.path.getsize(p) / (1024 * 1024), 2) if os.path.isfile(p) else 0.0
                 dur = probe_video_duration(p)
                 dur_fmt = f"{int(dur // 60):02d}:{int(dur % 60):02d}" if dur > 0 else "--:--"
+                thumb_b64 = generate_video_thumbnail_b64(p, max_w=120, max_h=68)
                 sources.append({
                     "source_id": s["source_id"],
                     "path": p,
@@ -401,6 +520,7 @@ class DesktopSpecApi:
                     "size_mb": sz_mb,
                     "duration_sec": dur,
                     "duration_fmt": dur_fmt,
+                    "thumbnail": thumb_b64,
                     "selected": True,
                 })
 
@@ -415,11 +535,15 @@ class DesktopSpecApi:
                 })
 
             images = []
-            for img in manifest.get("images", []):
+            raw_imgs = manifest.get("product_images") or manifest.get("images") or []
+            for img in raw_imgs:
+                p = img["path"]
+                thumb_b64 = generate_image_thumbnail_b64(p, max_dim=120)
                 images.append({
-                    "path": img["path"],
+                    "path": p,
                     "filename": img["filename"],
                     "size_kb": round(img.get("size", 0) / 1024, 1),
+                    "thumbnail": thumb_b64,
                 })
 
             existing_spec = None
@@ -1179,7 +1303,8 @@ def get_html_content() -> str:
                         <label>项目根目录 (包含 素材/ 与规格配置)</label>
                         <div class="input-row">
                             <input type="text" id="project_root" placeholder="请选择或输入项目文件夹路径 (如 Desktop/project-3)">
-                            <button type="button" class="btn-browse" onclick="browseProjectFolder()">选择项目目录</button>
+                            <button type="button" class="btn-browse" onclick="browseProjectFolder()">选择已有项目</button>
+                            <button type="button" class="btn-browse" style="background:#059669;border-color:#10b981;" onclick="createNewProjectDialog()">➕ 新建项目</button>
                         </div>
                         <div class="hint">系统将自动识别素材、历史成片，并将中间文件写入 work/，成片交付至 output/。</div>
                     </div>
@@ -1217,13 +1342,14 @@ def get_html_content() -> str:
                         <thead>
                             <tr>
                                 <th style="width:40px;"><input type="checkbox" id="checkAllVideos" checked onchange="toggleAllVideos(this.checked)"></th>
+                                <th style="width:85px;">预览</th>
                                 <th>视频文件名</th>
                                 <th style="width:90px;">预估时长</th>
                                 <th style="width:80px;">文件大小</th>
                             </tr>
                         </thead>
                         <tbody id="videoTableBody">
-                            <tr><td colspan="4" style="color:var(--muted);text-align:center;">暂无素材，请先返回第一步选择项目</td></tr>
+                            <tr><td colspan="5" style="color:var(--muted);text-align:center;">暂无素材，请先返回第一步选择项目</td></tr>
                         </tbody>
                     </table>
 
@@ -1373,6 +1499,37 @@ def get_html_content() -> str:
                         </div>
                     </div>
                     <input type="hidden" id="style_preset" value="balanced">
+
+                    <div class="grid-2" style="margin-top:16px;">
+                        <div>
+                            <label>字幕与包装策略：</label>
+                            <div class="card-grid" id="subtitleCards" style="grid-template-columns:1fr 1fr;">
+                                <div class="choice-card active" onclick="selectCard(this, 'subtitle_strategy', 'branded')">
+                                    <div class="choice-title">🏷️ 品牌包装版 (推荐)</div>
+                                    <div class="choice-desc">智能高亮字幕 + 顶部品牌条 + 卖点贴纸</div>
+                                </div>
+                                <div class="choice-card" onclick="selectCard(this, 'subtitle_strategy', 'plain')">
+                                    <div class="choice-title">🎬 纯画面无字版</div>
+                                    <div class="choice-desc">全片无字幕与文字图层，视听纯净原生</div>
+                                </div>
+                            </div>
+                            <input type="hidden" id="subtitle_strategy" value="branded">
+                        </div>
+                        <div>
+                            <label>封面优选策略：</label>
+                            <div class="card-grid" id="coverCards" style="grid-template-columns:1fr 1fr;">
+                                <div class="choice-card active" onclick="selectCard(this, 'cover_strategy', 'smart_frontal')">
+                                    <div class="choice-title">👤 AI 正脸优选 (推荐)</div>
+                                    <div class="choice-desc">人脸质量 + 1:6:1 构图全局最优正面关键帧</div>
+                                </div>
+                                <div class="choice-card" onclick="selectCard(this, 'cover_strategy', 'product_image')">
+                                    <div class="choice-title">🖼️ 商品主图优先</div>
+                                    <div class="choice-desc">优先以素材目录中的商品展示图渲染封面</div>
+                                </div>
+                            </div>
+                            <input type="hidden" id="cover_strategy" value="smart_frontal">
+                        </div>
+                    </div>
 
                     <div class="grid-2" style="margin-top:16px;">
                         <div>
@@ -1580,6 +1737,26 @@ def get_html_content() -> str:
             }
         }
 
+        async function createNewProjectDialog() {
+            if (!window.pywebview || !window.pywebview.api) return;
+            const parentFolder = await window.pywebview.api.select_project_folder();
+            if (!parentFolder) return;
+            const defaultName = "project_" + (new Date().toISOString().slice(0, 10).replace(/-/g, ''));
+            const projName = prompt("请输入新建项目名称（如 project-4）：", defaultName);
+            if (!projName || !projName.trim()) return;
+            const cleanName = projName.trim();
+            const res = await window.pywebview.api.create_new_project(parentFolder, cleanName);
+            if (res.success) {
+                document.getElementById('project_root').value = res.project_root;
+                document.getElementById('project_id').value = res.project_id;
+                await handleProjectScanned(res.project_root);
+                showAlert(true, res.message || "项目创建成功！");
+                goToStep(2);
+            } else {
+                showAlert(false, res.message || "创建项目失败");
+            }
+        }
+
         async function nextFromStep1() {
             const pRoot = document.getElementById('project_root').value.trim();
             if (!pRoot) {
@@ -1623,29 +1800,34 @@ def get_html_content() -> str:
                 qBox.style.display = 'none';
             }
 
-            // 渲染视频列表
+            // 渲染视频列表（含缩略图、时长与勾选框）
             const vTable = document.getElementById('videoTableBody');
             if (res.source_videos && res.source_videos.length > 0) {
                 vTable.innerHTML = res.source_videos.map(v => `
                     <tr>
                         <td><input type="checkbox" class="video-checkbox" data-path="${v.path}" checked></td>
+                        <td>${v.thumbnail ? `<img src="${v.thumbnail}" style="width:72px;height:42px;object-fit:cover;border-radius:4px;display:block;">` : '<span style="font-size:11px;color:var(--muted);">无预览</span>'}</td>
                         <td><b>${v.filename}</b></td>
                         <td><span class="badge badge-info">${v.duration_fmt}</span></td>
                         <td>${v.size_mb} MB</td>
                     </tr>
                 `).join('');
             } else {
-                vTable.innerHTML = '<tr><td colspan="4" style="color:#ef4444;text-align:center;">素材目录下未扫描到可用原始视频（已自动过滤历史成片）</td></tr>';
+                vTable.innerHTML = '<tr><td colspan="5" style="color:#ef4444;text-align:center;">素材目录下未扫描到可用原始视频（已自动过滤历史成片）</td></tr>';
             }
 
-            // 渲染图片
+            // 渲染图片（含缩略图、尺寸与设为主图操作）
             const imgBox = document.getElementById('imageListContainer');
             if (res.images && res.images.length > 0) {
                 imgBox.innerHTML = res.images.map((img, i) => `
-                    <div style="border:1px solid #334155;border-radius:8px;padding:8px 12px;background:var(--input-bg);display:flex;align-items:center;gap:8px;">
-                        <span>🖼️ ${img.filename} (${img.size_kb}KB)</span>
-                        <button type="button" class="btn-browse" style="padding:2px 8px;font-size:11px;" onclick="setAsProductImage('${img.path}', 1)">设为主图</button>
-                        <button type="button" class="btn-browse" style="padding:2px 8px;font-size:11px;" onclick="setAsProductImage('${img.path}', 2)">设为副图</button>
+                    <div style="border:1px solid #334155;border-radius:8px;padding:8px 12px;background:var(--input-bg);display:flex;align-items:center;gap:12px;">
+                        ${img.thumbnail ? `<img src="${img.thumbnail}" style="width:54px;height:54px;object-fit:cover;border-radius:6px;border:1px solid #475569;">` : '🖼️'}
+                        <div style="flex:1;">
+                            <div style="font-weight:600;font-size:13px;">${img.filename}</div>
+                            <div style="font-size:11px;color:var(--muted);">${img.size_kb} KB</div>
+                        </div>
+                        <button type="button" class="btn-browse" style="padding:4px 10px;font-size:12px;" onclick="setProductImageByIndex(${i}, 1)">设为主图</button>
+                        <button type="button" class="btn-browse" style="padding:4px 10px;font-size:12px;" onclick="setProductImageByIndex(${i}, 2)">设为副图</button>
                     </div>
                 `).join('');
                 if (!document.getElementById('product_img_1').value && res.images.length > 0) {
@@ -1661,9 +1843,18 @@ def get_html_content() -> str:
             }
         }
 
+        function setProductImageByIndex(index, slot) {
+            if (!projectScannedData || !projectScannedData.images || !projectScannedData.images[index]) return;
+            const img = projectScannedData.images[index];
+            document.getElementById('product_img_' + slot).value = img.path;
+            showAlert(true, `已将 ${img.filename} 设为商品贴图 ${slot}`);
+        }
+
         function setAsProductImage(path, index) {
             document.getElementById('product_img_' + index).value = path;
-            showAlert(true, `已将 ${path.split(/[\\\\/]/).pop()} 设为商品贴图 ${index}`);
+            const parts = String(path).split(/[\\\\/]/);
+            const fname = parts[parts.length - 1] || path;
+            showAlert(true, `已将 ${fname} 设为商品贴图 ${index}`);
         }
 
         function applyExistingSpec(spec) {
@@ -1682,6 +1873,19 @@ def get_html_content() -> str:
             if (opt.duration_range) {
                 const el = document.querySelector(`#durationCards .choice-card[onclick*="'${opt.duration_range}'"]`);
                 if (el) selectCard(el, 'duration_range', opt.duration_range);
+            }
+            if (opt.style_preset) {
+                const el = document.querySelector(`#styleCards .choice-card[onclick*="'${opt.style_preset}'"]`);
+                if (el) selectCard(el, 'style_preset', opt.style_preset);
+            }
+            const renderProf = (opt.features || {}).render_profile || (opt.subtitle_strategy);
+            if (renderProf) {
+                const el = document.querySelector(`#subtitleCards .choice-card[onclick*="'${renderProf}'"]`);
+                if (el) selectCard(el, 'subtitle_strategy', renderProf);
+            }
+            if (opt.cover_strategy) {
+                const el = document.querySelector(`#coverCards .choice-card[onclick*="'${opt.cover_strategy}'"]`);
+                if (el) selectCard(el, 'cover_strategy', opt.cover_strategy);
             }
             if (opt.highlight_keywords && opt.highlight_keywords.length) {
                 document.getElementById('keywords').value = opt.highlight_keywords.join('，');
@@ -1713,6 +1917,8 @@ def get_html_content() -> str:
                 duration_range: document.getElementById('duration_range').value,
                 split_strategy: document.getElementById('split_strategy').value,
                 style_preset: document.getElementById('style_preset').value,
+                subtitle_strategy: document.getElementById('subtitle_strategy') ? document.getElementById('subtitle_strategy').value : 'branded',
+                cover_strategy: document.getElementById('cover_strategy') ? document.getElementById('cover_strategy').value : 'smart_frontal',
                 keywords: document.getElementById('keywords').value.trim(),
                 features: readFeatures()
             };
@@ -1874,7 +2080,7 @@ def get_html_content() -> str:
                 // 更新日志
                 if (status.logs && status.logs.length) {
                     const term = document.getElementById('logTerminal');
-                    term.innerText = status.logs.join('\n');
+                    term.innerText = status.logs.join('\\n');
                     term.scrollTop = term.scrollHeight;
                 }
 

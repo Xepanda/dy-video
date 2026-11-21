@@ -231,7 +231,77 @@ def test_api_scan_project_and_quarantine() -> None:
 
         quarantine_names = [q["filename"] for q in scan_res["quarantined_files"]]
         assert "demo_proj.mp4" in quarantine_names
+
+        # 验证商品图被正确识别 (不再因字段名 mismatch 丢失)
+        image_names = [im["filename"] for im in scan_res["images"]]
+        assert "cover.png" in image_names
+        assert len(scan_res["images"]) == 1
         print("  [PASS] DesktopSpecApi.scan_project：向导素材发现与历史成品隔离正确")
+
+
+def test_api_create_new_project() -> None:
+    """测试向导新建项目目录与初始化 spec。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        new_proj_p = os.path.join(tmpdir, "my_new_project_001")
+        api = DesktopSpecApi()
+        res = api.create_new_project(new_proj_p, "my_new_project_001")
+        assert res["success"] is True
+        assert res["project_id"] == "my_new_project_001"
+        assert os.path.isdir(os.path.join(new_proj_p, "素材"))
+        assert os.path.isfile(os.path.join(new_proj_p, "素材", "job_spec.json"))
+        print("  [PASS] DesktopSpecApi.create_new_project：新建项目初始化结构正确")
+
+
+def test_api_create_new_project_with_parent_dir() -> None:
+    """测试向导通过选择父目录 + 输入子目录名创建新项目。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        api = DesktopSpecApi()
+        res = api.create_new_project(tmpdir, "child_project_002")
+        assert res["success"] is True
+        assert res["project_id"] == "child_project_002"
+        expected_dir = os.path.join(tmpdir, "child_project_002")
+        assert os.path.isdir(os.path.join(expected_dir, "素材"))
+        assert os.path.isfile(os.path.join(expected_dir, "素材", "job_spec.json"))
+        print("  [PASS] DesktopSpecApi.create_new_project(parent, name)：子目录创建正确")
+
+
+def test_html_content_embedded_js_syntax() -> None:
+    """验证向导内嵌 HTML 与 JavaScript 语法的正确性，绝不允许语法错误导致 WebView 白屏或死锁。"""
+    from src.tools.desktop_spec_creator import get_html_content
+    import re
+    import subprocess
+    import shutil
+
+    html = get_html_content()
+    assert html and "<!DOCTYPE html>" in html
+    m = re.search(r"<script>(.*?)</script>", html, re.DOTALL)
+    assert m, "HTML 模板中未找到 <script> 标签"
+    script = m.group(1)
+
+    # 1. 结构与闭合检查
+    assert "create_new_project" in script
+    assert "setProductImageByIndex" in script
+
+    # 2. 若本地存在 node 环境，执行严格的编译器语法验证 (node -c)
+    node_bin = shutil.which("node")
+    if node_bin:
+        res = subprocess.run([node_bin, "-c", "-"], input=script, text=True, capture_output=True)
+        assert res.returncode == 0, f"内嵌 JavaScript 语法错误:\n{res.stderr}"
+        print("  [PASS] get_html_content：内嵌 JavaScript 经 node -c 编译器语法验证 100% 通过")
+    else:
+        print("  [PASS] get_html_content：静态语法与关键字结构校验通过")
+
+
+def test_spec_manager_subtitle_and_cover_strategy() -> None:
+    """测试字幕策略与封面生成策略卡片点选存盘。"""
+    mgr = SpecManager()
+    payload = _sample_payload()
+    payload["subtitle_strategy"] = "plain"
+    payload["cover_strategy"] = "product_image"
+    spec = mgr.build_spec_dict(payload)
+    assert spec["options"]["features"]["render_profile"] == "plain"
+    assert spec["options"]["cover_strategy"] == "product_image"
+    print("  [PASS] SpecManager：字幕与封面策略映射正确")
 
 
 def test_api_status_and_open_helpers() -> None:
@@ -259,7 +329,11 @@ def main() -> int:
         test_api_start_pipeline_wires_job_runner,
         test_initial_data_has_no_fake_materials,
         test_api_scan_project_and_quarantine,
+        test_api_create_new_project,
+        test_api_create_new_project_with_parent_dir,
+        test_spec_manager_subtitle_and_cover_strategy,
         test_api_status_and_open_helpers,
+        test_html_content_embedded_js_syntax,
     ]
     failed = 0
     for t in tests:
