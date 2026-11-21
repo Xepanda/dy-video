@@ -358,6 +358,102 @@ class TestPR16Round3P0P1(unittest.TestCase):
             # 确认已经具备了升级后的指纹
             self.assertIn("job_fingerprint", saved_after_run)
 
+    def test_p1_6_gui_spec_manager_plain_brand_validation_and_single_source_resolution(self):
+        """P1-6: GUI 配置校验允许空品牌（无品牌包装），且单源场景正确解析 candidate 默认源标识（src_0）。"""
+        from src.tools.desktop_spec_creator import SpecManager, DesktopSpecApi
+
+        # 1. SpecManager 校验必须接受留空的 brand_en（无品牌包装）
+        manager = SpecManager()
+        payload_plain = {
+            "project_id": "test_plain_brand",
+            "raw_video_path": "data/raw_samples/sample.mp4",
+            "brand_en": "",  # 用户按向导留空
+            "brand_cn": "",
+            "product_title_l1": "纯棉卫衣",
+            "product_name": "纯棉卫衣",
+        }
+        errs = manager.validate(payload_plain)
+        self.assertEqual(errs, [], f"无品牌包装留空 brand_en 严禁被必填校验阻断: {errs}")
+
+        # 2. DesktopSpecApi.save_spec 必须成功保存留空品牌
+        with tempfile.TemporaryDirectory() as tmpdir:
+            v_path = os.path.join(tmpdir, "video.mp4")
+            with open(v_path, "wb") as f:
+                f.write(b"0000")
+            spec_file = os.path.join(tmpdir, "job_spec.json")
+            api = DesktopSpecApi(spec_path=spec_file)
+            payload_plain["raw_video_path"] = v_path
+            payload_plain["project_root"] = tmpdir
+            save_res = api.save_spec(payload_plain)
+            self.assertTrue(save_res.get("success"), f"保存无品牌配置必须成功: {save_res}")
+
+            # 3. 单源场景下 CandidateGenerator 默认生成的 source_id="src_0" 必须被 VideoFrameProvider 正确解析
+            cg = CandidateGenerator()
+            utts = [{"utterance_id": "u1", "start_ms": 0, "end_ms": 2500, "text": "面料非常舒服"}]
+            cands = cg.generate_candidates(utts, {"name": "纯棉卫衣"})
+            self.assertEqual(cands[0]["source_id"], "src_0")
+
+            provider = VideoFrameProvider(work_dir=tmpdir, default_video_path=v_path)
+            self.assertFalse(provider.is_multi_source, "单源环境应识别为 is_multi_source=False")
+            resolved = provider.resolve_video_for_candidate(cands[0])
+            self.assertEqual(resolved, os.path.abspath(v_path), "单源默认候选必须成功解析为 default_video")
+
+            # 4. 单源场景下若 candidate 明确指定了一个不存在或指向其他文件的路径，则拒绝关联
+            cand_other = {"candidate_id": "c_other", "source_file": os.path.join(tmpdir, "nonexistent.mp4")}
+            resolved_other = provider.resolve_video_for_candidate(cand_other)
+            self.assertIsNone(resolved_other, "单源下若指向不存在文件，严禁错误关联")
+
+    def test_p1_7_fallback_cover_rendering_safety(self):
+        """P1-7: 当无法抽取人脸且无商品主图时，兜底封面候选 (fallback_placeholder) 具备有效 image_path 且保证渲染安全。"""
+        from src.agent.agent_director import AgentDirector
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = os.path.join(tmpdir, "work")
+            out_dir = os.path.join(tmpdir, "out")
+            dummy_video = os.path.join(tmpdir, "test.mp4")
+            with open(dummy_video, "wb") as f:
+                f.write(b"0000")
+            os.makedirs(work_dir, exist_ok=True)
+            os.makedirs(out_dir, exist_ok=True)
+
+            spec_path = os.path.join(work_dir, "job_spec.json")
+            spec_data = {
+                "project_id": "test_fallback_cover",
+                "raw_video_path": dummy_video,
+                "product": {"name": "羊绒衫", "item_images": []},
+            }
+            with open(spec_path, "w", encoding="utf-8") as f:
+                json.dump(spec_data, f)
+
+            director = AgentDirector(spec_path, use_cache=False)
+            director.work_dir = work_dir
+            director.output_dir = out_dir
+            director.raw_videos = [dummy_video]
+
+            cover_cand_dir = os.path.join(director.candidates_dir, "cover_candidates")
+            os.makedirs(cover_cand_dir, exist_ok=True)
+            placeholder_path = os.path.join(cover_cand_dir, "cover_placeholder.jpg")
+            if not os.path.isfile(placeholder_path):
+                Image.new("RGB", (1080, 1920), color=(30, 30, 30)).save(placeholder_path)
+            fallback_cand = {
+                "id": "cand_fallback_01",
+                "timestamp": 0.0,
+                "strategy": "fallback_placeholder",
+                "frontal_score": 100.0,
+                "image_path": placeholder_path,
+                "description": "兜底占位封面帧",
+            }
+
+            # 验证网关校验兜底封面
+            ok, violations = director.gateway.validate_cover_candidate(fallback_cand)
+            self.assertTrue(ok, "兜底封面必须通过网关白名单校验")
+
+            # 验证封面渲染安全
+            final_cover = os.path.join(out_dir, "cover.jpg")
+            cover_meta = os.path.join(out_dir, "cover_meta.json")
+            render_cover_with_meta(fallback_cand["image_path"], spec_data, final_cover, cover_meta)
+            self.assertTrue(os.path.isfile(final_cover), "兜底占位图必须能成功渲染成片封面")
+
 
 if __name__ == "__main__":
     unittest.main()

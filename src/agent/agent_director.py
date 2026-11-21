@@ -694,11 +694,16 @@ class AgentDirector:
                 print(f"    [COVER-STRATEGY] 已根据商品主图优先策略注入封面候选: {top_img}")
 
         if not cover_candidates:
+            placeholder_path = os.path.join(cover_cand_dir, "cover_placeholder.jpg")
+            if not os.path.isfile(placeholder_path):
+                from PIL import Image
+                Image.new("RGB", (1080, 1920), color=(30, 30, 30)).save(placeholder_path)
             cover_candidates = [{
                 "id": "cand_fallback_01",
                 "timestamp": 0.0,
                 "strategy": "fallback_placeholder",
                 "frontal_score": 100.0,
+                "image_path": placeholder_path,
                 "description": "兜底占位封面帧",
             }]
 
@@ -1277,8 +1282,16 @@ class AgentDirector:
 
         final_cover_path = os.path.join(self.output_dir, f"{self.project_id}.jpg")
         cover_meta_path = os.path.join(self.output_dir, f"{self.project_id}_cover_render_meta.json")
+        base_fp = selected_cover.get("image_path")
+        if not base_fp or not os.path.isfile(base_fp):
+            base_fp = os.path.join(self.work_dir, "cover_candidates", "cover_placeholder.jpg")
+            if not os.path.isfile(base_fp):
+                from PIL import Image
+                os.makedirs(os.path.dirname(base_fp), exist_ok=True)
+                Image.new("RGB", (1080, 1920), color=(30, 30, 30)).save(base_fp)
+
         render_cover_with_meta(
-            base_frame_path=selected_cover["image_path"],
+            base_frame_path=base_fp,
             spec_data=self.spec,
             output_path=final_cover_path,
             meta_output_path=cover_meta_path,

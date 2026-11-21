@@ -138,18 +138,24 @@ class VideoFrameProvider:
             )
             return None
 
-        if source_file or source_id:
-            # 单源场景但指定了不匹配的源，也拒绝错误关联
-            if self.default_video and os.path.isfile(self.default_video):
-                default_name = os.path.basename(self.default_video)
-                if (source_file and os.path.basename(str(source_file)) == default_name) or \
-                   (source_id and str(source_id) in ("src_01", "src_00", default_name)):
-                    return self.default_video
-            return None
-
-        # 仅当 candidate 未提供任何源信息且为单源场景时，方可使用 default_video
+        # 单源场景：仅当存在有效的单默认视频时处理
         if self.default_video and os.path.isfile(self.default_video):
-            return self.default_video
+            default_name = os.path.basename(self.default_video)
+            # 若显式指定了指向其他存在的物理文件，拒绝错误关联
+            if source_file and os.path.isfile(str(source_file)) and os.path.abspath(str(source_file)) != self.default_video:
+                return None
+            # 单源场景下通用源标识 (如 src_0, src_1, src_00, src_01, src_demo 等) 或文件名匹配均归属于该唯一源视频
+            sid_str = str(source_id or "").strip()
+            sf_str = str(source_file or "").strip()
+            if not sid_str and not sf_str:
+                return self.default_video
+            if sf_str and (os.path.basename(sf_str) == default_name or sf_str.startswith("src_") or sf_str in ("default", "main")):
+                return self.default_video
+            if sid_str and (sid_str == default_name or sid_str.startswith("src_") or sid_str in ("default", "main")):
+                return self.default_video
+            # 若 source_file 与 source_id 同为逻辑标识符（例如均为 "src_0"）
+            if sf_str == sid_str:
+                return self.default_video
 
         return None
 

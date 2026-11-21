@@ -160,9 +160,8 @@ class SpecManager:
         if not raw_video_path and not raw_video_paths:
             errors.append("原始直播视频路径 (raw_video_path) 不能为空")
 
-        brand_en = str(payload.get("brand_en") or "").strip()
-        if not brand_en:
-            errors.append("品牌主英文 (brand_en) 不能为空")
+        # 品牌英文为选填项；留空表示“无品牌包装”（plain packaging），不作为必填校验阻断
+        # 若填写则作为封面品牌主标题使用
 
         p_l1 = str(payload.get("product_title_l1") or "").strip()
         p_l2 = str(payload.get("product_title_l2") or "").strip()
