@@ -165,7 +165,19 @@ class CandidateRanker:
                         rejection_reasons.append(f"品类负向冲突（非主推商品或属于换款/主推他款）: {hits}")
             elif relation == "ACCESSORY_OR_STYLING":
                 # 上游已核实为合规搭配片段；只要不主动推销其他商品，即使文本包含下装词（如"西裤"）也不被品类负向词误杀
-                pass
+                # 严格模式下：搭配片段必须具备本品可见、主品身份已核实或其他明确关联证据；严禁缺失证据的搭配片段逃逸
+                is_strict_profile = (
+                    product_profile.get("quality_policy") == "strict" or
+                    product_profile.get("visual_verification") == "required" or
+                    product_profile.get("strict") is True
+                )
+                cand_gaps = (rel_info.get("evidence_gap") or []) + (cand.get("evidence_gap") or [])
+                has_gap = any("UNVERIFIABLE" in str(g) or "视觉证据不足" in str(g) or "视觉冲突" in str(g) for g in cand_gaps)
+                conf = float(rel_info.get("confidence") or cand.get("relation_confidence") or 0.85)
+                if is_strict_profile and (has_gap or conf < 0.7):
+                    eligible = False
+                    relation = "UNCERTAIN"
+                    rejection_reasons.append("严格模式下搭配片段缺失有效视觉证据核验")
             elif relation == "UNCERTAIN":
                 # 严禁将 UNCERTAIN 升级为 ACCESSORY_OR_STYLING！
                 if promotes_other_item:

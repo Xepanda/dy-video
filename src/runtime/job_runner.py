@@ -47,6 +47,28 @@ class JobCanceledError(Exception):
     pass
 
 
+def terminate_process_tree(proc: Any) -> None:
+    """终止子进程及其整棵进程树（Windows 下通过 taskkill /F /T 杜绝孤儿孙进程残留）。"""
+    if not proc:
+        return
+    try:
+        pid = getattr(proc, "pid", None)
+        if os.name == "nt" and pid:
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            except Exception:
+                pass
+        if hasattr(proc, "kill"):
+            proc.kill()
+    except Exception:
+        pass
+
+
 class CancellationToken:
     """可协作的中断令牌，支持向子任务和子进程传播取消信号。"""
 
@@ -61,7 +83,7 @@ class CancellationToken:
             self._canceled = True
             for p in list(self._subprocesses):
                 try:
-                    p.kill()
+                    terminate_process_tree(p)
                 except Exception:
                     pass
 
@@ -74,7 +96,7 @@ class CancellationToken:
         with self._lock:
             if self._canceled:
                 try:
-                    proc.kill()
+                    terminate_process_tree(proc)
                 except Exception:
                     pass
             else:
@@ -249,10 +271,17 @@ class JobRunner:
                         else:
                             print("[JOB-RUNNER][WARN] 发现旧版交付清单缺少 job_fingerprint 且缺失原始历史输入，拒绝直接复用，强制重新生成")
 
-                    if fp_match and v_p and os.path.isfile(v_p):
+                    has_qc = bool(
+                        d_data.get("qc_passed") is True or
+                        (d_data.get("editorial_qc") or {}).get("passed") is True
+                    )
+                    is_valid_video = bool(v_p and os.path.isfile(v_p) and os.path.getsize(v_p) > 0)
+                    if fp_match and has_qc and is_valid_video:
                         d_data.setdefault("status", JobStage.DELIVERED)
-                        _update(JobStage.DELIVERED, 1.0, "任务配置与素材未变，直接复用既有成片（幂等）")
+                        _update(JobStage.DELIVERED, 1.0, "任务配置与素材未变，且既有质检通过，直接复用既有成片（幂等）")
                         return d_data
+                    elif fp_match:
+                        print("[JOB-RUNNER][WARN] 虽指纹匹配但既有成片不存在、文件为空或质检未通过，拒绝直接复用，强制重新生成")
                 except Exception:
                     pass
 

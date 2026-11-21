@@ -88,11 +88,11 @@ class ProjectPaths:
     def is_safe_to_clean(self, path: str) -> bool:
         """检查指定路径是否严格属于当前 run 的 work 目录子路径，防止误删任何外部或素材文件。"""
         try:
-            real_p = os.path.realpath(os.path.abspath(path))
-            real_work = os.path.realpath(os.path.abspath(self.work_dir))
+            real_p = os.path.normcase(os.path.realpath(os.path.abspath(path)))
+            real_work = os.path.normcase(os.path.realpath(os.path.abspath(self.work_dir)))
             if real_p == real_work:
                 return False
-            return os.path.commonpath([real_p, real_work]) == real_work
+            return os.path.normcase(os.path.commonpath([real_p, real_work])) == real_work
         except Exception:
             return False
 

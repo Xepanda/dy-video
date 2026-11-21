@@ -74,9 +74,13 @@ def run_cmd(cmd: List[str], cwd: str = None, desc: str = "", cancel_token: Any =
                     is_c = is_c()
                 if is_c:
                     try:
-                        proc.kill()
+                        from src.runtime.job_runner import terminate_process_tree
+                        terminate_process_tree(proc)
                     except Exception:
-                        pass
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
                     from src.runtime.job_runner import JobCanceledError
                     raise JobCanceledError(f"FFmpeg 执行已被用户取消 ({desc})")
             ret = proc.poll()
@@ -634,9 +638,13 @@ class VideoAssembler:
                             is_c = is_c()
                         if is_c:
                             try:
-                                proc.kill()
+                                from src.runtime.job_runner import terminate_process_tree
+                                terminate_process_tree(proc)
                             except Exception:
-                                pass
+                                try:
+                                    proc.kill()
+                                except Exception:
+                                    pass
                             from src.runtime.job_runner import JobCanceledError
                             raise JobCanceledError("任务已被用户取消")
                     ret = proc.poll()
@@ -645,9 +653,13 @@ class VideoAssembler:
                         break
                     if time.time() - st > 120:
                         try:
-                            proc.kill()
+                            from src.runtime.job_runner import terminate_process_tree
+                            terminate_process_tree(proc)
                         except Exception:
-                            pass
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
                         break
                     time.sleep(0.05)
             finally:

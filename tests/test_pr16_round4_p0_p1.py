@@ -109,6 +109,13 @@ class TestPR16Round4P0P1(unittest.TestCase):
         )
         self.assertEqual(rel_loose, "ACCESSORY_OR_STYLING")
 
+        # 5. 形容词修饰的搭配话术也能准确识别（如“搭一条高腰垂感西裤”、“配一条阔腿牛仔裤”）
+        text_adj = "我们身上这件羊绒衫搭一条高腰垂感西裤姐妹们看下。"
+        rel_adj, _, _, _ = tracker.identify_relation(
+            text_adj, loose_profile, visual_decision=None, strict_vision=False
+        )
+        self.assertEqual(rel_adj, "ACCESSORY_OR_STYLING", "支持形容词修饰搭配短语")
+
     def test_p0_1_candidate_ranker_cannot_upgrade_uncertain_to_styling(self):
         """P0-1 (b): CandidateRanker 只能降低或维持上游可信度，严禁仅凭语义将 UNCERTAIN 升级为 ACCESSORY_OR_STYLING。"""
         ranker = CandidateRanker()
@@ -167,6 +174,23 @@ class TestPR16Round4P0P1(unittest.TestCase):
         score_p = res_p["scores"][0]
         self.assertEqual(score_p["product_relation"], "OTHER_SKU", "主推他款必须判定为 OTHER_SKU")
         self.assertFalse(score_p["eligible"], "主推他款严禁通过门禁")
+
+        # Case 4: 严格模式下，即使上游打上 ACCESSORY_OR_STYLING 标签，若存在视觉未核实证据缺口，CandidateRanker 必须降级为 UNCERTAIN 且 eligible=False
+        cand_unverified_styling = {
+            "candidate_id": "c_unverified_styling",
+            "text": "下半身搭配西裤非常显气质。",
+            "product_relation": "ACCESSORY_OR_STYLING",
+            "source_start_ms": 13000,
+            "source_end_ms": 17000,
+            "duration_ms": 4000,
+            "evidence_gap": ["UNVERIFIABLE: 缺失候选视频帧"],
+            "relation_confidence": 0.45,
+            "risks": [],
+        }
+        res_uv = ranker.score_candidates([cand_unverified_styling], product_profile)
+        score_uv = res_uv["scores"][0]
+        self.assertEqual(score_uv["product_relation"], "UNCERTAIN", "严格模式下无视觉证据的搭配必须降级为 UNCERTAIN")
+        self.assertFalse(score_uv["eligible"], "严格模式下未核实验证搭配严禁通过门禁")
 
     # -------------------------------------------------------------------------
     # P0-2: 旧版交付清单缺失指纹时拒绝错误复用
@@ -265,6 +289,47 @@ class TestPR16Round4P0P1(unittest.TestCase):
         mock_director.run_director_workflow.assert_not_called()
         self.assertEqual(res_same["status"], JobStage.DELIVERED)
 
+        # 场景 4：即使指纹完全一致，若历史质检未通过 (qc_passed=False) -> 同样坚决拒绝复用成片，必须重新生成！
+        with open(delivery_manifest_p, "w", encoding="utf-8") as f:
+            json.dump({
+                "project_id": "new_project_run",
+                "status": "FAILED",
+                "qc_passed": False,
+                "video_path": dummy_video,
+                "job_fingerprint": correct_fp,
+            }, f)
+
+        mock_director.reset_mock()
+        runner_failed_qc = JobRunner(identical_spec, self.work_dir, self.out_dir)
+        runner_failed_qc.resumed_from = JobStage.DELIVERED
+        with patch("src.agent.agent_director.AgentDirector", return_value=mock_director):
+            res_failed_qc = runner_failed_qc.run_pipeline()
+
+        mock_director.run_director_workflow.assert_called_once()
+        self.assertEqual(res_failed_qc["status"], JobStage.DELIVERED)
+
+        # 场景 5：即使指纹一致且质检通过，但成片为空文件 (0 字节损坏) -> 拒绝复用，强制重新生成
+        empty_video = os.path.join(self.tmpdir, "empty.mp4")
+        with open(empty_video, "wb") as f:
+            pass
+        with open(delivery_manifest_p, "w", encoding="utf-8") as f:
+            json.dump({
+                "project_id": "new_project_run",
+                "status": "DELIVERED",
+                "qc_passed": True,
+                "video_path": empty_video,
+                "job_fingerprint": correct_fp,
+            }, f)
+
+        mock_director.reset_mock()
+        runner_empty = JobRunner(identical_spec, self.work_dir, self.out_dir)
+        runner_empty.resumed_from = JobStage.DELIVERED
+        with patch("src.agent.agent_director.AgentDirector", return_value=mock_director):
+            res_empty = runner_empty.run_pipeline()
+
+        mock_director.run_director_workflow.assert_called_once()
+        self.assertEqual(res_empty["status"], JobStage.DELIVERED)
+
     # -------------------------------------------------------------------------
     # P1-1: 无品牌包装全链路（校验 -> 保存 -> 启动）及默认品类不误导
     # -------------------------------------------------------------------------
@@ -355,6 +420,11 @@ class TestPR16Round4P0P1(unittest.TestCase):
 
         # 验证子进程已被强制杀掉
         self.assertIsNotNone(proc.poll(), "触发取消令牌后子进程必须已被终止")
+        if proc.stdout:
+            proc.stdout.close()
+        if proc.stderr:
+            proc.stderr.close()
+        proc.wait()
 
     # -------------------------------------------------------------------------
     # P1-4: 目录清理安全判断杜绝同前缀误判
@@ -378,6 +448,16 @@ class TestPR16Round4P0P1(unittest.TestCase):
         # work_dir 下的子文件是安全的
         child_file = os.path.join(paths.work_dir, "intermediate", "clip_01.mp4")
         self.assertTrue(paths.is_safe_to_clean(child_file), "work_dir 内部子路径应判定为安全可清理")
+
+        # Windows 大小写不敏感安全测试（盘符不同大小写，如 D: vs d:）
+        if os.name == "nt" and len(child_file) > 1 and child_file[1] == ":":
+            drive = child_file[0]
+            toggled_drive = drive.lower() if drive.isupper() else drive.upper()
+            toggled_child = toggled_drive + child_file[1:]
+            self.assertTrue(
+                paths.is_safe_to_clean(toggled_child),
+                "Windows 盘符大小写不一致时不应误判为外部路径"
+            )
 
         # work_dir 外部目录不可清理
         external_file = os.path.join(self.tmpdir, "other", "data.json")

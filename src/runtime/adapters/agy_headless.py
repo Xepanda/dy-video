@@ -219,9 +219,13 @@ class AgyHeadlessAdapter(AgentAdapter):
                         is_c = is_c()
                     if is_c:
                         try:
-                            proc.kill()
+                            from src.runtime.job_runner import terminate_process_tree
+                            terminate_process_tree(proc)
                         except Exception:
-                            pass
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
                         return AgentResponse(
                             status=AgentStatus.ERROR,
                             error_message="AGY 调用已被用户取消",
@@ -236,9 +240,13 @@ class AgyHeadlessAdapter(AgentAdapter):
 
                     if time.time() - start_t > timeout_sec + 15:
                         try:
-                            proc.kill()
+                            from src.runtime.job_runner import terminate_process_tree
+                            terminate_process_tree(proc)
                         except Exception:
-                            pass
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
                         return AgentResponse(
                             status=AgentStatus.TIMEOUT,
                             error_message=f"AGY 调用超时 ({timeout_sec}s)",
