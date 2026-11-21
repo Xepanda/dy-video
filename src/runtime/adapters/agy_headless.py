@@ -92,8 +92,8 @@ def validate_sequence_proposals_schema(data: Dict[str, Any]) -> Tuple[bool, List
                 errors.append(f"proposals[{idx}].proposal_id 必须为非空字符串")
 
             style = prop.get("style")
-            if style not in ("balanced", "fast_paced", "showcase"):
-                errors.append(f"proposals[{idx}].style 必须为 'balanced', 'fast_paced' 或 'showcase'，当前为: '{style}'")
+            if style not in ("balanced", "fast_paced", "showcase", "fast", "detailed"):
+                errors.append(f"proposals[{idx}].style 必须为 'balanced', 'fast_paced', 'showcase', 'fast' 或 'detailed'，当前为: '{style}'")
 
             cids = prop.get("ordered_candidate_ids")
             if not isinstance(cids, list) or len(cids) == 0:

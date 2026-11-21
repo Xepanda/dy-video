@@ -108,11 +108,21 @@ class VideoFrameProvider:
                 reg_p = self.source_registry[str(source_file)]
                 if os.path.isfile(reg_p):
                     return reg_p
+            sf_base = os.path.basename(str(source_file))
+            if sf_base in self.source_registry:
+                reg_p = self.source_registry[sf_base]
+                if os.path.isfile(reg_p):
+                    return reg_p
 
         # 2. 通过 Source Registry 解析 source_id
         if source_id:
             if str(source_id) in self.source_registry:
                 reg_p = self.source_registry[str(source_id)]
+                if os.path.isfile(reg_p):
+                    return reg_p
+            sid_base = os.path.basename(str(source_id))
+            if sid_base in self.source_registry:
+                reg_p = self.source_registry[sid_base]
                 if os.path.isfile(reg_p):
                     return reg_p
             resolved_sid = resolve_path(str(source_id), self.work_dir)

@@ -51,7 +51,9 @@
             "enum": [
               "balanced",
               "fast_paced",
-              "showcase"
+              "showcase",
+              "fast",
+              "detailed"
             ]
           },
           "ordered_candidate_ids": {

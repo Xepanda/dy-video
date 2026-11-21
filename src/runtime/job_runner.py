@@ -220,15 +220,15 @@ class JobRunner:
                         d_data = json.load(dmf)
                     saved_fp = d_data.get("job_fingerprint")
                     v_p = d_data.get("video_path") or (d_data.get("final_deliverables", {}) or {}).get("video")
-                    # 严格比对 job_fingerprint；缺失指纹（旧版元数据）强制重验，严禁单凭 DELIVERED 状态无条件复用
+                    # 严格比对 job_fingerprint；缺失指纹（旧版元数据）强制重验，严禁单凭 DELIVERED 状态直接复用
                     if saved_fp:
                         fp_match = bool(saved_fp == current_fingerprint)
                     else:
-                        # 旧格式缺指纹强制重验：必须同时满足视频存在、既有 QC 显式通过且 checkpoint 确为 DELIVERED
+                        # 旧格式缺指纹强制重验：严禁单凭 DELIVERED 状态直接复用，必须同时满足成片物理存在且非空、既有 QC 显式通过且 checkpoint 确为 DELIVERED
                         has_qc = bool(d_data.get("qc_passed") is True or (d_data.get("editorial_qc") or {}).get("passed") is True)
                         chk_delivered = bool(self.resumed_from == JobStage.DELIVERED)
-                        if has_qc and chk_delivered and v_p and os.path.isfile(v_p):
-                            print("[JOB-RUNNER][WARN] 旧版交付清单缺失 job_fingerprint，经门禁重验通过后回填指纹升级并复用")
+                        if has_qc and chk_delivered and v_p and os.path.isfile(v_p) and os.path.getsize(v_p) > 0:
+                            print("[JOB-RUNNER][WARN] 发现旧版交付清单缺少 job_fingerprint，经完整性与 QC 重验通过后回填指纹并复用")
                             d_data["job_fingerprint"] = current_fingerprint
                             try:
                                 with open(delivery_manifest_p, "w", encoding="utf-8") as dmf_w:
@@ -237,6 +237,7 @@ class JobRunner:
                                 pass
                             fp_match = True
                         else:
+                            print("[JOB-RUNNER][WARN] 发现旧版交付清单缺少 job_fingerprint 且未通过完整性重验，拒绝直接复用，强制重新执行")
                             fp_match = False
 
                     if fp_match and v_p and os.path.isfile(v_p):
@@ -311,73 +312,23 @@ class JobRunner:
             with open(resolved_spec_path, "w", encoding="utf-8") as f:
                 json.dump(self.spec, f, ensure_ascii=False, indent=2)
 
-        # 3. ANALYZING
-        _update(JobStage.ANALYZING, 0.3, "提取语音、镜头切换与视觉特征...")
-        if self.is_canceled:
-            return {"status": JobStage.CANCELED}
-
-        # 4. DECIDING
-        _update(JobStage.DECIDING, 0.45, "预检 Agent 环境并准备总导演决策...")
+        # 3. 预检 Agent 环境（仅可用性探测，绝不提前调用排片）
+        _update(JobStage.DECIDING, 0.20, "预检 Agent 运行环境并准备总导演决策...")
         if self.is_canceled:
             return {"status": JobStage.CANCELED}
 
         if self.agent_adapter:
             is_avail, avail_msg = self.agent_adapter.check_availability()
             if not is_avail:
-                _update(JobStage.AGENT_AUTH_REQUIRED, 0.45, f"AGY 命令行工具未就绪: {avail_msg}")
+                _update(JobStage.AGENT_AUTH_REQUIRED, 0.20, f"AGY 命令行工具未就绪: {avail_msg}")
                 return {
                     "status": JobStage.AGENT_AUTH_REQUIRED,
                     "error": avail_msg,
                     "reason": "AGY CLI 未安装或未加入 PATH",
                 }
 
-        # 5. RENDERING
-        _update(JobStage.RENDERING, 0.60, "启动 Agent 总导演进行多模态候选分析与编排...")
-        if self.is_canceled:
-            return {"status": JobStage.CANCELED}
-
-        # 调用 AgentDirector 执行确定性分析、候选挖掘、多模态精排与总装
+        # 4. 委托 AgentDirector 执行真实全链路编排（由 Director 在精排后唯一定位排片调度）
         chosen_proposal = self.spec.get("custom_sequence_proposal")
-        # 兼容单测隔离场景：仅当显式指定 _allowed_candidate_ids 这一特定测试桩时在 Runner 侧预调度
-        if "_allowed_candidate_ids" in self.spec and self.agent_adapter and not chosen_proposal:
-            from src.runtime.adapters.agent_protocol import AgentStatus
-            schema_p = os.path.join(PROJECT_ROOT, "contracts", "schemas", "sequence_proposals.schema.json")
-            prompt = (
-                f"任务ID: {self.project_id}\n"
-                f"商品档案: {json.dumps(self.spec.get('product') or {}, ensure_ascii=False)}\n"
-                "请依据 sequence_proposals.schema.json 契约，输出 3 套镜头序列提案。"
-            )
-            resp = self.agent_adapter.invoke(prompt, schema_p, self.work_dir)
-            if resp.status == AgentStatus.AUTH_REQUIRED:
-                _update(JobStage.AGENT_AUTH_REQUIRED, 0.5, "AGY 未登录，需要人工授权: agy auth login")
-                return {
-                    "status": JobStage.AGENT_AUTH_REQUIRED,
-                    "reason": "AGY 未登录",
-                    "error": resp.error_message,
-                }
-            elif resp.status == AgentStatus.SUCCESS:
-                s_out = resp.structured_output or {}
-                if s_out.get("status") == "INSUFFICIENT_EVIDENCE":
-                    _update(JobStage.NEEDS_INPUT, 0.5, "Agent 判定素材证据不足")
-                    return {
-                        "status": JobStage.NEEDS_INPUT,
-                        "reason": "素材证据不足",
-                        "evidence_gap": s_out.get("evidence_gap", []),
-                    }
-                proposals = s_out.get("proposals", [])
-                if not proposals or not isinstance(proposals, list):
-                    _update(JobStage.FAILED, 0.5, "Agent 未输出有效提案")
-                    return {"status": JobStage.FAILED, "error": "Agent 未输出有效提案"}
-                allowed_cids = set(self.spec.get("_allowed_candidate_ids") or [])
-                for p in proposals:
-                    for cid in p.get("ordered_candidate_ids", []):
-                        if cid not in allowed_cids:
-                            _update(JobStage.FAILED, 0.5, f"Agent 决策包含未知幻觉候选 ID: {cid}")
-                            return {"status": JobStage.FAILED, "error": f"Agent 决策包含未知候选 ID: {cid}"}
-                chosen_proposal = proposals[0]
-            else:
-                _update(JobStage.FAILED, 0.5, f"Agent 决策执行失败: {resp.error_message}")
-                return {"status": JobStage.FAILED, "error": resp.error_message}
         try:
             from src.agent.agent_director import AgentDirector
             from src.core.sequence_optimizer import InsufficientEvidenceError

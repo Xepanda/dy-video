@@ -595,6 +595,8 @@ class AgentDirector:
         # -------------------------------------------------------------
         # Phase 1: 确定性工具扫描与候选池生成
         # -------------------------------------------------------------
+        _check_cancel()
+        _report("ANALYZING", 0.20, "正在提取镜头切换点与高光候选帧...")
         print(">>> [PHASE 1] 确定性工具链提取候选池...")
 
         # 1.1 镜头边界检测（多源：逐源检测保存字典 + 合并；B13 阶段缓存）
@@ -712,6 +714,8 @@ class AgentDirector:
         print(f"    封面候选池: {len(cover_candidates)} 个（来自 {len(self.raw_videos)} 个源）")
 
         # 1.3 叙事分镜候选池（ASR + 漏斗打标；多源逐源转录后合并；B13 阶段缓存）
+        _check_cancel()
+        _report("ANALYZING", 0.35, "正在提取语音转写并执行 ASR 审核与意群分析...")
         story_cand_json = os.path.join(self.candidates_dir, "story_candidates.json")
         story_candidates = analyze_story_segments(
             video_path=self.raw_videos,
@@ -856,6 +860,8 @@ class AgentDirector:
                     utterances_by_source[src] = aligner.align_segments(src_segs, source_id=src)
 
                 # 3. 候选片段挖掘
+                _check_cancel()
+                _report("ANALYZING", 0.50, "正在挖掘候选片段并执行 SKU 视觉与卖点对齐...")
                 generator = CandidateGenerator(min_candidate_ms=1800, max_candidate_ms=12000, target_candidate_ms=5000)
                 all_candidates = []
                 for src, utts in utterances_by_source.items():
@@ -903,6 +909,8 @@ class AgentDirector:
                 )
 
                 # 6. 全局序列优化与 Agent 编排
+                _check_cancel()
+                _report("DECIDING", 0.65, "正在执行排片序列优化与 Agent 镜头编排...")
                 scores_map = {s["candidate_id"]: s for s in candidate_scores.get("scores", [])}
                 eligible_candidates = [
                     c for c in all_candidates
@@ -959,7 +967,7 @@ class AgentDirector:
                             used_spans: Dict[str, List[Tuple[int, int]]] = {}
                             for cid in p.get("ordered_candidate_ids", []):
                                 if cid not in allowed_cids_set:
-                                    raise ValueError(f"Agent 决策包含未知幻觉或不合格候选 ID: {cid}")
+                                    raise ValueError(f"Agent 决策包含未知幻觉候选 ID: {cid}")
                                 cand_obj = self._all_candidates_map.get(cid)
                                 if cand_obj:
                                     src_k = cand_obj.get("source_id") or cand_obj.get("source_file") or "src_0"
@@ -1003,7 +1011,15 @@ class AgentDirector:
             except (InsufficientEvidenceError, AgentAuthRequiredError, AgentPermissionDeniedError):
                 # 内容证据不足与授权错误均为关键门禁，绝不允许静默降级到旧版 build_plan 强行凑片！
                 raise
+            except ValueError as ve:
+                # 包含未知幻觉候选 ID 或契约违规，坚决阻断，严禁静默回退启发式凑片
+                if getattr(self, "agent_adapter", None) or custom_sequence_proposal:
+                    raise
+                print(f"  [V3 PLAN][WARN] V3 编排参数异常，降级回退至启发式 build_plan: {ve}")
+                plan = None
             except Exception as v3_err:
+                if getattr(self, "agent_adapter", None) or custom_sequence_proposal:
+                    raise
                 print(f"  [V3 PLAN][WARN] V3 编排技术异常，降级回退至启发式 build_plan: {v3_err}")
                 plan = None
 
@@ -1252,6 +1268,8 @@ class AgentDirector:
         # -------------------------------------------------------------
         # Phase 3: 工具链执行确定性渲染与混流
         # -------------------------------------------------------------
+        _check_cancel()
+        _report("RENDERING", 0.80, "正在渲染高定封面并执行音视频轨道合流...")
         print("\n>>> [PHASE 3] 工具链执行成片渲染与混流...")
 
         material_dir = self.get_material_dir()
@@ -1279,6 +1297,8 @@ class AgentDirector:
         # -------------------------------------------------------------
         # Phase 4: 自动化质检门禁与交付签署
         # -------------------------------------------------------------
+        _check_cancel()
+        _report("QC", 0.90, "正在执行技术参数与内容层双重质检门禁审核...")
         print("\n>>> [PHASE 4] 自动化质检门禁核验（constraints v{}）...".format(
             self.constraints.get("version", 1)))
         auditor = QcAuditor(self.constraints)
@@ -1423,6 +1443,7 @@ class AgentDirector:
         print(f"质检结论: {'ALL PASS' if passed else 'BLOCK FAILED'}"
               f"（{len(auditor.report.get('warnings', []))} 条 WARN）")
         print(f"=======================================================\n")
+        _report("DELIVERED", 1.0, "任务已圆满完成交付")
         return decision_manifest
 
 

@@ -296,13 +296,15 @@ def test_job_runner_three_agent_scenarios():
             "editorial_qc": {"passed": True, "block_count": 0},
             "final_deliverables": {"video": dummy_video}
         }
-        with patch("src.agent.agent_director.AgentDirector", return_value=mock_director):
+        with patch("src.agent.agent_director.AgentDirector", return_value=mock_director) as mock_dir_cls:
             res4 = runner4.run_pipeline()
         assert res4["status"] == JobStage.DELIVERED
-        # 验证传入了 custom_sequence_proposal
+        # 验证 JobRunner 仅透传 agent_adapter，绝不在 Runner 侧提前调度排片
+        mock_dir_cls.assert_called_once()
+        assert mock_dir_cls.call_args[1].get("agent_adapter") == mock_adapter_success
         mock_director.run_director_workflow.assert_called_once()
-        call_kwargs = mock_director.run_director_workflow.call_args[1]
-        assert call_kwargs.get("custom_sequence_proposal")["proposal_id"] == "p_valid"
+        # 确认 JobRunner 本身绝未调用 invoke
+        mock_adapter_success.invoke.assert_not_called()
 
 
 def main():

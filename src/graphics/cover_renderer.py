@@ -278,53 +278,77 @@ class MixCityCoverRenderer:
         # -------------------------------------------------------------
         # 1. 顶部品牌区（自动换行 C16）
         # -------------------------------------------------------------
-        brand_en = (brand_info.get("title_en") or "MIXCITY").strip()
-        brand_cn = (brand_info.get("subtitle_cn") or "深圳高端女装").strip()
+        # 1. 顶部品牌区（青铜渐变英文字 + 白色深褐描边中文字）
+        # 允许“无品牌包装”选项：若显式留空则不渲染品牌文字，严禁强塞 MIXCITY
+        # -------------------------------------------------------------
+        if "title_en" in brand_info:
+            brand_en = str(brand_info.get("title_en") or "").strip()
+        else:
+            brand_en = "MIXCITY"
+
+        if "subtitle_cn" in brand_info:
+            brand_cn = str(brand_info.get("subtitle_cn") or "").strip()
+        else:
+            brand_cn = "深圳高端女装" if brand_en == "MIXCITY" else ""
+
         max_text_w = OUT_W * self.text_c["wrap_width_ratio"]
+        y_after_en = 125
 
-        en_lines, f_en = wrap_text_to_width(
-            draw, brand_en, self.font_h1, max_text_w,
-            min_font_size=int(self.text_c["brand_font_size_cn"]),
-            base_size=int(self.text_c["brand_font_size_en"]))
-        y_en = 125
-        line_h = int(self.text_c["brand_font_size_en"] * 1.15)
-        for li, line in enumerate(en_lines):
-            yy = y_en + li * line_h
-            # 青铜渐变主标（示例图采样校准）+ 3D 投影
-            strip, _ = render_gradient_sheared_text(
-                line, f_en, BRAND_EN_GRADIENT_TOP, BRAND_EN_GRADIENT_BOTTOM,
-                COLOR_BRAND_STROKE, stroke_width=4.5, shear=0.0)
-            # 投影层
-            shadow, _ = render_gradient_sheared_text(
-                line, f_en, COLOR_BRAND_SHADOW, COLOR_BRAND_SHADOW,
-                COLOR_BRAND_SHADOW, stroke_width=4, shear=0.0)
-            pos_x = (OUT_W - strip.width) // 2
-            overlay.alpha_composite(shadow, (pos_x + 2, yy + 4))
-            overlay.alpha_composite(strip, (pos_x, yy))
-        y_after_en = y_en + len(en_lines) * line_h
+        if brand_en:
+            en_lines, f_en = wrap_text_to_width(
+                draw, brand_en, self.font_h1, max_text_w,
+                min_font_size=int(self.text_c["brand_font_size_cn"]),
+                base_size=int(self.text_c["brand_font_size_en"]))
+            y_en = 125
+            line_h = int(self.text_c["brand_font_size_en"] * 1.15)
+            for li, line in enumerate(en_lines):
+                yy = y_en + li * line_h
+                # 青铜渐变主标（示例图采样校准）+ 3D 投影
+                strip, _ = render_gradient_sheared_text(
+                    line, f_en, BRAND_EN_GRADIENT_TOP, BRAND_EN_GRADIENT_BOTTOM,
+                    COLOR_BRAND_STROKE, stroke_width=4.5, shear=0.0)
+                # 投影层
+                shadow, _ = render_gradient_sheared_text(
+                    line, f_en, COLOR_BRAND_SHADOW, COLOR_BRAND_SHADOW,
+                    COLOR_BRAND_SHADOW, stroke_width=4, shear=0.0)
+                pos_x = (OUT_W - strip.width) // 2
+                overlay.alpha_composite(shadow, (pos_x + 2, yy + 4))
+                overlay.alpha_composite(strip, (pos_x, yy))
+            y_after_en = y_en + len(en_lines) * line_h
+            meta["elements"]["brand_en"] = {
+                "lines": en_lines, "font_size": f_en.size,
+                "top_y": y_en, "bottom_y": y_after_en,
+                "center_x": OUT_W // 2,
+            }
+        else:
+            meta["elements"]["brand_en"] = {
+                "lines": [], "font_size": 0, "top_y": 0, "bottom_y": 0,
+                "center_x": OUT_W // 2, "plain": True,
+            }
 
-        cn_lines, f_cn = wrap_text_to_width(
-            draw, brand_cn, self.font_sub, max_text_w,
-            min_font_size=36, base_size=int(self.text_c["brand_font_size_cn"]))
-        y_cn = y_after_en + 4
-        for li, line in enumerate(cn_lines):
-            yy = y_cn + li * int(self.text_c["brand_font_size_cn"] * 1.15)
-            draw.text((OUT_W // 2 + 1, yy + 3), line, font=f_cn,
-                      fill=COLOR_BRAND_SHADOW, anchor="mt", stroke_width=3,
-                      stroke_fill=COLOR_BRAND_SHADOW)
-            draw.text((OUT_W // 2, yy), line, font=f_cn,
-                      fill=COLOR_WHITE, anchor="mt", stroke_width=3.5,
-                      stroke_fill=COLOR_BRAND_STROKE)
-        meta["elements"]["brand_en"] = {
-            "lines": en_lines, "font_size": f_en.size,
-            "top_y": y_en, "bottom_y": y_after_en,
-            "center_x": OUT_W // 2,
-        }
-        meta["elements"]["brand_cn"] = {
-            "lines": cn_lines, "font_size": f_cn.size,
-            "top_y": y_cn, "bottom_y": y_cn + len(cn_lines) * int(self.text_c["brand_font_size_cn"] * 1.15),
-            "center_x": OUT_W // 2,
-        }
+        if brand_cn:
+            cn_lines, f_cn = wrap_text_to_width(
+                draw, brand_cn, self.font_sub, max_text_w,
+                min_font_size=36, base_size=int(self.text_c["brand_font_size_cn"]))
+            y_cn = y_after_en + 4
+            for li, line in enumerate(cn_lines):
+                yy = y_cn + li * int(self.text_c["brand_font_size_cn"] * 1.15)
+                draw.text((OUT_W // 2 + 1, yy + 3), line, font=f_cn,
+                          fill=COLOR_BRAND_SHADOW, anchor="mt", stroke_width=3,
+                          stroke_fill=COLOR_BRAND_SHADOW)
+                draw.text((OUT_W // 2, yy), line, font=f_cn,
+                          fill=COLOR_WHITE, anchor="mt", stroke_width=3.5,
+                          stroke_fill=COLOR_BRAND_STROKE)
+            meta["elements"]["brand_cn"] = {
+                "lines": cn_lines, "font_size": f_cn.size,
+                "top_y": y_cn, "bottom_y": y_cn + len(cn_lines) * int(self.text_c["brand_font_size_cn"] * 1.15),
+                "center_x": OUT_W // 2,
+            }
+        else:
+            meta["elements"]["brand_cn"] = {
+                "lines": [], "font_size": 0, "top_y": 0, "bottom_y": 0,
+                "center_x": OUT_W // 2, "plain": True,
+            }
 
         # -------------------------------------------------------------
         # 2. 浮动圆角商品贴图（左右侧可配 C12；layout: horizontal 并排 | vertical 堆叠）

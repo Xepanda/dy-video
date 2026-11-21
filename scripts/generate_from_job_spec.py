@@ -332,7 +332,7 @@ def main() -> int:
                 deliverables["manual_review"] = mr_path
             with open(gen_path, "w", encoding="utf-8") as f:
                 json.dump(gen_manifest, f, ensure_ascii=False, indent=2)
-            print(f"  [✓] manual_review: {material_mr}（13 项预填，勾异常即可）")
+            print(f"  [✓] manual_review: {mr_path}（13 项预填，勾异常即可）")
     except Exception as e:
         print(f"  [WARN] 生成人工复核清单失败（不阻断交付）: {e}")
 

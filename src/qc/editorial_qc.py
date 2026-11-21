@@ -180,6 +180,8 @@ class EditorialQcAuditor:
 
         # 总结
         passed = (block_count == 0)
+        warn_details = [c["detail"] for c in checks if c.get("status") == "WARN"]
+        warn_note = f" - 警告项: {'; '.join(warn_details)}" if warn_details else ""
         report = {
             "schema_version": "3.0",
             "passed": passed,
@@ -187,6 +189,6 @@ class EditorialQcAuditor:
             "block_count": block_count,
             "warn_count": warn_count,
             "checks": checks,
-            "summary": f"内容层质检: {'PASS' if passed else 'BLOCK'} ({block_count} BLOCK / {warn_count} WARN)",
+            "summary": f"内容层质检: {'PASS' if passed else 'BLOCK'} ({block_count} BLOCK / {warn_count} WARN){warn_note}",
         }
         return report

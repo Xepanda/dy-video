@@ -70,6 +70,7 @@ logs/pr_body*.md
 specs/*.resolved.json
 specs/product_profile_*.json
 local_project3_*_report.json
+local_project3_*_summary.json
 data/placeholders/test_*
 
 *.spec
