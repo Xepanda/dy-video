@@ -24,7 +24,7 @@ import json
 import time
 import shutil
 import argparse
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
@@ -37,6 +37,7 @@ from src.tools.render_cover_tool import render_cover_with_meta
 from src.tools.assemble_video_tool import assemble_video_tool
 from src.tools.make_placeholder_cards import ensure_placeholder_cards
 from src.core.path_resolver import resolve_path, relativize
+from src.core.project_context import ProjectPaths, is_historical_output, InputManifest
 from src.qc.qc_auditor import QcAuditor
 from src.agent.decision_gateway import DecisionGateway, DecisionViolation
 
@@ -45,10 +46,20 @@ if hasattr(sys.stdout, "reconfigure"):
 
 
 class AgentDirector:
-    def __init__(self, spec_path: str, cache_key: str = None, use_cache: bool = True):
+    def __init__(
+        self,
+        spec_path: str,
+        cache_key: str = None,
+        use_cache: bool = True,
+        agent_adapter: Optional[Any] = None,
+        project_paths: Optional[Any] = None,
+        run_id: Optional[str] = None,
+    ):
         self.spec_path = os.path.abspath(spec_path)
         with open(self.spec_path, "r", encoding="utf-8") as f:
             self.spec = json.load(f)
+        self.agent_adapter = agent_adapter
+        self.run_id = run_id
 
         self.constraints = _load_constraints()
         # 统一能力开关（2026-11-01）：把 spec.options.features 派生到 constraints
@@ -71,22 +82,42 @@ class AgentDirector:
         except Exception as _e:
             print(f"[FEATURES][WARN] 开关解析失败，使用默认值: {_e}")
         self.project_id = self.spec.get("project_id", "demo")
-        # —— 多源支持（2026-10-21）：同目录同商品的多个直播视频均可作为候选素材 ——
-        # spec.raw_video_paths 显式列出；未提供则扫描 raw_video_path 所在目录下的全部视频。
+
+        # 统一项目路径管理 (ProjectPaths)
+        if project_paths:
+            self.project_paths = project_paths
+        else:
+            spec_dir = os.path.dirname(self.spec_path)
+            if self.spec.get("project_root"):
+                proj_root = self.spec["project_root"]
+            elif os.path.basename(spec_dir) in ("素材", "materials", "input"):
+                proj_root = os.path.dirname(spec_dir)
+            elif os.path.isdir(os.path.join(spec_dir, "素材")):
+                proj_root = spec_dir
+            else:
+                norm_spec = os.path.normpath(spec_dir)
+                norm_repo = os.path.normpath(PROJECT_ROOT)
+                if norm_spec.startswith(norm_repo):
+                    proj_root = os.path.join(PROJECT_ROOT, "data", "projects", self.project_id)
+                else:
+                    proj_root = spec_dir
+            self.project_paths = ProjectPaths(proj_root, run_id=self.run_id)
+
+        self.work_dir = self.project_paths.work_dir
+        self.output_dir = self.project_paths.output_dir
+        self.candidates_dir = os.path.join(self.work_dir, "candidates")
+        self.project_paths.ensure_runtime_dirs()
+        os.makedirs(self.candidates_dir, exist_ok=True)
+
+        # —— 多源支持：通过统一 InputManifest 安全解析，排除历史成片 ——
         self.raw_videos = self._collect_source_videos()
         self.raw_video = self.raw_videos[0]
-        self.work_dir = os.path.join(PROJECT_ROOT, "data", "work_dirs", self.project_id)
-        self.output_dir = os.path.join(PROJECT_ROOT, "output", self.project_id)
-        self.candidates_dir = os.path.join(PROJECT_ROOT, "data", "candidates", self.project_id)
 
         self.brand_info = self.spec.get("brand", {})
         self.product_info = self.spec.get("product", {})
         self.options = self.spec.get("options", {})
 
-        # —— 商品位占位兜底（需求 1：2026-10-21）——
-        # 当前素材普遍缺真实商品图。若不补位，封面会缺失商品贴图位、版面不完整。
-        # 这里在导演初始化阶段统一补位：优先真实商品图，缺失则生成"明确标注为占位"的
-        # 示例图，保证封面布局与视觉完整性，后续拿到真图同名替换即可。
+        # —— 商品位占位兜底（需求 1：2026-10-21，绝不修改用户磁盘 spec）——
         self._ensure_product_cards()
 
         # B12：决策约束网关——Agent 每次选择先过约束校验，不合格拒绝重选
@@ -99,24 +130,11 @@ class AgentDirector:
             from src.tools.stage_cache import compute_pipeline_key
             self.cache_key = compute_pipeline_key(self.raw_videos, self.spec_path)
 
-        os.makedirs(self.work_dir, exist_ok=True)
-        os.makedirs(self.output_dir, exist_ok=True)
-        os.makedirs(self.candidates_dir, exist_ok=True)
-
     # 视频扩展名（同一商品的多段直播素材）
     VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".avi", ".flv", ".m4v", ".ts")
 
     def _ensure_product_cards(self) -> None:
-        """商品位兜底：真实商品图缺失时，用占位示例图补齐版面（需求 1）。
-
-        行为约束：
-        - 已有真实商品图 → 不做任何改动；
-        - 缺失 → 生成占位图并登记到 product.item_images，
-          同时把 spec 落盘，使下游 cover_renderer 走标准贴图渲染路径
-          （C11~C14 几何断言与 QC「封面贴图几何」得以真实验证）。
-        - options.disable_placeholder_cards=true 时跳过（供单元测试/离线体检使用，
-          避免测试往共享目录里写产物）。
-        """
+        """商品位兜底：真实商品图缺失时，用占位示例图补齐版面（绝不修改用户磁盘 spec）。"""
         if self.options.get("disable_placeholder_cards"):
             return
         product = self.spec.get("product", {}) or {}
@@ -129,112 +147,63 @@ class AgentDirector:
             if rp and os.path.exists(rp):
                 existing.append(rp)
         if existing:
-            # 已有真实商品图 → 不生成占位，但把路径归一化后写回 spec（可移植性）
             product["item_images"] = existing
-            self._write_spec_back()
             return
         n_cards = int(self.options.get("placeholder_cards", 2) or 2)
         size = int((self.constraints.get("sticker", {}) or {}).get("size", 280) or 280)
+        ph_dir = os.path.join(self.work_dir, "placeholders")
         try:
-            ensure_placeholder_cards(self.spec, self.project_id, n_cards=n_cards, size=size)
+            ensure_placeholder_cards(self.spec, self.project_id, out_dir=ph_dir, n_cards=n_cards, size=size)
         except Exception as e:
-            # 占位是"锦上添花"的版面兜底，不应阻断主流水线
             print(f"[WARN] 商品位占位补齐失败（不阻断，封面将无贴图）: {e}")
             return
-        # 写回 spec，保证渲染与后续审计读到的是同一份商品位定义
-        self._write_spec_back()
         self.product_info = self.spec.get("product", {})
 
     def _write_spec_back(self):
-        """把 spec 写回磁盘，路径统一转成**相对仓库根**的相对路径（可移植性）。
-
-        2026-10-24：spec 此前存的是 D:/Projects/... 这类机器专属绝对路径，
-        换机器/换 runner 即失效。写回时用 relativize 归一化。
+        """已废弃：禁止运行时修改或覆盖用户原始 job_spec.json。
+        如需序列化运行时 spec，写入当前 run 的 work_dir。
         """
         try:
-            # 归一化素材路径为相对路径
-            for key in ("raw_video_path",):
-                v = self.spec.get(key)
-                if v:
-                    self.spec[key] = relativize(v, PROJECT_ROOT)
-            if self.spec.get("raw_video_paths"):
-                self.spec["raw_video_paths"] = [
-                    relativize(p, PROJECT_ROOT) for p in self.spec["raw_video_paths"]]
-            product = self.spec.get("product", {}) or {}
-            if product.get("item_images"):
-                product["item_images"] = [
-                    relativize(p, PROJECT_ROOT) for p in product["item_images"]]
-            with open(self.spec_path, "w", encoding="utf-8") as f:
+            runtime_spec_path = os.path.join(self.work_dir, "job_spec.runtime.json")
+            with open(runtime_spec_path, "w", encoding="utf-8") as f:
                 json.dump(self.spec, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"[WARN] spec 写回失败（不阻断）: {e}")
+        except Exception:
+            pass
 
     def _collect_source_videos(self) -> list:
-        """收集本任务的全部候选源素材（同目录同商品的多段直播视频）。
+        """收集本任务的全部有效源素材，严格排除历史成片。"""
+        if not hasattr(self, "project_paths") or not self.project_paths:
+            base_dir = os.path.dirname(os.path.abspath(getattr(self, "spec_path", "") or "."))
+            self.project_paths = ProjectPaths(project_root=base_dir)
 
-        优先级：
-          1. spec.raw_video_paths 显式列表（用户/填表工具指定）；
-          2. 否则扫描 spec.raw_video_path 所在目录下的全部视频文件
-             （2026-10-21 需求：同一目录下的多个视频均为同一商品的直播素材）；
-          3. 目录内无其他视频时退化为单文件。
-        返回绝对路径列表，顺序稳定（按文件名排序）保证缓存键可复现。
-
-        路径可移植性（2026-10-24）：spec 里的路径统一经 path_resolver 解析，
-        相对路径与"换机器后失效的旧绝对路径"都能自动定位到本机实际文件。
-
-        排除自身产物（2026-11-01）：交付物写入素材目录（`{project_id}.mp4`
-        / `.jpg` 等），与 raw_video_path 同目录。重跑时若不排除，
-        上一次的**成片**会被当成第 N+1 段原始素材重新摄入 →
-        素材清单污染（实测 6 段变 7 段，多出的正是上轮成片）。
-        故扫描时按 basename 过滤掉本任务的交付物与历史成片。
-        """
-        spec_dir = os.path.dirname(self.spec_path)
-        paths: List[str] = []
+        manifest_mgr = InputManifest(self.project_paths)
         explicit_paths = self.spec.get("raw_video_paths")
-        if explicit_paths:
-            for p in explicit_paths:
-                rp = resolve_path(p, spec_dir)
-                if rp and os.path.exists(rp) and rp not in paths:
-                    if self._is_own_artifact(os.path.basename(rp)):
-                        continue
-                    paths.append(rp)
-            if not paths:
-                raise FileNotFoundError(
-                    f"契约显式指定的 raw_video_paths 全部无法定位或不存在: {explicit_paths}")
-            return paths
-        primary = self.spec.get("raw_video_path")
-        if primary:
-            primary_abs = resolve_path(primary, spec_dir) or os.path.abspath(primary)
-            if os.path.isdir(primary_abs):
-                for name in sorted(os.listdir(primary_abs)):
-                    if not name.lower().endswith(self.VIDEO_EXTS):
-                        continue
-                    if self._is_own_artifact(name):
-                        continue
-                    ap = os.path.abspath(os.path.join(primary_abs, name))
-                    if ap not in paths:
-                        paths.append(ap)
-            elif os.path.isfile(primary_abs):
-                if primary_abs not in paths:
-                    paths.insert(0, primary_abs)
-                scan_dir = os.path.dirname(primary_abs)
-                # 同目录其余视频一并纳入候选（跨素材选段）
-                if os.path.isdir(scan_dir):
-                    for name in sorted(os.listdir(scan_dir)):
-                        if not name.lower().endswith(self.VIDEO_EXTS):
-                            continue
-                        if self._is_own_artifact(name):
-                            continue
-                        ap = os.path.abspath(os.path.join(scan_dir, name))
-                        if ap not in paths:
-                            paths.append(ap)
-            elif not os.path.exists(primary_abs):
-                # 保持既有初始化容错契约：占位路径原样保留，由后续阶段报错
-                if primary_abs not in paths:
-                    paths.insert(0, primary_abs)
+        if explicit_paths is not None:
+            manifest = manifest_mgr.scan_and_resolve(explicit_video_paths=explicit_paths)
+        else:
+            primary = self.spec.get("raw_video_path")
+            if primary:
+                primary_abs = resolve_path(primary, self.project_paths.materials_dir) or os.path.abspath(primary)
+                if os.path.isdir(primary_abs):
+                    manifest = manifest_mgr.scan_and_resolve()
+                elif os.path.isfile(primary_abs):
+                    manifest = manifest_mgr.scan_and_resolve(explicit_video_paths=[primary_abs])
+                else:
+                    manifest = manifest_mgr.scan_and_resolve()
+            else:
+                manifest = manifest_mgr.scan_and_resolve()
+
+        self.manifest = manifest
+        paths = [s["path"] for s in manifest.get("source_videos", [])]
         if not paths:
+            # 兼容既有初始化容错契约（仅当未显式指定 raw_video_paths 时）
+            if not explicit_paths:
+                primary = self.spec.get("raw_video_path")
+                if primary and not os.path.exists(primary):
+                    return [primary]
             raise FileNotFoundError(
-                f"未找到任何可用的源视频素材（raw_video_path={self.spec.get('raw_video_path')}）")
+                f"未找到任何可用的源视频素材（raw_video_path={self.spec.get('raw_video_path')}）"
+            )
         return paths
 
     def _assign_sticker_sides(self, plan: Dict[str, Any]) -> None:
@@ -450,14 +419,9 @@ class AgentDirector:
         return stem in {pid, f"{pid}_final", f"{pid}_cover"}
 
     def get_material_dir(self) -> str:
-        """获取用户提供的素材所在目录（绝对路径）。
-
-        规则：
-        1. 若 raw_video_path 指向目录，直接作为素材目录；
-        2. 若 raw_video_path 指向文件，取其所在目录；
-        3. 若 raw_video_paths 提供了文件列表，取首个文件所在目录；
-        4. 兜底回退到 self.output_dir。
-        """
+        """获取用户提供的素材所在目录（绝对路径）。"""
+        if hasattr(self, "project_paths") and self.project_paths:
+            return self.project_paths.materials_dir
         spec_dir = os.path.dirname(self.spec_path)
         primary = self.spec.get("raw_video_path")
         if primary:
@@ -588,9 +552,32 @@ class AgentDirector:
         self,
         chosen_cover_id: Optional[str] = None,
         custom_plan_path: Optional[str] = None,
-        edited_timeline_path: Optional[str] = None
+        edited_timeline_path: Optional[str] = None,
+        custom_sequence_proposal: Optional[Dict[str, Any]] = None,
+        agent_adapter: Optional[Any] = None,
+        cancel_token: Optional[Any] = None,
+        progress_callback: Optional[Any] = None,
     ) -> Dict[str, Any]:
+        if agent_adapter is not None:
+            self.agent_adapter = agent_adapter
+        self.cancel_token = cancel_token
         start_time = time.time()
+
+        def _check_cancel():
+            if cancel_token:
+                is_c = getattr(cancel_token, "is_canceled", False)
+                if callable(is_c):
+                    is_c = is_c()
+                if is_c:
+                    from src.runtime.job_runner import JobCanceledError
+                    raise JobCanceledError("任务已被用户取消")
+
+        def _report(state: str, pct: float, msg: str):
+            if progress_callback:
+                progress_callback(state, pct, msg)
+
+        _check_cancel()
+        _report("ANALYZING", 0.15, "正在初始化项目环境与候选池扫描...")
         # 外部干预模式（指定封面/自定义计划/人工精修时间线）禁用阶段缓存，保证每次重算
         if chosen_cover_id or custom_plan_path or edited_timeline_path:
             self.use_cache = False
@@ -610,18 +597,23 @@ class AgentDirector:
         # -------------------------------------------------------------
         # Phase 1: 确定性工具扫描与候选池生成
         # -------------------------------------------------------------
+        _check_cancel()
+        _report("ANALYZING", 0.20, "正在提取镜头切换点与高光候选帧...")
         print(">>> [PHASE 1] 确定性工具链提取候选池...")
 
-        # 1.1 镜头边界检测（多源：逐源检测后合并；B13 阶段缓存）
+        # 1.1 镜头边界检测（多源：逐源检测保存字典 + 合并；B13 阶段缓存）
         scene_cuts = []
+        scene_cuts_by_source: Dict[str, List[float]] = {}
         try:
             for v in self.raw_videos:
                 cuts = detect_scene_cuts(v, cache_key=(ck + "|" + v) if ck else None,
                                           work_dir=self.work_dir)
+                scene_cuts_by_source[v] = cuts
                 scene_cuts.extend(cuts)
             print(f"    镜头边界: {len(scene_cuts)} 个切换点（{len(self.raw_videos)} 个源）")
         except Exception as e:
             scene_cuts = []
+            scene_cuts_by_source = {}
             print(f"    镜头边界检测失败（不阻断）: {e}")
 
         # 1.2 封面候选（v2：人脸门禁 + 水平 1:6:1；多源：全部源参与候选池；B13 阶段缓存）
@@ -674,9 +666,50 @@ class AgentDirector:
         elif filtered:
             print(f"    [WARN] 全部候选清晰度 <{sharp_min}，保留原池交由网关裁决")
 
+        # 消费 cover_strategy 策略卡
+        cover_strat = str(self.options.get("cover_strategy", "smart_frontal")).strip().lower()
+        if cover_strat == "product_image":
+            raw_imgs = []
+            for im in self.product_info.get("item_images", []):
+                if im and os.path.isfile(im):
+                    raw_imgs.append(os.path.abspath(im))
+            if hasattr(self, "manifest") and self.manifest:
+                for im in self.manifest.get("product_images", []):
+                    if im.get("path") and os.path.isfile(im["path"]):
+                        raw_imgs.append(os.path.abspath(im["path"]))
+            if raw_imgs:
+                top_img = raw_imgs[0]
+                p_cand = {
+                    "id": "cand_product_image_01",
+                    "timestamp": 0.0,
+                    "image_path": top_img,
+                    "frontal_score": 9999.0,
+                    "strategy": "product_image",
+                    "framing": {
+                        "post_scale_sharpness": 800.0,
+                        "knees_visible": True,
+                        "achieved_width_ratio": 0.75,
+                    },
+                    "description": f"商品主图优先封面: {os.path.basename(top_img)}",
+                }
+                cover_candidates.insert(0, p_cand)
+                print(f"    [COVER-STRATEGY] 已根据商品主图优先策略注入封面候选: {top_img}")
+
+        if not cover_candidates:
+            placeholder_path = os.path.join(cover_cand_dir, "cover_placeholder.jpg")
+            if not os.path.isfile(placeholder_path):
+                from PIL import Image
+                Image.new("RGB", (1080, 1920), color=(30, 30, 30)).save(placeholder_path)
+            cover_candidates = [{
+                "id": "cand_fallback_01",
+                "timestamp": 0.0,
+                "strategy": "fallback_placeholder",
+                "frontal_score": 100.0,
+                "image_path": placeholder_path,
+                "description": "兜底占位封面帧",
+            }]
+
         # 统一候选池落盘（按多目标分数降序，[0] 即 Agent 选定项，与 QC 读取约定一致）
-        # 注意：QC._audit_cover_width 按数组读取 candidates[0]；排序键为 frontal_score
-        # （与 extract_cover_candidates 内部排序一致），跨源时才能选出全局最优帧。
         cover_candidates.sort(key=lambda c: c.get("frontal_score", 0), reverse=True)
         with open(os.path.join(cover_cand_dir, "cover_candidates.json"), "w",
                   encoding="utf-8") as f:
@@ -688,6 +721,8 @@ class AgentDirector:
         print(f"    封面候选池: {len(cover_candidates)} 个（来自 {len(self.raw_videos)} 个源）")
 
         # 1.3 叙事分镜候选池（ASR + 漏斗打标；多源逐源转录后合并；B13 阶段缓存）
+        _check_cancel()
+        _report("ANALYZING", 0.35, "正在提取语音转写并执行 ASR 审核与意群分析...")
         story_cand_json = os.path.join(self.candidates_dir, "story_candidates.json")
         story_candidates = analyze_story_segments(
             video_path=self.raw_videos,
@@ -797,16 +832,221 @@ class AgentDirector:
             verified_cache = os.path.join(self.work_dir, "whisper_segments_verified.json")
             if not os.path.exists(verified_cache):
                 verified_cache = os.path.join(self.work_dir, "whisper_segments.json")
-            with open(verified_cache, "r", encoding="utf-8") as f:
-                segments = json.load(f)
-            # R1：检测各源语音气口，供 build_plan 把裁剪点吸附到气口
-            pauses_by_source = self._detect_speech_pauses()
-            plan = build_plan(self.raw_video, segments, self.spec,
-                              self.constraints, scene_cuts=scene_cuts,
-                              cache_key=ck, work_dir=self.work_dir,
-                              pauses_by_source=pauses_by_source)
-            plan_source = "build_plan"
+            segments = []
+            if os.path.exists(verified_cache):
+                with open(verified_cache, "r", encoding="utf-8") as f:
+                    segments = json.load(f)
+
+            # —— V3 Agent 总导演决策流（PR-01~PR-08 全链路编排）——
+            plan = None
+            plan_source = "v3_agent_director"
             plan_forced = False
+            try:
+                from src.core.product_profile import build_product_profile
+                from src.core.utterance_aligner import UtteranceAligner
+                from src.core.candidate_generator import CandidateGenerator
+                from src.core.sku_tracker import SkuTracker
+                from src.core.candidate_ranker import CandidateRanker
+                from src.core.sequence_optimizer import SequenceOptimizer
+                from src.core.plan_compiler import compile_v3_plan
+
+                # 1. 建立商品档案
+                product_profile = build_product_profile(
+                    self.spec, spec_dir=self.work_dir, strict_missing_images=False, validate=False
+                )
+
+                # 2. 意群对齐
+                aligner = UtteranceAligner(merge_gap_ms=600, min_utterance_ms=1200, max_utterance_ms=10000)
+                raw_by_source = {}
+                for s in segments:
+                    src = s.get("source_file") or self.raw_video
+                    raw_by_source.setdefault(src, []).append(s)
+
+                utterances_by_source = {}
+                for src, src_segs in raw_by_source.items():
+                    utterances_by_source[src] = aligner.align_segments(src_segs, source_id=src)
+
+                # 3. 候选片段挖掘
+                _check_cancel()
+                _report("ANALYZING", 0.50, "正在挖掘候选片段并执行 SKU 视觉与卖点对齐...")
+                generator = CandidateGenerator(min_candidate_ms=1800, max_candidate_ms=12000, target_candidate_ms=5000)
+                all_candidates = []
+                for src, utts in utterances_by_source.items():
+                    shots_for_src = scene_cuts_by_source.get(src, [])
+                    cands = generator.generate_candidates(
+                        utts, product_profile, source_id=src, shots=shots_for_src, source_file=src
+                    )
+                    all_candidates.extend(cands)
+
+                # 4. 商品关系追踪（真实接通候选视频帧与视觉比对）
+                from src.core.frame_provider import VideoFrameProvider
+                from src.core.sequence_optimizer import InsufficientEvidenceError
+                from src.runtime.adapters.agent_protocol import AgentAuthRequiredError, AgentPermissionDeniedError, AgentStatus
+                policy = (self.spec.get("options", {}).get("automation", {}).get("quality_policy") or "standard")
+                is_strict_policy = (
+                    policy == "strict" or
+                    self.spec.get("options", {}).get("automation", {}).get("visual_verification") == "required" or
+                    self.options.get("automation", {}).get("quality_policy") == "strict"
+                )
+                source_reg = {}
+                if hasattr(self, "manifest") and self.manifest:
+                    for s in self.manifest.get("source_videos", []):
+                        source_reg[s["source_id"]] = s["path"]
+                        if s.get("filename"):
+                            source_reg[s["filename"]] = s["path"]
+                if hasattr(self, "raw_videos"):
+                    for idx, rv in enumerate(self.raw_videos, 1):
+                        source_reg[f"src_{idx:02d}"] = rv
+                        source_reg[os.path.basename(rv)] = rv
+                frame_provider = VideoFrameProvider(
+                    work_dir=self.work_dir,
+                    default_video_path=self.raw_video,
+                    source_registry=source_reg,
+                )
+                sku_tracker = SkuTracker()
+                relation_decisions = sku_tracker.track_candidates(
+                    all_candidates, product_profile, frame_provider=frame_provider, strict_vision=is_strict_policy
+                )
+                self._all_candidates_map = {c["candidate_id"]: c for c in all_candidates}
+
+                # 5. 多模态候选精排
+                ranker = CandidateRanker()
+                candidate_scores = ranker.score_candidates(
+                    all_candidates, product_profile, relation_decisions=relation_decisions
+                )
+
+                # 6. 全局序列优化与 Agent 编排
+                _check_cancel()
+                _report("DECIDING", 0.65, "正在执行排片序列优化与 Agent 镜头编排...")
+                scores_map = {s["candidate_id"]: s for s in candidate_scores.get("scores", [])}
+                eligible_candidates = [
+                    c for c in all_candidates
+                    if scores_map.get(c["candidate_id"], {}).get("eligible") is True
+                    and scores_map.get(c["candidate_id"], {}).get("product_relation", c.get("product_relation")) in ("SAME_SKU", "SAME_SKU_VARIANT", "ACCESSORY_OR_STYLING")
+                ]
+                allowed_cids_set = {c["candidate_id"] for c in eligible_candidates}
+                dur_range = (self.constraints.get("video", {}) or {}).get("duration_range", [45, 65])
+
+                if custom_sequence_proposal:
+                    for cid in custom_sequence_proposal.get("ordered_candidate_ids", []):
+                        if cid not in allowed_cids_set:
+                            raise ValueError(f"自定义提案包含未知或不合格候选 ID: {cid}")
+                    opt_res = {"status": "PROPOSED", "proposals": [custom_sequence_proposal]}
+                elif getattr(self, "agent_adapter", None):
+                    is_avail, avail_msg = self.agent_adapter.check_availability()
+                    if not is_avail:
+                        raise AgentAuthRequiredError(f"AGY CLI 工具未就绪: {avail_msg}")
+                    schema_p = os.path.join(PROJECT_ROOT, "contracts", "schemas", "sequence_proposals.schema.json")
+                    eligible_summary = [
+                        {
+                            "candidate_id": c["candidate_id"],
+                            "role": scores_map.get(c["candidate_id"], {}).get("narrative_role") or c.get("narrative_role") or "PROOF",
+                            "duration_ms": c["source_end_ms"] - c["source_start_ms"],
+                            "text": c.get("text", "")[:40],
+                            "product_relation": scores_map.get(c["candidate_id"], {}).get("product_relation") or c.get("product_relation", "SAME_SKU"),
+                            "selling_points": c.get("selling_point_evidence_refs", []),
+                        }
+                        for c in eligible_candidates
+                    ]
+                    style_preset = str(self.options.get("style_preset", "balanced")).strip().lower()
+                    prompt = (
+                        f"任务ID: {self.project_id}\n"
+                        f"风格偏好: {style_preset}\n"
+                        f"商品档案: {json.dumps(product_profile, ensure_ascii=False)}\n"
+                        f"候选片段池: {json.dumps(eligible_summary, ensure_ascii=False)}\n"
+                        f"目标成片时长区间: {dur_range[0]}s ~ {dur_range[1]}s\n"
+                        "请依据 sequence_proposals.schema.json 契约，从候选片段池中选取片段并排序，生成优选镜头序列提案。"
+                    )
+                    try:
+                        resp = self.agent_adapter.invoke(prompt, schema_p, self.work_dir, cancellation_token=self.cancel_token)
+                    except TypeError:
+                        resp = self.agent_adapter.invoke(prompt, schema_p, self.work_dir)
+
+                    if resp.status == AgentStatus.ERROR and "取消" in (resp.error_message or ""):
+                        from src.runtime.job_runner import JobCanceledError
+                        raise JobCanceledError("AGY 调用已被用户取消")
+                    elif resp.status == AgentStatus.AUTH_REQUIRED:
+                        raise AgentAuthRequiredError(resp.error_message or "AGY 未登录或凭证过期")
+                    elif resp.status == AgentStatus.PERMISSION_DENIED:
+                        raise AgentPermissionDeniedError(resp.error_message or "AGY 权限被软拒绝")
+                    elif resp.status == AgentStatus.SUCCESS:
+                        s_out = resp.structured_output or {}
+                        if s_out.get("status") == "INSUFFICIENT_EVIDENCE":
+                            gaps = s_out.get("evidence_gap") or ["Agent 判定素材证据不足"]
+                            raise InsufficientEvidenceError(f"本品素材证据不足: {'; '.join(gaps)}")
+                        proposals = s_out.get("proposals", [])
+                        if not proposals or not isinstance(proposals, list):
+                            raise ValueError("Agent 未输出有效提案列表")
+                        for p in proposals:
+                            used_spans: Dict[str, List[Tuple[int, int]]] = {}
+                            for cid in p.get("ordered_candidate_ids", []):
+                                if cid not in allowed_cids_set:
+                                    raise ValueError(f"Agent 决策包含未知幻觉候选 ID: {cid}")
+                                cand_obj = self._all_candidates_map.get(cid)
+                                if cand_obj:
+                                    src_k = cand_obj.get("source_id") or cand_obj.get("source_file") or "src_0"
+                                    st_ms = cand_obj.get("source_start_ms", 0)
+                                    en_ms = cand_obj.get("source_end_ms", 0)
+                                    for prev_st, prev_en in used_spans.get(src_k, []):
+                                        if max(st_ms, prev_st) < min(en_ms, prev_en):
+                                            raise ValueError(f"Agent 提案包含同源时间重叠片段: {cid} 与既选片段在 {src_k} 上重叠 [{st_ms}, {en_ms}]")
+                                    used_spans.setdefault(src_k, []).append((st_ms, en_ms))
+                        opt_res = s_out
+                    else:
+                        raise RuntimeError(f"Agent 决策调用失败: {resp.error_message}")
+                else:
+                    if len(eligible_candidates) == 0:
+                        raise InsufficientEvidenceError("本品素材证据不足: 所有候选片段均未通过精排门禁 (eligible=True)")
+                    style_preset = str(self.options.get("style_preset", "balanced")).strip().lower()
+                    opt = SequenceOptimizer(
+                        target_min_ms=int(dur_range[0] * 1000),
+                        target_max_ms=int(dur_range[1] * 1000),
+                        preferred_style=style_preset,
+                    )
+                    opt_res = opt.optimize_sequence(
+                        all_candidates, candidate_scores, product_profile, preferred_style=style_preset
+                    )
+
+                if opt_res.get("status") == "PROPOSED" and opt_res.get("proposals"):
+                    chosen_proposal = opt_res["proposals"][0]
+                    plan = compile_v3_plan(
+                        chosen_proposal,
+                        all_candidates,
+                        candidate_scores,
+                        self.spec,
+                        constraints=self.constraints,
+                        raw_video_path=self.raw_video,
+                    )
+                    print(f"  [V3 DIRECT-PLAN] 成功生成 V3 全局导演排片方案: {chosen_proposal['proposal_id']} "
+                          f"（风格={chosen_proposal.get('style')}，{len(plan['clips'])} 个分镜，预期时长 {plan['total_expected_duration']}s）")
+                elif opt_res.get("status") == "INSUFFICIENT_EVIDENCE":
+                    gaps = opt_res.get("evidence_gap") or ["可用本品素材累计时长不足"]
+                    raise InsufficientEvidenceError(f"本品素材证据不足: {'; '.join(gaps)}")
+            except (InsufficientEvidenceError, AgentAuthRequiredError, AgentPermissionDeniedError):
+                # 内容证据不足与授权错误均为关键门禁，绝不允许静默降级到旧版 build_plan 强行凑片！
+                raise
+            except ValueError as ve:
+                # 包含未知幻觉候选 ID 或契约违规，坚决阻断，严禁静默回退启发式凑片
+                if getattr(self, "agent_adapter", None) or custom_sequence_proposal:
+                    raise
+                print(f"  [V3 PLAN][WARN] V3 编排参数异常，降级回退至启发式 build_plan: {ve}")
+                plan = None
+            except Exception as v3_err:
+                if getattr(self, "agent_adapter", None) or custom_sequence_proposal:
+                    raise
+                print(f"  [V3 PLAN][WARN] V3 编排技术异常，降级回退至启发式 build_plan: {v3_err}")
+                plan = None
+
+            if not plan:
+                # 降级回退
+                pauses_by_source = self._detect_speech_pauses()
+                plan = build_plan(self.raw_video, segments, self.spec,
+                                  self.constraints, scene_cuts=scene_cuts,
+                                  cache_key=ck, work_dir=self.work_dir,
+                                  pauses_by_source=pauses_by_source,
+                                  scene_cuts_by_source=scene_cuts_by_source)
+                plan_source = "build_plan"
+                plan_forced = False
             # 保留自动计划的分镜与包装配置（人工精修只改时间轴）
             built_clips = list(plan.get("clips", []))
             built_plan_extras = {
@@ -1015,6 +1255,26 @@ class AgentDirector:
         except Exception as e:
             print(f"  [ALIGNMENT][WARN] 对齐校验工具执行异常（降级放行）: {e}")
 
+        # 决策 2.7: 视听接缝连续性审查与切点微调（V3 PR-07 ContinuityAuditor & CutOptimizer）
+        continuity_review = None
+        try:
+            from src.qc.continuity_qc import ContinuityAuditor
+            from src.core.cut_optimizer import CutOptimizer
+            c_auditor = ContinuityAuditor()
+            cand_map = getattr(self, "_all_candidates_map", None) or {}
+            continuity_review = c_auditor.audit_sequence_seams(plan.get("clips", []), cand_map)
+            cont_path = os.path.join(self.output_dir, "continuity_review.json")
+            with open(cont_path, "w", encoding="utf-8") as f:
+                json.dump(continuity_review, f, ensure_ascii=False, indent=2)
+            plan["continuity_review"] = continuity_review
+            cut_opt = CutOptimizer()
+            fixed_clips, opt_actions = cut_opt.optimize_cuts(plan.get("clips", []), continuity_review, plan=plan)
+            if opt_actions:
+                plan["clips"] = fixed_clips
+                print(f"  [CONTINUITY] 接缝微调完成 ({len(opt_actions)} 处)")
+        except Exception as ce:
+            print(f"  [CONTINUITY][WARN] 连续性审计异常（跳过）: {ce}")
+
         plan_path = os.path.join(self.work_dir, "plan.json")
         with open(plan_path, "w", encoding="utf-8") as f:
             json.dump(plan, f, ensure_ascii=False, indent=2)
@@ -1022,6 +1282,8 @@ class AgentDirector:
         # -------------------------------------------------------------
         # Phase 3: 工具链执行确定性渲染与混流
         # -------------------------------------------------------------
+        _check_cancel()
+        _report("RENDERING", 0.80, "正在渲染高定封面并执行音视频轨道合流...")
         print("\n>>> [PHASE 3] 工具链执行成片渲染与混流...")
 
         material_dir = self.get_material_dir()
@@ -1029,8 +1291,16 @@ class AgentDirector:
 
         final_cover_path = os.path.join(self.output_dir, f"{self.project_id}.jpg")
         cover_meta_path = os.path.join(self.output_dir, f"{self.project_id}_cover_render_meta.json")
+        base_fp = selected_cover.get("image_path")
+        if not base_fp or not os.path.isfile(base_fp):
+            base_fp = os.path.join(self.work_dir, "cover_candidates", "cover_placeholder.jpg")
+            if not os.path.isfile(base_fp):
+                from PIL import Image
+                os.makedirs(os.path.dirname(base_fp), exist_ok=True)
+                Image.new("RGB", (1080, 1920), color=(30, 30, 30)).save(base_fp)
+
         render_cover_with_meta(
-            base_frame_path=selected_cover["image_path"],
+            base_frame_path=base_fp,
             spec_data=self.spec,
             output_path=final_cover_path,
             meta_output_path=cover_meta_path,
@@ -1044,25 +1314,33 @@ class AgentDirector:
             cache_key=ck,
             # 必须透传：含 features 派生（render_profile=plain 决定是否烧字幕）
             constraints=self.constraints,
+            cancel_token=self.cancel_token,
         )
 
         # -------------------------------------------------------------
         # Phase 4: 自动化质检门禁与交付签署
         # -------------------------------------------------------------
+        _check_cancel()
+        _report("QC", 0.90, "正在执行技术参数与内容层双重质检门禁审核...")
         print("\n>>> [PHASE 4] 自动化质检门禁核验（constraints v{}）...".format(
             self.constraints.get("version", 1)))
         auditor = QcAuditor(self.constraints)
         ass_path = os.path.join(self.work_dir, "subtitles.ass")
         qc_report_path = os.path.join(self.output_dir, "qc_report.json")
         candidates_json = os.path.join(cover_cand_dir, "cover_candidates.json")
-        # B13：QC 阶段缓存（报告含全部断言明细才命中）
+        # B13：QC 阶段缓存（包含 plan_hash，计划变更时必须重新质检）
+        import hashlib
+        with open(plan_path, "rb") as pf:
+            plan_hash = hashlib.sha256(pf.read()).hexdigest()[:16]
+        qc_ck = f"{ck}|{plan_hash}" if ck else None
+
         qc_cached = None
-        if ck:
+        if qc_ck:
             from src.tools.stage_cache import load_stage
-            qc_cached = load_stage(self.work_dir, "qc", ck)
-        if qc_cached is not None:
-            print("[QC] 命中阶段缓存，跳过复测（约束与输入未变更）")
-            passed = qc_cached.get("all_passed", False)
+            qc_cached = load_stage(self.work_dir, "qc", qc_ck)
+        if qc_cached is not None and qc_cached.get("all_passed", False):
+            print("[QC] 命中阶段缓存，跳过复测（全绿已通过）")
+            passed = True
             auditor.report = qc_cached
         else:
             overlay_meta_path = os.path.join(self.work_dir, "video_overlay_meta.json")
@@ -1080,29 +1358,67 @@ class AgentDirector:
                 # 拒绝不合规项，实际交付项未必是 candidates[0]（2026-11-01 实测）。
                 chosen_cover_id=selected_cover.get("id"),
             )
-            if ck:
+            if qc_ck and passed:
                 from src.tools.stage_cache import save_stage
-                save_stage(self.work_dir, "qc", ck, auditor.report)
+                save_stage(self.work_dir, "qc", qc_ck, auditor.report)
 
-        # 产物直接交付并保存到用户提供的素材目录下，文件名与任务名字 (project_id) 完全一致
-        target_mp4 = os.path.join(material_dir, f"{self.project_id}.mp4")
-        target_cover = os.path.join(material_dir, f"{self.project_id}.jpg")
-        target_qc = os.path.join(material_dir, f"{self.project_id}_qc_report.json")
+        # 4.2 电商内容层与业务质量门禁（V3 PR-08 EditorialQcAuditor）
+        editorial_report = None
+        try:
+            from src.qc.editorial_qc import EditorialQcAuditor
+            policy = (self.spec.get("options", {}).get("automation", {}).get("quality_policy") or "standard")
+            ed_auditor = EditorialQcAuditor(policy=policy)
+            product_profile = None
+            if self.spec.get("product_profile_path") and os.path.isfile(self.spec["product_profile_path"]):
+                try:
+                    with open(self.spec["product_profile_path"], "r", encoding="utf-8") as pf:
+                        product_profile = json.load(pf)
+                except Exception:
+                    pass
+            if not product_profile:
+                from src.core.product_profile import build_product_profile
+                product_profile = build_product_profile(self.spec, spec_dir=self.work_dir, strict_missing_images=False, validate=False)
 
-        if os.path.abspath(final_mp4_path) != os.path.abspath(target_mp4):
-            shutil.copy2(out_mp4, target_mp4)
-        if os.path.abspath(final_cover_path) != os.path.abspath(target_cover):
-            shutil.copy2(final_cover_path, target_cover)
-        if os.path.exists(qc_report_path) and os.path.abspath(qc_report_path) != os.path.abspath(target_qc):
-            shutil.copy2(qc_report_path, target_qc)
+            editorial_report = ed_auditor.audit_editorial_quality(plan, product_profile, continuity_review)
+            ed_report_path = os.path.join(self.output_dir, "editorial_qc_report.json")
+            with open(ed_report_path, "w", encoding="utf-8") as f:
+                json.dump(editorial_report, f, ensure_ascii=False, indent=2)
+            print(f"  [EDITORIAL-QC] {editorial_report.get('summary')}")
+            if not editorial_report.get("passed", True) or editorial_report.get("block_count", 0) > 0:
+                print(f"  [EDITORIAL-QC][BLOCK] 内容质检未通过，触发阻断拦截 (block_count={editorial_report.get('block_count', 0)})")
+                passed = False
+        except Exception as ee:
+            print(f"  [EDITORIAL-QC][FAIL-CLOSED] 内容质检异常，触发安全阻断: {ee}")
+            passed = False
 
-        # 兼容旧版读取：在 output_dir 留存 _final.mp4 和 _cover.jpg 副本
+        if not editorial_report or not editorial_report.get("passed", False) or editorial_report.get("block_count", 0) > 0:
+            print(f"  [EDITORIAL-QC][BLOCK] 内容质检未完全通过，触发阻断拦截")
+            passed = False
+
+        # 产物交付：严格写入 output_dir (output/<run_id>/)
+        # 禁止向素材目录复制最终成片，禁止删除素材目录中的已有文件
         legacy_mp4 = os.path.join(self.output_dir, f"{self.project_id}_final.mp4")
         legacy_cover = os.path.join(self.output_dir, f"{self.project_id}_cover.jpg")
         if not os.path.exists(legacy_mp4) and os.path.exists(out_mp4):
             shutil.copy2(out_mp4, legacy_mp4)
         if not os.path.exists(legacy_cover) and os.path.exists(final_cover_path):
             shutil.copy2(final_cover_path, legacy_cover)
+
+        # 更新最新产物指针 (output/latest.json)
+        try:
+            latest_info = {
+                "project_id": self.project_id,
+                "run_id": getattr(self.project_paths, "run_id", "default"),
+                "output_dir": self.output_dir,
+                "video_path": out_mp4 if passed else "",
+                "cover_path": final_cover_path if passed else "",
+                "qc_passed": passed,
+                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            with open(self.project_paths.latest_pointer, "w", encoding="utf-8") as lf:
+                json.dump(latest_info, lf, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"  [DIRECTOR][WARN] 更新 latest.json 失败: {e}")
 
         decision_manifest = {
             "project_id": self.project_id,
@@ -1120,13 +1436,17 @@ class AgentDirector:
             # 2026-10-27 新增：一致性预检 / 对话脚本 / 违规处理登记
             "consistency_check": consistency_report,
             "dialogue_script_stats": dialogue_stats,
+            "continuity_review": continuity_review,
+            "editorial_qc": editorial_report,
             "final_deliverables": {
-                "video": target_mp4,
-                "cover": target_cover,
+                "video": out_mp4 if passed else "",
+                "cover": final_cover_path if passed else "",
                 "cover_render_meta": cover_meta_path,
-                "qc_report": target_qc,
+                "qc_report": qc_report_path if passed else "",
+                "editorial_qc_report": ed_report_path if (editorial_report and passed) else "",
                 "output_dir_video": out_mp4,
                 "output_dir_cover": final_cover_path,
+                "delivery_status": "DELIVERED" if passed else "QC_FAILED",
             },
         }
         manifest_path = os.path.join(self.output_dir, "agent_decision_manifest.json")
@@ -1136,13 +1456,17 @@ class AgentDirector:
         elapsed = time.time() - start_time
         print(f"\n=======================================================")
         print(f"Agent 导演总装与质检验收完成! 总耗时: {elapsed:.1f} 秒")
-        print(f"最终成片（已保存至素材目录）: {target_mp4} ({actual_dur:.2f}s)")
-        print(f"高定封面（已保存至素材目录）: {target_cover}")
-        print(f"质检报告（已保存至素材目录）: {target_qc}")
+        if passed:
+            print(f"最终成片（输出交付目录）: {out_mp4} ({actual_dur:.2f}s)")
+            print(f"高定封面（输出交付目录）: {final_cover_path}")
+            print(f"质检报告（输出交付目录）: {qc_report_path}")
+        else:
+            print(f"成片质检未通过，已隔离至输出目录: {out_mp4}")
         print(f"决策清单: {manifest_path}")
         print(f"质检结论: {'ALL PASS' if passed else 'BLOCK FAILED'}"
               f"（{len(auditor.report.get('warnings', []))} 条 WARN）")
         print(f"=======================================================\n")
+        _report("DELIVERED", 1.0, "任务已圆满完成交付")
         return decision_manifest
 
 

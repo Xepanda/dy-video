@@ -43,18 +43,39 @@ def _frame_diff(gray_a: np.ndarray, gray_b: np.ndarray,
     return 0.5 * pixel + 0.5 * hist_d
 
 
+def nms_scene_cuts(
+    raw_cuts: List[Tuple[float, float]],
+    min_gap_sec: float = 0.8,
+) -> List[float]:
+    """对原始切点进行非极大抑制（NMS）：每个 min_gap_sec 邻域只保留 score 最高者。
+
+    若 score 相同，按时间升序优先保留先出现的点（保证确定性）。
+    """
+    if not raw_cuts:
+        return []
+    sorted_raw = sorted(raw_cuts, key=lambda x: (-x[1], x[0]))
+    selected: List[Tuple[float, float]] = []
+    for t, s in sorted_raw:
+        if any(abs(t - st) < min_gap_sec for st, _ in selected):
+            continue
+        selected.append((t, s))
+    return sorted(round(t, 2) for t, _ in selected)
+
+
 def detect_scene_cuts(
     video_path: str,
     sample_fps: float = 5.0,
     base_threshold: float = 0.30,
     k_std: float = 3.0,
     min_gap_sec: float = 0.8,
-    max_scan_sec: float = 600.0,
+    max_scan_sec: Optional[float] = None,
     cache_key: str = None,
     work_dir: str = None,
 ) -> List[float]:
     """检测镜头切换点，返回 cut 时间戳（秒，升序）。
 
+    说明：采用基于 OpenCV 的自适应 HSV 直方图差分与动态阈值 NMS 检测镜头切换点。
+    默认 max_scan_sec 为 None，全量扫描整段长直播素材；若显式指定秒数则限制扫描时长。
     cache_key + work_dir 提供时启用阶段缓存（B13）：命中则跳过重算。
     """
     if cache_key and work_dir:
@@ -68,7 +89,10 @@ def detect_scene_cuts(
         raise FileNotFoundError(f"无法打开视频: {video_path}")
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration = min(total_frames / fps, max_scan_sec)
+    if max_scan_sec is None or max_scan_sec <= 0:
+        duration = total_frames / fps
+    else:
+        duration = min(total_frames / fps, float(max_scan_sec))
     step = max(1, int(round(fps / sample_fps)))
 
     diffs: List[Tuple[float, float]] = []  # (timestamp, diff_score)
@@ -102,15 +126,7 @@ def detect_scene_cuts(
     threshold = max(base_threshold, float(scores.mean() + k_std * scores.std()))
 
     raw_cuts = [(t, s) for t, s in diffs if s > threshold]
-    # 非极大抑制：min_gap 内只留最高分
-    cuts: List[float] = []
-    for t, s in raw_cuts:
-        if cuts and t - cuts[-1] < min_gap_sec:
-            if s > max(s2 for t2, s2 in raw_cuts if abs(t2 - cuts[-1]) < min_gap_sec):
-                cuts[-1] = t
-        else:
-            cuts.append(t)
-    result = sorted(round(t, 2) for t in cuts)
+    result = nms_scene_cuts(raw_cuts, min_gap_sec=min_gap_sec)
     if cache_key and work_dir:
         from src.tools.stage_cache import save_stage
         save_stage(work_dir, "scenes", cache_key, result)

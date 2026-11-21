@@ -81,6 +81,10 @@ class DecisionGateway:
 
     def validate_cover_candidate(self, cand: Dict[str, Any]) -> Tuple[bool, List[str]]:
         """对单个封面候选执行 BLOCK 级约束校验（与 QC 双源复测互补的选段前置门禁）。"""
+        if cand.get("strategy") in ("product_image", "fallback_placeholder") or cand.get("type") in ("product_image", "fallback_placeholder"):
+            # 商品图优先策略或兜底占位：采用商品主图或占位底图，豁免真人主播人脸与姿态约束
+            return True, []
+
         cover_c = self.constraints.get("cover", {}) or {}
         violations: List[str] = []
 

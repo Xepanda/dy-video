@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "plan_v3.schema.json",
+  "title": "plan_v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "job_id",
+    "project_id",
+    "selected_proposal_id",
+    "clips",
+    "target_duration_ms",
+    "estimated_duration_ms",
+    "product_profile_hash",
+    "constraints_hash",
+    "decision_evidence_refs"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": [
+        "3.0"
+      ]
+    },
+    "job_id": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "selected_proposal_id": {
+      "type": "string"
+    },
+    "clips": {
+      "type": "array",
+      "items": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "plan_clip",
+        "title": "plan_clip",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "candidate_id",
+          "source_id",
+          "source_start_ms",
+          "source_end_ms",
+          "timeline_start_ms",
+          "narrative_role",
+          "transition_in",
+          "reason",
+          "evidence_refs"
+        ],
+        "properties": {
+          "candidate_id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "source_start_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "source_end_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "timeline_start_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "narrative_role": {
+            "type": "string"
+          },
+          "transition_in": {
+            "type": "string",
+            "enum": [
+              "HARD_CUT",
+              "FADE",
+              "J_CUT",
+              "L_CUT"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "target_duration_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "estimated_duration_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "product_profile_hash": {
+      "type": "string"
+    },
+    "constraints_hash": {
+      "type": "string"
+    },
+    "decision_evidence_refs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

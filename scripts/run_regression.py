@@ -58,6 +58,18 @@ UNIT_TESTS = [
     "tests/test_desktop_spec_creator.py",
     "tests/test_feature_flags.py",
     "tests/test_clip_alignment.py",
+    "tests/test_scene_cuts.py",
+    "tests/test_product_profile.py",
+    "tests/test_utterance_candidates.py",
+    "tests/test_sku_tracker.py",
+    "tests/test_sequence_optimizer.py",
+    "tests/test_job_runner_and_adapters.py",
+    "tests/test_cut_and_continuity.py",
+    "tests/test_editorial_qc.py",
+    "tests/test_project_context.py",
+    "tests/test_pr16_regressions.py",
+    "tests/test_pr16_round3_p0_p1.py",
+    "tests/test_pr16_round4_p0_p1.py",
 ]
 
 PYTHON = sys.executable

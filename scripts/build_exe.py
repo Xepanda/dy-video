@@ -28,14 +28,15 @@ def build_exe():
         "--windowed",  # 无黑框控制台
         "--name", internal_name,
         "--collect-all", "webview",
-        # 统一能力开关的唯一定义源：界面面板从 contracts/features.yaml 渲染，
-        # 不随包进去，换机器/挪目录后 exe 里的开关面板会是空的。
-        "--add-data", f"{os.path.join(PROJECT_ROOT, 'contracts', 'features.yaml')}{os.pathsep}contracts",
+        # 统一契约与模式：将 contracts 下全部 schema/yaml 打包入内
+        "--add-data", f"{os.path.join(PROJECT_ROOT, 'contracts')}{os.pathsep}contracts",
         "--hidden-import", "clr",
         "--hidden-import", "pythonnet",
         "--hidden-import", "webview.platforms.winforms",
         "--hidden-import", "webview.platforms.edgechromium",
         "--hidden-import", "src.tools.feature_flags",
+        "--hidden-import", "src.core.project_context",
+        "--hidden-import", "src.runtime.job_runner",
         "--hidden-import", "yaml",
         "--distpath", dist_dir,
         "--workpath", build_dir,

@@ -16,6 +16,7 @@ video_assembler.py - FFmpeg 音画物理强锁组装引擎与动态图层合成
 import os
 import sys
 import json
+import time
 import subprocess
 from typing import Dict, Any, List, Tuple, Optional
 from PIL import Image, ImageDraw, ImageFont
@@ -42,10 +43,18 @@ OUT_W, OUT_H, FPS = 1080, 1920, 60
 FONT_BOLD = "C:/Windows/Fonts/msyhbd.ttc" if os.name == "nt" else "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 
-def run_cmd(cmd: List[str], cwd: str = None, desc: str = "") -> str:
-    """运行子进程并实时捕获输出"""
+def run_cmd(cmd: List[str], cwd: str = None, desc: str = "", cancel_token: Any = None) -> str:
+    """运行子进程并实时捕获输出，支持取消令牌中断"""
+    if cancel_token:
+        is_c = getattr(cancel_token, "is_canceled", False)
+        if callable(is_c):
+            is_c = is_c()
+        if is_c:
+            from src.runtime.job_runner import JobCanceledError
+            raise JobCanceledError(f"FFmpeg 执行已被取消 ({desc})")
+
     print(f"[FFMPEG] {desc or cmd[0]} ...", flush=True)
-    res = subprocess.run(
+    proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -54,10 +63,39 @@ def run_cmd(cmd: List[str], cwd: str = None, desc: str = "") -> str:
         errors="replace",
         cwd=cwd
     )
-    if res.returncode != 0:
-        err_msg = res.stderr[-1500:] if res.stderr else "未知错误"
+    if cancel_token and hasattr(cancel_token, "register_process"):
+        cancel_token.register_process(proc)
+
+    try:
+        while True:
+            if cancel_token:
+                is_c = getattr(cancel_token, "is_canceled", False)
+                if callable(is_c):
+                    is_c = is_c()
+                if is_c:
+                    try:
+                        from src.runtime.job_runner import terminate_process_tree
+                        terminate_process_tree(proc)
+                    except Exception:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                    from src.runtime.job_runner import JobCanceledError
+                    raise JobCanceledError(f"FFmpeg 执行已被用户取消 ({desc})")
+            ret = proc.poll()
+            if ret is not None:
+                stdout, stderr = proc.communicate()
+                break
+            time.sleep(0.05)
+    finally:
+        if cancel_token and hasattr(cancel_token, "unregister_process"):
+            cancel_token.unregister_process(proc)
+
+    if ret != 0:
+        err_msg = stderr[-1500:] if stderr else "未知错误"
         raise RuntimeError(f"FFmpeg 执行失败 ({desc}):\n{err_msg}")
-    return res.stdout
+    return stdout
 
 
 def ffprobe_get_duration(path: str) -> float:
@@ -263,10 +301,11 @@ def build_transition_chain(n_clips: int, trans_on: bool, trans_d: float,
 
 
 class VideoAssembler:
-    def __init__(self, work_dir: str, constraints: Dict[str, Any] = None):
+    def __init__(self, work_dir: str, constraints: Dict[str, Any] = None, cancel_token: Any = None):
         self.work_dir = os.path.abspath(work_dir)
         self.clips_dir = os.path.join(self.work_dir, "clips")
         self.constraints = constraints or {}
+        self.cancel_token = cancel_token
         self.occlusion_log: Dict[str, Any] = {}
         self.mirror_abandoned: set = set()
         os.makedirs(self.clips_dir, exist_ok=True)
@@ -275,6 +314,9 @@ class VideoAssembler:
         self.violation_report: Dict[str, Any] = {"applied": {}}
         # 放大镜素材缓存（clip_id -> (mask_png, ring_png, ring_size)）
         self._magnifier_assets: Dict[str, Any] = {}
+
+    def _run_cmd(self, cmd: List[str], cwd: str = None, desc: str = "") -> str:
+        return run_cmd(cmd, cwd=cwd or self.work_dir, desc=desc, cancel_token=self.cancel_token)
 
     def _load_violation_handling(self) -> Dict[str, Any]:
         hp = os.path.join(self.work_dir, "violation_handling.json")
@@ -494,7 +536,7 @@ class VideoAssembler:
 
         tmp_out = clip_path + ".occ.mp4"
         try:
-            run_cmd([
+            self._run_cmd([
                 "ffmpeg", "-y",
                 "-i", clip_path,
                 "-i", patch,
@@ -528,7 +570,7 @@ class VideoAssembler:
         """
         tmp_out = clip_path + ".unflip.mp4"
         try:
-            run_cmd([
+            self._run_cmd([
                 "ffmpeg", "-y",
                 "-i", clip_path,
                 "-vf", "hflip",
@@ -559,15 +601,72 @@ class VideoAssembler:
             "[amix]loudnorm=I=-14:TP=-0.5:LRA=11:print_format=json[aout]"
         )
         try:
-            res = subprocess.run(
-                ["ffmpeg", "-hide_banner", "-nostats",
-                 "-f", "concat", "-safe", "0", "-i", concat_txt,
-                 "-i", boom_wav,
-                 "-filter_complex", fc_m,
-                 "-map", "[aout]", "-f", "null", "-"],
-                cwd=self.work_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, encoding="utf-8", errors="replace", timeout=120)
-            m = _re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", res.stderr, _re.DOTALL)
+            cmd = [
+                "ffmpeg", "-hide_banner", "-nostats",
+                "-f", "concat", "-safe", "0", "-i", concat_txt,
+                "-i", boom_wav,
+                "-filter_complex", fc_m,
+                "-map", "[aout]", "-f", "null", "-"
+            ]
+            if self.cancel_token:
+                is_c = getattr(self.cancel_token, "is_canceled", False)
+                if callable(is_c):
+                    is_c = is_c()
+                if is_c:
+                    from src.runtime.job_runner import JobCanceledError
+                    raise JobCanceledError("响度测量已被用户取消")
+
+            proc = subprocess.Popen(
+                cmd,
+                cwd=self.work_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace"
+            )
+            if self.cancel_token and hasattr(self.cancel_token, "register_process"):
+                self.cancel_token.register_process(proc)
+
+            st = time.time()
+            res_stderr = ""
+            try:
+                while True:
+                    if self.cancel_token:
+                        is_c = getattr(self.cancel_token, "is_canceled", False)
+                        if callable(is_c):
+                            is_c = is_c()
+                        if is_c:
+                            try:
+                                from src.runtime.job_runner import terminate_process_tree
+                                terminate_process_tree(proc)
+                            except Exception:
+                                try:
+                                    proc.kill()
+                                except Exception:
+                                    pass
+                            from src.runtime.job_runner import JobCanceledError
+                            raise JobCanceledError("任务已被用户取消")
+                    ret = proc.poll()
+                    if ret is not None:
+                        _, res_stderr = proc.communicate()
+                        break
+                    if time.time() - st > 120:
+                        try:
+                            from src.runtime.job_runner import terminate_process_tree
+                            terminate_process_tree(proc)
+                        except Exception:
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
+                        break
+                    time.sleep(0.05)
+            finally:
+                if self.cancel_token and hasattr(self.cancel_token, "unregister_process"):
+                    self.cancel_token.unregister_process(proc)
+
+            m = _re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", res_stderr, _re.DOTALL)
             if not m:
                 print("[LOUDNORM] 测量输出解析失败，降级单遍动态模式")
                 return {}
@@ -612,7 +711,7 @@ class VideoAssembler:
         # —— 简单路径 -—
         if not magnifier_on and not mosaic_regions:
             vf = build_clip_filter(c, self.constraints.get("zoom_effect", {}) or {})
-            run_cmd([
+            self._run_cmd([
                 "ffmpeg", "-y",
                 "-ss", f"{c['st']:.3f}",
                 "-i", src,
@@ -715,7 +814,7 @@ class VideoAssembler:
                 "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
                 out_clip]
-        run_cmd(cmd, desc=f"复合特效抽取 {c['id']} "
+        self._run_cmd(cmd, desc=f"复合特效抽取 {c['id']} "
                           f"(放大镜={magnifier_applied}, 打码={len(mosaic_regions)})")
         self.violation_report["applied"][c["id"]] = {
             "audio_mute_ranges": mute_ranges,
@@ -771,7 +870,7 @@ class VideoAssembler:
                 left_raw = os.path.join(self.clips_dir, f"{c['id']}_L.mp4")
                 right_raw = os.path.join(self.clips_dir, f"{c['id']}_R.mp4")
                 for raw_path, st in ((left_raw, c["st"]), (right_raw, pair_st)):
-                    run_cmd([
+                    self._run_cmd([
                         "ffmpeg", "-y",
                         "-ss", f"{st:.3f}", "-i", src,
                         "-t", f"{c['dur']:.3f}",
@@ -806,7 +905,7 @@ class VideoAssembler:
                 else:
                     vc += "[vdiv]"
                     label_in = []
-                run_cmd([
+                self._run_cmd([
                     "ffmpeg", "-y",
                     "-i", left_raw, "-i", right_raw,
                 ] + label_in + [
@@ -912,6 +1011,9 @@ class VideoAssembler:
         if not micro_afade_sec:
             _sr_t = (self.constraints.get("slicing_rules", {}) or {}).get("transition_style", {}) or {}
             micro_afade_sec = float(_sr_t.get("micro_afade_sec", 0.0) or 0.0)
+        if any(c.get("_audio_gain_match") for c in plan.get("clips", [])):
+            micro_afade_sec = max(micro_afade_sec, 0.015)
+            print("[ASSEMBLER] 检测到跨源接缝 _audio_gain_match，已激活音频微淡变电平匹配")
         # R8：Boom 音效开关（参考成片实测无音效）
         boom_enabled = bool(_astyle.get("boom_sfx_enabled", True)) if _astyle else True
         if _astyle:
@@ -981,12 +1083,11 @@ class VideoAssembler:
             generate_sub_bass_boom(boom_wav, duration=1.2)
         else:
             try:
-                subprocess.run(
+                self._run_cmd(
                     ["ffmpeg", "-y", "-f", "lavfi", "-i",
                      "anullsrc=r=48000:cl=stereo", "-t", "1.2",
                      "-c:a", "pcm_s16le", boom_wav],
-                    cwd=self.work_dir, stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE, timeout=60)
+                    cwd=self.work_dir, desc="Boom 静音占位轨")
                 print("[ASSEMBLER] Boom 音效已按 R8 关闭（生成静音占位轨）")
             except Exception as e:
                 print(f"[ASSEMBLER] 生成静音占位轨失败（{e}），回退到生成音效")
@@ -1214,7 +1315,7 @@ class VideoAssembler:
         ]
 
         os.makedirs(os.path.dirname(os.path.abspath(output_mp4_path)), exist_ok=True)
-        run_cmd([
+        self._run_cmd([
             "ffmpeg", "-y",
         ] + inputs + [
             "-filter_complex", ";".join(fc),

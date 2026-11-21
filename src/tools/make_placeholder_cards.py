@@ -111,7 +111,17 @@ def ensure_placeholder_cards(spec: dict, project_id: str, out_dir: str = None,
     - 缺失 → 生成 n_cards 张占位图并写回 spec（打上 placeholder 标记）。
     幂等：重复调用不会重复生成（已登记的占位图直接复用）。
     """
-    out_dir = out_dir or os.path.join(PROJECT_ROOT, "data", "placeholders")
+    if not out_dir:
+        spec_work_dir = spec.get("work_dir")
+        if spec_work_dir:
+            out_dir = os.path.join(spec_work_dir, "placeholders")
+        else:
+            try:
+                from src.core.project_context import get_project_paths
+                paths = get_project_paths(project_id)
+                out_dir = os.path.join(paths.work_dir, "placeholders")
+            except Exception:
+                out_dir = os.path.join(PROJECT_ROOT, "work", project_id, "placeholders")
     os.makedirs(out_dir, exist_ok=True)
 
     existing = [i for i in (spec.get("product", {}) or {}).get("item_images", [])

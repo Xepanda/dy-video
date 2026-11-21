@@ -190,9 +190,23 @@ def analyze_story_segments(
                                  os.path.splitext(tag)[0] + ".whisper.json")
         verified_cache = os.path.join(cache_dir, "asr",
                                       os.path.splitext(tag)[0] + ".verified.json")
-        raw_segs = asr.transcribe_video(src_path, cache_json_path=raw_cache,
-                                        initial_prompt=prompt, cache_key=src_key)
-        segs, asr_report = verifier.verify_and_correct(raw_segs)
+        try:
+            raw_segs = asr.transcribe_video(src_path, cache_json_path=raw_cache,
+                                            initial_prompt=prompt, cache_key=src_key)
+        except Exception as e:
+            print(f"[STORY-ANALYZER][WARN] 视频语音转录失败 ({tag}): {e}")
+            raw_segs = []
+
+        try:
+            segs, asr_report = verifier.verify_and_correct(raw_segs)
+        except AsrReviewError as e:
+            print(f"[STORY-ANALYZER] 源素材 {tag} 未通过 ASR 执行者审核，已阻断该源选段: {e}")
+            per_source.append({
+                "source_file": src_path, "source_tag": tag,
+                "raw_segments": len(raw_segs), "verified_segments": 0,
+                "corrected": 0, "review_passed": False, "review_error": str(e),
+            })
+            continue
         # —— 兜底审核（需求2/4 第二重保险）——
         # 用媒体真实时长做识别密度校验（verify_and_correct 内部因未知时长会跳过 A5）。
         try:
@@ -233,6 +247,9 @@ def analyze_story_segments(
     # 多源模式下保留一份合并的 verified 缓存（兼容既有下游读取路径）
     verified_cache = os.path.join(cache_dir, "whisper_segments_verified.json")
     with open(verified_cache, "w", encoding="utf-8") as f:
+        json.dump(verified_segs, f, ensure_ascii=False, indent=2)
+    legacy_cache = os.path.join(cache_dir, "whisper_segments.json")
+    with open(legacy_cache, "w", encoding="utf-8") as f:
         json.dump(verified_segs, f, ensure_ascii=False, indent=2)
 
     # 3. 语义分类打标

@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "product_relation_decisions.schema.json",
+  "title": "product_relation_decisions",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "decisions"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": [
+        "3.0"
+      ]
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "product_relation_decision",
+        "title": "product_relation_decision",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "candidate_id",
+          "relation",
+          "confidence",
+          "evidence_refs",
+          "text_span_ids",
+          "reasons",
+          "evidence_gap"
+        ],
+        "properties": {
+          "candidate_id": {
+            "type": "string"
+          },
+          "relation": {
+            "type": "string",
+            "enum": [
+              "SAME_SKU",
+              "SAME_SKU_VARIANT",
+              "ACCESSORY_OR_STYLING",
+              "OTHER_SKU",
+              "UNCERTAIN"
+            ]
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "text_span_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "evidence_gap": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

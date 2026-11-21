@@ -1,26 +1,26 @@
 {
-  "timestamp": "2026-10-24 21:36:01",
+  "timestamp": "2026-11-21 17:46:54",
   "layers": {
     "unit_tests": {
       "tests/test_improvements.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": "[BUILD-PLAN] 特效决策: {'none': 3, 'hflip': 1}（挂角贴纸 4 个）\n[BUILD-PLAN] 特效决策: {'none': 3, 'hflip': 1}（挂角贴纸 4 个）\n[COVER] 商品图为空：跳过贴图渲染，封面仅保留直播画面 + 品牌区 + 商品名\n[COVER v2] MIXCITY 风格封面已生成（金色渐变商品名）: D:\\Projects\\dy-live-ecommerce-editor\\data\\_test_cover_v2.jpg\n[COVER] 商品图为空：跳过贴图渲染，封面仅保留直播画面 + 品牌区 + 商品名\n[COVER v2] MIXCITY 风格封面已生成（金色渐变商品名）: D:\\Projects\\dy-live-ecommerce-editor\\data\\_test_cover_wrap.jpg\n"
+        "tail": "挂角贴纸 6 个）\n[BUILD-PLAN] 特效决策: {'none': 6, 'hflip': 1}（挂角贴纸 7 个）\n[BUILD-PLAN] 特效决策: {'none': 3, 'hflip': 1}（挂角贴纸 4 个）\n[COVER] 商品图为空：跳过贴图渲染，封面仅保留直播画面 + 品牌区 + 商品名\n[COVER v2] MIXCITY 风格封面已生成（金色渐变商品名）: D:\\Projects\\dy-live-ecommerce-editor\\data\\_test_cover_v2.jpg\n[COVER] 商品图为空：跳过贴图渲染，封面仅保留直播画面 + 品牌区 + 商品名\n[COVER v2] MIXCITY 风格封面已生成（金色渐变商品名）: D:\\Projects\\dy-live-ecommerce-editor\\data\\_test_cover_wrap.jpg\n"
       },
       "tests/test_pipeline_units.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": "料【半岛棉】匹配))\n            [3.60s ~ 5.80s] 上身之后人都瘦眉了，而且超选瘦。 -> 上身之后人都瘦没了，而且超显瘦。 (瘦眉了|瘦美了|瘦梅了 -> 瘦没了 (修身显瘦夸张修辞【人都瘦没了】))\n            [6.00s ~ 8.00s] 平时如果拿不准的就不要卡马，正常按马术拍。 -> 平时如果拿不准的就不要卡码，正常按码数拍。 (卡马 -> 卡码 (服装尺码选购用语【卡码】))\n[ASR-AGENT] 质检审计报告已落盘: C:\\Users\\ePanda\\AppData\\Local\\Temp\\tmps0v_nhcd.json\n[ASR-REVIEW] 审核通过：3/3 句有效，1 条 WARN（占比 0.00）→ 允许进入后续流程\n            [WARN A5_NO_DURATION] #-1 未提供媒体时长，跳过识别密度校验\n"
+        "tail": "料【半岛棉】匹配))\n            [3.60s ~ 5.80s] 上身之后人都瘦眉了，而且超选瘦。 -> 上身之后人都瘦没了，而且超显瘦。 (瘦眉了|瘦美了|瘦梅了 -> 瘦没了 (修身显瘦夸张修辞【人都瘦没了】))\n            [6.00s ~ 8.00s] 平时如果拿不准的就不要卡马，正常按马术拍。 -> 平时如果拿不准的就不要卡码，正常按码数拍。 (卡马 -> 卡码 (服装尺码选购用语【卡码】))\n[ASR-AGENT] 质检审计报告已落盘: C:\\Users\\ePanda\\AppData\\Local\\Temp\\tmp8gflxkaa.json\n[ASR-REVIEW] 审核通过：3/3 句有效，1 条 WARN（占比 0.00）→ 允许进入后续流程\n            [WARN A5_NO_DURATION] #-1 未提供媒体时长，跳过识别密度校验\n"
       },
       "tests/test_ocr_purity.py": {
         "status": "PASS",
         "returncode": 0,
         "tail": "[TEST-B11] 引擎=rapidocr 阈值=0.02 min_box_area=400\n  [PASS] 纯净封面: ratio=0.00% (boxes=0, exempt=0) 期望通过 实测通过\n  [PASS] 店招大字封杀: ratio=12.46% (boxes=2, exempt=0) 期望拦截 实测拦截\n  [PASS] 模板文字豁免: ratio=0.00% (boxes=0, exempt=2) 期望通过 实测通过\n  [PASS] 极小噪点豁免: ratio=0.00% (boxes=0, exempt=0) 期望通过 实测通过\n  [PASS] 中等背景文字封杀: ratio=2.61% (boxes=1, exempt=0) 期望拦截 实测拦截\n  [PASS] 单调性: 纯净(0.00%) < 店招(12.60%)\n\n[TEST-B11] 全部通过\n"
       },
-      "tests/test_llm_verifier.py": {
+      "tests/test_agent_correction_review.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": " ASR 错词/语境歧义 (引擎: LLM (gpt-4o-mini @ http://127.0.0.1:65329/v1))\n[ASR-AGENT] 引擎分歧审计: 1 句两引擎结果不一致（已记录供人工复核）\n            [0.00s ~ 2.50s] 今天我们来看这个半导棉的开衫 -> 今天我们来看这个半岛棉的开衫 (面料名纠错)\n[ASR-REVIEW] 审核通过：3/3 句有效，2 条 WARN（占比 0.00）→ 允许进入后续流程\n            [WARN A5_NO_DURATION] #-1 未提供媒体时长，跳过识别密度校验\n            [WARN A8_LOW_SEMANTIC] #-1 全篇商品语义词命中仅 1 个，疑似非商品内容或识别失败\n[PASS] 用例8 markdown 围栏 JSON 解析\n\n[TEST-B15] 全部通过\n"
+        "tail": " 处 ASR 错词/语境歧义 (引擎: Agent review (file, 0 处修正))\n[ASR-AGENT] 引擎分歧审计: 2 句两引擎结果不一致（已记录供人工复核）\n[ASR-AGENT] 质检审计报告已落盘: C:\\Users\\ePanda\\AppData\\Local\\Temp\\tmpdyinx7z4\\asr_report.json\n[ASR-REVIEW] 审核通过：3/3 句有效，2 条 WARN（占比 0.00）→ 允许进入后续流程\n            [WARN A5_NO_DURATION] #-1 未提供媒体时长，跳过识别密度校验\n            [WARN A8_LOW_SEMANTIC] #-1 全篇商品语义词命中仅 1 个，疑似非商品内容或识别失败\n[PASS] 用例5 index 越界拦截\n\n[TEST-AGENT-REVIEW] 全部通过\n"
       },
       "tests/test_chatcut_bridge.py": {
         "status": "PASS",
@@ -30,17 +30,17 @@
       "tests/test_blacklist_precision.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": "ASS] 放行: 大家都来看这个面料\n\n[TEST-黑名单精度] C. 库存/促销/换款必须拦截\n  [PASS] 拦截: 只剩最后三条了我要赶紧 (命中库存/促销 (.*只剩.*))\n  [PASS] 拦截: 库存不多了宝宝们 (命中库存/促销 (.*库存.*))\n  [PASS] 拦截: 上链接了宝宝们 (命中库存/促销 (.*上链接.*))\n  [PASS] 拦截: 299秒杀 (命中价格表达)\n  [PASS] 拦截: 你们今天福利来啦 (命中库存/促销 (.*福利.*))\n  [PASS] 拦截: 我们来穿下一款 (命中换款/离场 (.*下一款.*))\n  [PASS] 拦截: 主播换衣服了 (命中换款/离场 (.*主播.*(换|走|下播|下班).*)\n  [PASS] 拦截: 这个款已经断码了只剩大码 (命中库存/促销 (.*只剩.*))\n\n[TEST-黑名单精度] 全部通过\n"
+        "tail": " (命中库存/促销 (.*只剩.*))\n\n[TEST-黑名单精度] D. 福利类措辞按开关分流（allow_welfare / block_all）\n  [PASS] 放行福利名词: 这个是福利款\n  [PASS] 放行福利名词: 质感很福利\n  [PASS] 放行福利名词: 福利感拉满\n  [PASS] 放行福利名词: 这个福利款很显瘦\n  [PASS] 拦截福利交易话术: 你们今天福利来啦 (命中库存/促销 (.*福利.*))\n  [PASS] 拦截福利交易话术: 抢福利 (命中库存/促销 (.*福利.*))\n  [PASS] 拦截福利交易话术: 福利名额 (命中库存/促销 (.*福利.*))\n  [PASS] 拦截福利交易话术: 福利链接 (命中库存/促销 (.*福利.*))\n  [PASS] 拦截福利交易话术: 福利价九十九 (命中价格表达)\n\n[TEST-黑名单精度] 全部通过\n"
       },
       "tests/test_multi_source.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": "[ASR-REVIEW] 审核门禁已挂载到 AsrContextVerifier.verify_and_correct\n[PASS] 用例1 不跨文件合并（2 块，A=1 B=1）\n[BUILD-PLAN] 特效决策: {'none': 1}（挂角贴纸 1 个）\n[PASS] 用例2 修剪后仍保留来源（1 个 clip）\n[BUILD-PLAN] 特效决策: {'none': 2}（挂角贴纸 2 个）\n[PASS] 用例3 计划合规（44.5s / 2 clip / 2 源）\n[BUILD-PLAN] 特效决策: {'none': 2}（挂角贴纸 2 个）\n[PASS] 用例4 闲聊/幻觉被过滤\n[PASS] 用例5 字幕后处理守恒且保来源（2→3 条）\n[PASS] 用例6 口语填充词清理\n\n[TEST-B17] 全部通过\n"
+        "tail": "orrect\n[PASS] 用例1 不跨文件合并（2 块，A=1 B=1）\n[BUILD-PLAN] 特效决策: {'none': 1}（挂角贴纸 1 个）\n[PASS] 用例2 修剪后仍保留来源（1 个 clip）\n[BUILD-PLAN] 特效决策: {'none': 3}（挂角贴纸 3 个）\n[PASS] 用例3 计划合规（45.6s / 3 clip / 2 源）\n[BUILD-PLAN] 特效决策: {'none': 3}（挂角贴纸 3 个）\n[PASS] 用例4 闲聊/幻觉被过滤\n[PASS] 用例5 字幕后处理守恒且保来源（2→3 条）\n[PASS] 用例6 口语填充词清理\n[PASS] 用例7 素材扫描排除自身产物（重跑不自我投毒）\n[PASS] 用例8 显式 raw_video_paths 双层严格隔离（入口+导演强隔离，杜绝静默回退）\n\n[TEST-B17] 全部通过\n"
       },
       "tests/test_asr_review_gate.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": "a\\AppData\\Local\\Temp\\tmp8ecp3zg8\\review_fail.json\n[ASR-REVIEW] 审核失败：ASR 审核失败 [A5]: 识别结果为空（0 句），禁止进入后续流程\n[ASR-REVIEW] 处理建议：1) 检查音轨是否正常 2) 更换更大ASR 模型 3) 放宽 constraints.asr_review 阈值后重试 4) 换用其他识别方案\n[PASS] 审核报告落盘（通过/失败双路径）\n[ASR-REVIEW] 审核通过：1/1 句有效，1 条 WARN（占比 0.00）→ 允许进入后续流程\n            [WARN A8_LOW_SEMANTIC] #-1 全篇商品语义词命中仅 2 个，疑似非商品内容或识别失败\n[PASS] constraints.asr_review 阈值可覆盖\n\n[TEST-ASR-REVIEW] 全部通过\n"
+        "tail": "-REVIEW] 审核通过：158/160 句有效，4 条 WARN（占比 0.01）→ 允许进入后续流程\n            [WARN A2_REPEAT_RUN] #40 存在连续重复字符≥5（噪声串，将被丢弃）\n            [WARN A2_REPEAT_RUN] #90 存在连续重复字符≥5（噪声串，将被丢弃）\n            [WARN A5_NO_DURATION] #-1 未提供媒体时长，跳过识别密度校验\n            [WARN A8_LOW_SEMANTIC] #-1 全篇商品语义词命中仅 0 个，疑似非商品内容或识别失败\n[PASS] 全片噪声（系统性退化） → BLOCK 阻断\n[PASS] 噪声占比 50% → BLOCK 阻断\n[PASS] 个别噪声句丢弃不阻断，系统性退化仍阻断\n\n[TEST-ASR-REVIEW] 全部通过\n"
       },
       "tests/test_path_resolver.py": {
         "status": "PASS",
@@ -55,17 +55,132 @@
       "tests/test_stage_cache_fingerprint.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": "[PASS] code_fingerprint 稳定: 6114f86601d69afd\n[PASS] 代码变更 → 指纹变化 → 还原后恢复\n[PASS] constraints 变更 → 指纹变化 → 还原后恢复\n[ASR-REVIEW] 审核门禁已挂载到 AsrContextVerifier.verify_and_correct\n[PASS] analyze_story_segments 的 ASR 缓存键已含代码指纹\n[PASS] 阶段缓存 save/load 往返正常\n[PASS] spec 变更 → pipeline key 变化\n\n[TEST-FINGERPRINT] 全部通过\n"
+        "tail": "[PASS] code_fingerprint 稳定: 6eb4c7ff6945fd78\n[PASS] 代码变更 → 指纹变化 → 还原后恢复\n[PASS] constraints 变更 → 指纹变化 → 还原后恢复\n[ASR-REVIEW] 审核门禁已挂载到 AsrContextVerifier.verify_and_correct\n[PASS] analyze_story_segments 的 ASR 缓存键已含代码指纹\n[PASS] 阶段缓存 save/load 往返正常\n[PASS] spec 变更 → pipeline key 变化\n\n[TEST-FINGERPRINT] 全部通过\n"
       },
       "tests/test_video_effects.py": {
         "status": "PASS",
         "returncode": 0,
-        "tail": "] 封面贴图布局 = vertical（靠右对齐、上下堆叠）\n[PASS] 顶部平台标识条: 1080x88，底色 alpha=150\n[PASS] 挂角贴纸文案: {'c01_hook': '开场必看', 'c02_fabric': '3M新雪丽', 'c03_fit': '显瘦', 'c04_styling': '一衣多穿'}\n[PASS] 挂角贴纸渲染: (220, 220)\n[PASS] 放大特效: 触发 0.8s(frame 24) → 过渡 1.2s(36帧, smoothstep)\n[PASS] effect 已改为决策变量（镜像/分屏可被触发）\n[PASS] 镜像遮挡贴纸: 覆盖 69464px（2 处）\n[PASS] 分屏双侧标签: 左 6527px / 右 5999px\n[PASS] QC 已接入叠加元素复测 + 音画同步抽检\n\n[TEST-EFFECTS] 全部通过\n"
+        "tail": "采样糊脸）\n  [QC][WARN] 指定封面候选 __not_exist__ 不在候选清单中，回退审计 candidates[0]（cand_bad）\n  [BLOCK FAIL] 封面宽占比复测: 宽占比 0.340 超出 WARN 区间 [0.36, 0.85]\n  [PASS] 封面完整人体复测: 膝盖可见\n  [PASS] 封面衣着一致性: 未提供商品图，跳过衣着一致性评估\n  [PASS] 封面放大清晰度复测: post_scale_sharpness=300（必须 >= 200，防上采样糊脸）\n[PASS] QC 封面宽占比复测审计实际交付候选（门禁强度保持不变）\n[PASS] 全局统一：60fps（SKILL/约束/装配器/QC/ChatCut 五方一致）+ Hook 卡 720×168（约束驱动，旧 940~980 口径已清零）\n\n[TEST-EFFECTS] 全部通过\n"
+      },
+      "tests/test_slicing_rules.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[PASS] 用例1 切片规则段已加载并启用\n[PASS] 用例2 R1 切点吸附语音气口\n[PASS] 用例3 R1 切点类型判定与占比上限\n[PASS] 用例4 R2 片段时长区间\n[PASS] 用例5 R3 景别判定与全身占比\n[PASS] 用例6 R4 展示角度多样性（含反向验证）\n[PASS] 用例7 R5 语音密度\n[PASS] 用例8 R6 漏斗顺序按品类覆写\n[PASS] 用例9 切片规则整体评估（含毒化反向验证）\n[PASS] 用例10 R2 超长块按句末拆分（时长守恒）\n[BUILD-PLAN] 特效决策: {'none': 6, 'hflip': 1}（挂角贴纸 7 个）\n[PASS] 用例11 R10 钩子区切成多段（4 段 / [2.5, 2.5, 2.5, 2.5]）\n\n[TEST-SLICING] 全部通过\n"
+      },
+      "tests/test_cut_style_rules.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[PASS] 用例1 R7/R8 参数解析与配置一致\n[PASS] 用例2 R7 转场方式判定（含毒化反向验证）\n[PASS] 用例3 R8 音频风格判定（含 5 项毒化反向验证）\n[PASS] 用例4 R9 调色一致性判定（含毒化反向验证）\n[PASS] 用例5 R10 节奏曲线判定（含 7 项毒化反向验证）\n[PASS] 用例6 measure_pacing 实测口径（含时长离散度）\n[PASS] 用例7 汇总评估（含毒化反向验证）\n[PASS] 用例8 约束键缺失时降级不崩溃\n\n[TEST-CUT-STYLE] 全部 8 个用例通过\n"
+      },
+      "tests/test_transition_chain.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[PASS] 用例1 硬切链可链接且保留全部分镜（4.00s / 4 段）\n[PASS] 用例2 硬切链音频侧无 null 滤镜且 concat 参数正确\n[PASS] 用例3 叠化链可链接（2.50s）\n[PASS] 用例4 单分镜边界情况\n[PASS] 用例5 零分镜不崩溃\n[PASS] 用例6 硬切 10ms micro-afade 链可链接且正常输出 (3.00s)\n[PASS] 用例7 micro-afade 极短片段自适应防重叠\n\n[TEST-TRANS-CHAIN] 全部 7 个用例通过\n"
+      },
+      "tests/test_undefined_names.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "y: 无未定义名引用\n[PASS] src/tools/build_plan.py: 无未定义名引用\n[PASS] src/agent/agent_director.py: 无未定义名引用\n[PASS] src/core/asr_agent_verifier.py: 无未定义名引用\n[PASS] src/core/asr_review_gate.py: 无未定义名引用\n[PASS] src/core/plan_compiler.py: 无未定义名引用\n[PASS] src/tools/product_anchor.py: 无未定义名引用\n[PASS] src/tools/verify_clip_product_alignment.py: 无未定义名引用\n[PASS] src/qc/qc_auditor.py: 无未定义名引用\n\n[TEST-UNDEF-NAMES] 全部 11 个文件通过\n"
+      },
+      "tests/test_requirements_audit.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[PASS] 基线结构合法：47 条需求，ID 唯一\n[PASS] 全部 47 条需求的证据锚点均可解析\n[PASS] 死键集合与基线一致（48 个）\n[PASS] 48 个死键均已在基线中登记\n[PASS] 引擎自检通过（65 个源文件均可解析）\n\n[TEST-REQ-AUDIT] 全部通过\n"
+      },
+      "tests/test_dead_constraint_wiring.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[PASS] 推镜倍率键已接线: zoom=1.3 max_zoom=1.35\n[PASS] 镜像遮挡覆盖率键已接线: min_occlusion_ratio=0.25\n[PASS] 审计引擎确认目标键已接线（当前死键 48 个）\n============================================================\n[PASS] 死键接线测试全部通过\n"
+      },
+      "tests/test_product_image_adapter.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": ""
+      },
+      "tests/test_zh_script_and_violation_policy.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[VIOLATION] 处置参数已生成: C:\\Users\\ePanda\\AppData\\Local\\Temp\\tmp75toferz\\violation_handling.json\n  候选 2 → 字幕删除 2 / 放行 0 | 复核引擎 fallback (agent review pending) | 消音 off / 打码 off\n"
+      },
+      "tests/test_desktop_spec_creator.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "eline：成功打通 EXE 与 JobRunner 调用链\n  [PASS] load_initial_data：无虚假材质预填\n  [PASS] DesktopSpecApi.scan_project：向导素材发现与历史成品隔离正确\n  [PASS] DesktopSpecApi.create_new_project：新建项目初始化结构正确\n  [PASS] DesktopSpecApi.create_new_project(parent, name)：子目录创建正确\n  [PASS] SpecManager：字幕与封面策略映射正确\n  [PASS] DesktopSpecApi：状态机与打开路径防护正常\n  [PASS] get_html_content：内嵌 JavaScript 经 node -c 编译器语法验证 100% 通过\n\n[TEST-DESKTOP] 15/15 通过\n"
+      },
+      "tests/test_feature_flags.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "n 仅跳文字/贴纸，画面技法 4 项照检\n  [PASS] 打包后按 exe 目录解析 features.yaml，源码态回落到仓库根\n  [BLOCK FAIL] 参数类内容占比复测: 面料/做工 12.0s / 全片 37.0s = 32.4%（1 个分镜）｜严格档上限 25%\n  [PASS] 参数类内容占比复测: 面料/做工 8.0s / 全片 33.0s = 24.2%（1 个分镜）｜严格档上限 25%\n  [PASS] 参数类内容占比复测: 面料/做工 12.0s / 全片 37.0s = 32.4%（1 个分镜）｜宽松档仅记录不判定\n  [SKIP] 参数类内容占比复测: 未提供 plan.json（分镜表），无法统计占比\n  [PASS] 参数类占比：32.4% 拦 / 21.6% 过 / 宽松只记录 / 无表 SKIP\n\n[TEST-FEATURES] 12/12 通过\n"
+      },
+      "tests/test_clip_alignment.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "篇商品语义词命中仅 2 个，疑似非商品内容或识别失败\n[PASS] test_asr_contract_homophones_dynamic_loading\n  [BLOCK FAIL] 分镜品类与语义对齐门禁: 违规项: [\"检出 3 处非本品负向词: [{'clip_id': 'c01', 'term': '裤', 'text_snippet': '这款搭配皮裤和毛呢裤'}, {'clip_id': 'c01', 'term': '毛呢裤', 'text_snippet': '这款搭配皮裤和毛呢裤'}, {'clip_id': 'c01', 'term': '皮裤', 'text_snippet': '这款搭配皮裤和毛呢裤'}]\"]\n[PASS] test_qc_clip_alignment_fallback_and_block\n\n[TEST-CLIP-ALIGNMENT] 全部通过\n"
+      },
+      "tests/test_scene_cuts.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[BUILD-PLAN] 特效决策: {'none': 2}（挂角贴纸 2 个）\n[BUILD-PLAN] 特效决策: {'none': 1}（挂角贴纸 1 个）\n[TEST-SCENE-CUTS] 全部通过\n"
+      },
+      "tests/test_product_profile.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[TEST-PRODUCT-PROFILE] 全部通过\n"
+      },
+      "tests/test_utterance_candidates.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[TEST-UTTERANCE-CANDIDATES] 全部通过\n"
+      },
+      "tests/test_sku_tracker.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[TEST-SKU-TRACKER] 全部通过\n"
+      },
+      "tests/test_sequence_optimizer.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[TEST-SEQUENCE-OPTIMIZER] 全部通过\n"
+      },
+      "tests/test_job_runner_and_adapters.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "k\\20261121-174747-8283\\candidates\\story_candidates.json\n                 源素材 1 个 | 合计校对后 0 句\n                 Hook 候选: 0 条 | 面料候选: 0 条\n                 显瘦候选: 0 条 | 搭配候选: 0 条\n                 淘汰杂质: 0 条 (价格/库存/切品)\n\n>>> [PHASE 1.5] 素材-契约一致性预检: PASS（0 条 WARN）\n  [对话脚本] 0 个完整语句（完整率 0%） | 0 个语句含违规词\n\n>>> [PHASE 2] Agent 启动决策与审美干预...\n  [自主仲裁] 优选封面: cand_fallback_01 (@0.0s) | 兜底占位封面帧\n[TEST-JOB-RUNNER] 全部通过\n"
+      },
+      "tests/test_cut_and_continuity.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[TEST-CUT-AND-CONTINUITY] 全部通过\n"
+      },
+      "tests/test_editorial_qc.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[TEST-EDITORIAL-QC] 全部通过\n"
+      },
+      "tests/test_project_context.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "[PASS] All project_context tests passed!\n"
+      },
+      "tests/test_pr16_regressions.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "al\\Temp\\tmp1j6dzaue\\work\\20261121-174807-d6dd\\candidates\\story_candidates.json\n                 源素材 1 个 | 合计校对后 0 句\n                 Hook 候选: 0 条 | 面料候选: 0 条\n                 显瘦候选: 0 条 | 搭配候选: 0 条\n                 淘汰杂质: 0 条 (价格/库存/切品)\n\n>>> [PHASE 1.5] 素材-契约一致性预检: PASS（0 条 WARN）\n  [对话脚本] 0 个完整语句（完整率 0%） | 0 个语句含违规词\n\n>>> [PHASE 2] Agent 启动决策与审美干预...\n  [自主仲裁] 优选封面: cand_fallback_01 (@0.0s) | 兜底占位封面帧\n"
+      },
+      "tests/test_pr16_round3_p0_p1.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "int 且缺失原始历史输入，拒绝直接复用，强制重新生成\n[FEATURES] 开关 v1 | 包装=branded 时长=standard 参数占比=strict 违禁词=delete 转场=on 放大镜=on\n[PLACEHOLDER] test_fallback_cover: 生成 2 张占位图并登记到 product.item_images\n[COVER] 商品图为空：跳过贴图渲染，封面仅保留直播画面 + 品牌区 + 商品名\n[COVER v2] MIXCITY 风格封面已生成（金色渐变商品名）: C:\\Users\\ePanda\\AppData\\Local\\Temp\\tmph0bb3lym\\out\\cover.jpg\n[COVER-TOOL] 高定封面渲染完成: C:\\Users\\ePanda\\AppData\\Local\\Temp\\tmph0bb3lym\\out\\cover.jpg\n"
+      },
+      "tests/test_pr16_round4_p0_p1.py": {
+        "status": "PASS",
+        "returncode": 0,
+        "tail": "输入计算指纹 (a77fed70ae6a244ab06cacbf) 与当前任务指纹 (65067b40a53056d234ae6d8e) 不匹配，拒绝复用\n[JOB-RUNNER][WARN] 发现旧版交付清单缺少 job_fingerprint 且缺失原始历史输入，拒绝直接复用，强制重新生成\n[JOB-RUNNER][INFO] 历史交付清单缺少 job_fingerprint，但从原始历史输入独立计算指纹一致，迁移指纹并复用\n[JOB-RUNNER][WARN] 虽指纹匹配但既有成片不存在、文件为空或质检未通过，拒绝直接复用，强制重新生成\n[JOB-RUNNER][WARN] 虽指纹匹配但既有成片不存在、文件为空或质检未通过，拒绝直接复用，强制重新生成\n[PLACEHOLDER] test_ph_isolation: 生成 2 张占位图并登记到 product.item_images\n"
       }
     },
     "batch": {
-      "returncode": 0,
-      "done": 5,
+      "returncode": 1,
+      "done": 1,
       "qc_failed": 0,
       "error": 0,
       "skipped_cached": 0

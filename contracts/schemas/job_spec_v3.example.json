@@ -1,0 +1,50 @@
+{
+  "project_id": "example_coat_11241",
+  "raw_video_path": "data/raw/01.mp4",
+  "raw_video_paths": [
+    "data/raw/01.mp4",
+    "data/raw/02.mp4"
+  ],
+  "brand": {
+    "title_en": "EXAMPLE BRAND",
+    "subtitle_cn": "女装直播间"
+  },
+  "product": {
+    "sku_id": "11241",
+    "name": "短款立领羽绒服",
+    "category": "羽绒服",
+    "title_line1": "短款立领",
+    "title_line2": "羽绒服",
+    "item_images": [
+      "data/products/11241_front.jpg"
+    ],
+    "attributes": {
+      "collar": "立领",
+      "length": "短款"
+    },
+    "allowed_variants": [
+      "黑色",
+      "米白色"
+    ],
+    "selling_points": [
+      "保暖",
+      "轻盈",
+      "显瘦"
+    ]
+  },
+  "options": {
+    "duration_range": "45-65",
+    "split_strategy": "force_off",
+    "features": {
+      "render_profile": "branded"
+    },
+    "automation": {
+      "pipeline_version": 3,
+      "auto_edit": true,
+      "agent_provider": "agy_headless",
+      "quality_policy": "strict",
+      "visual_verification": "required",
+      "max_replan_rounds": 2
+    }
+  }
+}

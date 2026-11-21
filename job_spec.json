@@ -6,7 +6,7 @@
     "subtitle_cn": "深圳高端女装"
   },
   "product": {
-    "title_line1": "桑蚕丝羊绒羊毛",
+    "title_line1": "圆领长袖针织衫",
     "title_line2": "渐变针织衫",
     "item_images": [
       "data/raw_samples/sample_product_card.png"
@@ -16,13 +16,10 @@
     "duration_range": "45-65",
     "split_strategy": "force_off",
     "highlight_keywords": [
-      "桑蚕丝",
-      "羊绒",
-      "羊毛",
       "显瘦",
       "针织衫",
       "闭眼入",
-      "降温"
+      "百搭"
     ]
   },
   "raw_video_paths": []

@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "candidate_scores.schema.json",
+  "title": "candidate_scores",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scores"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": [
+        "3.0"
+      ]
+    },
+    "scores": {
+      "type": "array",
+      "items": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "candidate_score",
+        "title": "candidate_score",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "candidate_id",
+          "eligible",
+          "product_relation",
+          "subscores",
+          "narrative_role",
+          "duplicate_cluster_id",
+          "evidence_refs",
+          "rejection_reasons",
+          "missing_evidence"
+        ],
+        "properties": {
+          "candidate_id": {
+            "type": "string"
+          },
+          "eligible": {
+            "type": "boolean"
+          },
+          "product_relation": {
+            "type": "string",
+            "enum": [
+              "SAME_SKU",
+              "SAME_SKU_VARIANT",
+              "ACCESSORY_OR_STYLING",
+              "OTHER_SKU",
+              "UNCERTAIN"
+            ]
+          },
+          "subscores": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": "subscores",
+            "title": "subscores",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "relevance",
+              "selling_point_evidence",
+              "visual_quality",
+              "utterance_completeness",
+              "action_completeness",
+              "audio_quality"
+            ],
+            "properties": {
+              "relevance": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "selling_point_evidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "visual_quality": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "utterance_completeness": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "action_completeness": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "audio_quality": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              }
+            }
+          },
+          "narrative_role": {
+            "type": "string",
+            "enum": [
+              "HOOK",
+              "PROOF",
+              "FABRIC",
+              "FIT",
+              "STYLING",
+              "COLOR",
+              "SIZE",
+              "CLOSING",
+              "OTHER"
+            ]
+          },
+          "duplicate_cluster_id": {
+            "type": "string"
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rejection_reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "missing_evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

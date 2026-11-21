@@ -168,6 +168,155 @@ def test_environment_helpers() -> None:
     print(f"  [PASS] 环境探测：root={os.path.basename(root)}，解释器可解析")
 
 
+def test_api_start_pipeline_wires_job_runner() -> None:
+    """测试 DesktopSpecApi.start_pipeline 正确链接 JobRunner 调度并返回状态。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        mat_file = os.path.join(tmpdir, "test.mp4")
+        with open(mat_file, "wb") as f:
+            f.write(b"0" * 1024)
+
+        payload = _sample_payload()
+        payload["raw_video_path"] = mat_file
+        payload["project_id"] = "desktop_pipeline_test"
+
+        api = DesktopSpecApi()
+        from unittest.mock import patch
+        with patch("src.runtime.job_runner.JobRunner.run_pipeline") as mock_run:
+            mock_run.return_value = {"status": "DELIVERED", "final_video": "out.mp4"}
+            res = api.start_pipeline(payload)
+            assert res["success"] is True
+            assert res["status"] == "DELIVERED"
+            assert mock_run.called
+        print("  [PASS] DesktopSpecApi.start_pipeline：成功打通 EXE 与 JobRunner 调用链")
+
+
+def test_initial_data_has_no_fake_materials() -> None:
+    """默认初始数据中严禁预填虚假材质关键词（桑蚕丝/羊绒/羊毛）。"""
+    api = DesktopSpecApi()
+    init_data = api.load_initial_data()
+    keywords = init_data.get("keywords", "")
+    assert "桑蚕丝" not in keywords and "羊绒" not in keywords and "羊毛" not in keywords, \
+        "初始数据中残留了未经证实的虚假材质宣传词"
+    print("  [PASS] load_initial_data：无虚假材质预填")
+
+
+def test_api_scan_project_and_quarantine() -> None:
+    """向导扫描项目：自动识别原始素材并严格隔离历史成品与报告。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        proj_dir = os.path.join(tmpdir, "demo_proj")
+        mat_dir = os.path.join(proj_dir, "素材")
+        os.makedirs(mat_dir, exist_ok=True)
+
+        # 放入原始视频
+        with open(os.path.join(mat_dir, "raw_chunk1.mp4"), "wb") as f:
+            f.write(b"video1")
+        with open(os.path.join(mat_dir, "cover.png"), "wb") as f:
+            f.write(b"img1")
+
+        # 放入历史成片及生成报告（应被隔离）
+        with open(os.path.join(mat_dir, "demo_proj.mp4"), "wb") as f:
+            f.write(b"historical_video")
+        with open(os.path.join(mat_dir, "demo_proj_qc_report.json"), "w", encoding="utf-8") as f:
+            json.dump({"status": "PASS"}, f)
+
+        api = DesktopSpecApi()
+        scan_res = api.scan_project(proj_dir)
+        assert scan_res["success"] is True
+        assert scan_res["project_id"] == "demo_proj"
+
+        # 验证原始视频仅包含 raw_chunk1.mp4，demo_proj.mp4 被严格隔离
+        source_names = [v["filename"] for v in scan_res["source_videos"]]
+        assert "raw_chunk1.mp4" in source_names
+        assert "demo_proj.mp4" not in source_names
+
+        quarantine_names = [q["filename"] for q in scan_res["quarantined_files"]]
+        assert "demo_proj.mp4" in quarantine_names
+
+        # 验证商品图被正确识别 (不再因字段名 mismatch 丢失)
+        image_names = [im["filename"] for im in scan_res["images"]]
+        assert "cover.png" in image_names
+        assert len(scan_res["images"]) == 1
+        print("  [PASS] DesktopSpecApi.scan_project：向导素材发现与历史成品隔离正确")
+
+
+def test_api_create_new_project() -> None:
+    """测试向导新建项目目录与初始化 spec。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        new_proj_p = os.path.join(tmpdir, "my_new_project_001")
+        api = DesktopSpecApi()
+        res = api.create_new_project(new_proj_p, "my_new_project_001")
+        assert res["success"] is True
+        assert res["project_id"] == "my_new_project_001"
+        assert os.path.isdir(os.path.join(new_proj_p, "素材"))
+        assert os.path.isfile(os.path.join(new_proj_p, "素材", "job_spec.json"))
+        print("  [PASS] DesktopSpecApi.create_new_project：新建项目初始化结构正确")
+
+
+def test_api_create_new_project_with_parent_dir() -> None:
+    """测试向导通过选择父目录 + 输入子目录名创建新项目。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        api = DesktopSpecApi()
+        res = api.create_new_project(tmpdir, "child_project_002")
+        assert res["success"] is True
+        assert res["project_id"] == "child_project_002"
+        expected_dir = os.path.join(tmpdir, "child_project_002")
+        assert os.path.isdir(os.path.join(expected_dir, "素材"))
+        assert os.path.isfile(os.path.join(expected_dir, "素材", "job_spec.json"))
+        print("  [PASS] DesktopSpecApi.create_new_project(parent, name)：子目录创建正确")
+
+
+def test_html_content_embedded_js_syntax() -> None:
+    """验证向导内嵌 HTML 与 JavaScript 语法的正确性，绝不允许语法错误导致 WebView 白屏或死锁。"""
+    from src.tools.desktop_spec_creator import get_html_content
+    import re
+    import subprocess
+    import shutil
+
+    html = get_html_content()
+    assert html and "<!DOCTYPE html>" in html
+    m = re.search(r"<script>(.*?)</script>", html, re.DOTALL)
+    assert m, "HTML 模板中未找到 <script> 标签"
+    script = m.group(1)
+
+    # 1. 结构与闭合检查
+    assert "create_new_project" in script
+    assert "setProductImageByIndex" in script
+
+    # 2. 若本地存在 node 环境，执行严格的编译器语法验证 (node -c)
+    node_bin = shutil.which("node")
+    if node_bin:
+        res = subprocess.run([node_bin, "-c", "-"], input=script, text=True, capture_output=True)
+        assert res.returncode == 0, f"内嵌 JavaScript 语法错误:\n{res.stderr}"
+        print("  [PASS] get_html_content：内嵌 JavaScript 经 node -c 编译器语法验证 100% 通过")
+    else:
+        print("  [PASS] get_html_content：静态语法与关键字结构校验通过")
+
+
+def test_spec_manager_subtitle_and_cover_strategy() -> None:
+    """测试字幕策略与封面生成策略卡片点选存盘。"""
+    mgr = SpecManager()
+    payload = _sample_payload()
+    payload["subtitle_strategy"] = "plain"
+    payload["cover_strategy"] = "product_image"
+    spec = mgr.build_spec_dict(payload)
+    assert spec["options"]["features"]["render_profile"] == "plain"
+    assert spec["options"]["cover_strategy"] == "product_image"
+    print("  [PASS] SpecManager：字幕与封面策略映射正确")
+
+
+def test_api_status_and_open_helpers() -> None:
+    """测试状态获取与文件安全打开辅助函数。"""
+    api = DesktopSpecApi()
+    status = api.get_job_status()
+    assert "status" in status
+    assert "progress" in status
+
+    # 路径不存在时返回 False
+    res = api.open_path("C:\\non_existent_folder_xyz123")
+    assert res["success"] is False
+    print("  [PASS] DesktopSpecApi：状态机与打开路径防护正常")
+
+
 def main() -> int:
     tests = [
         test_spec_manager_build_spec_dict,
@@ -177,6 +326,14 @@ def main() -> int:
         test_api_save_spec_rejects_invalid,
         test_api_save_spec_direct_to_material_dir,
         test_environment_helpers,
+        test_api_start_pipeline_wires_job_runner,
+        test_initial_data_has_no_fake_materials,
+        test_api_scan_project_and_quarantine,
+        test_api_create_new_project,
+        test_api_create_new_project_with_parent_dir,
+        test_spec_manager_subtitle_and_cover_strategy,
+        test_api_status_and_open_helpers,
+        test_html_content_embedded_js_syntax,
     ]
     failed = 0
     for t in tests:

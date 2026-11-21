@@ -1,0 +1,1001 @@
+{
+  "version": "3.0",
+  "description": "dy-video V3 电商剪辑金标评测集 Manifest（30 个基准用例）",
+  "created_at": "2026-11-18",
+  "benchmarks": [
+    {
+      "id": "GS-01",
+      "category": "羽绒服",
+      "sku_id": "11241",
+      "scenario": "单商品高清晰直播，完整展示",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "ProductIdentityGate",
+        "LanguageIntegrityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-01.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-02",
+      "category": "针织衫",
+      "sku_id": "88102",
+      "scenario": "同款不同色切换（米白、驼色、黑色）",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "ProductIdentityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-02.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-03",
+      "category": "毛呢大衣",
+      "sku_id": "33901",
+      "scenario": "上衣搭配西裤（穿搭镜头含他品下装）",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "ProductIdentityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-03.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-04",
+      "category": "连衣裙",
+      "sku_id": "55012",
+      "scenario": "频繁换款（3次换款，夹杂非目标商品）",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "ProductIdentityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-04.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-05",
+      "category": "羊绒衫",
+      "sku_id": "77201",
+      "scenario": "主播边走动边讲解（动作中说话）",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "LanguageIntegrityGate",
+        "SeamContinuityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-05.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-06",
+      "category": "风衣",
+      "sku_id": "99301",
+      "scenario": "重底噪直播环境（强背景音与助播插话）",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "LanguageIntegrityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-06.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-07",
+      "category": "阔腿裤",
+      "sku_id": "44102",
+      "scenario": "主播多次口误与结巴（包含自我修正）",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "LanguageIntegrityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-07.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-08",
+      "category": "皮草外套",
+      "sku_id": "22019",
+      "scenario": "严格模式下商品参考图缺失",
+      "expected_outcome": "NEEDS_INPUT",
+      "must_block": [
+        "ProductProfileStrictCheck"
+      ],
+      "material_ref": "fixtures/samples/gs-08.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "NEEDS_INPUT"
+      }
+    },
+    {
+      "id": "GS-09",
+      "category": "西装套装",
+      "sku_id": "66120",
+      "scenario": "素材完全不含本品（负向毒化素材）",
+      "expected_outcome": "NEEDS_INPUT",
+      "must_block": [
+        "ProductIdentityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-09.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "NEEDS_INPUT"
+      }
+    },
+    {
+      "id": "GS-10",
+      "category": "卫衣",
+      "sku_id": "11002",
+      "scenario": "本品素材有效时长不足20秒",
+      "expected_outcome": "NEEDS_INPUT",
+      "must_block": [
+        "DurationCoverageCheck"
+      ],
+      "material_ref": "fixtures/samples/gs-10.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "NEEDS_INPUT"
+      }
+    },
+    {
+      "id": "GS-11",
+      "category": "羊毛大衣",
+      "sku_id": "33902",
+      "scenario": "面料拉伸与细节手撕拉扯展示",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "SellingPointEvidenceGate"
+      ],
+      "material_ref": "fixtures/samples/gs-11.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-12",
+      "category": "半身裙",
+      "sku_id": "55013",
+      "scenario": "360度旋转走秀展示",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "SeamContinuityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-12.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-13",
+      "category": "羽绒马甲",
+      "sku_id": "11242",
+      "scenario": "模特临时离场换装15秒",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "ProductIdentityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-13.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-14",
+      "category": "衬衫",
+      "sku_id": "88201",
+      "scenario": "多源视频素材（源1与源2跨镜头拼接）",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "SeamContinuityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-14.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-15",
+      "category": "T恤",
+      "sku_id": "99101",
+      "scenario": "领口耐磨与不变形展示",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "SellingPointEvidenceGate"
+      ],
+      "material_ref": "fixtures/samples/gs-15.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-16",
+      "category": "防晒衣",
+      "sku_id": "77301",
+      "scenario": "包含原声超长单句（30秒长口播）",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "LanguageIntegrityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-16.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-17",
+      "category": "牛仔裤",
+      "sku_id": "44201",
+      "scenario": "深蓝与浅蓝同款双色展示",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "ProductIdentityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-17.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-18",
+      "category": "羽绒服",
+      "sku_id": "11243",
+      "scenario": "长款与短款同品类混播区分",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "ProductIdentityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-18.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-19",
+      "category": "针织开衫",
+      "sku_id": "88103",
+      "scenario": "模特身穿同色他款手持本品",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "ProductIdentityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-19.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-20",
+      "category": "丝绒西装",
+      "sku_id": "66201",
+      "scenario": "暗光与高光逆光切换",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "SeamContinuityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-20.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-21",
+      "category": "打底裤",
+      "sku_id": "44301",
+      "scenario": "加绒加厚保暖性话术口播",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "SellingPointEvidenceGate"
+      ],
+      "material_ref": "fixtures/samples/gs-21.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-22",
+      "category": "真丝衬衫",
+      "sku_id": "88301",
+      "scenario": "光泽感特写展示镜头",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "SellingPointEvidenceGate"
+      ],
+      "material_ref": "fixtures/samples/gs-22.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-23",
+      "category": "皮衣",
+      "sku_id": "22101",
+      "scenario": "包含禁售与绝对化广告宣称",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "SellingPointEvidenceGate"
+      ],
+      "material_ref": "fixtures/samples/gs-23.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-24",
+      "category": "冲锋衣",
+      "sku_id": "77401",
+      "scenario": "防水喷水实验展示",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "SellingPointEvidenceGate"
+      ],
+      "material_ref": "fixtures/samples/gs-24.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-25",
+      "category": "吊带裙",
+      "sku_id": "55101",
+      "scenario": "外搭针织衫二合一展示",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "ProductIdentityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-25.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-26",
+      "category": "棒球服",
+      "sku_id": "11301",
+      "scenario": "跨源音轨采样率差异素材",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "SeamContinuityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-26.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-27",
+      "category": "羊剪绒大衣",
+      "sku_id": "33903",
+      "scenario": "高价值核心镜头被部分遮挡",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "SeamContinuityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-27.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-28",
+      "category": "小香风外套",
+      "sku_id": "66301",
+      "scenario": "金银丝编织工艺微距特写",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "SellingPointEvidenceGate"
+      ],
+      "material_ref": "fixtures/samples/gs-28.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-29",
+      "category": "马甲",
+      "sku_id": "11401",
+      "scenario": "下架断码提示话术出现",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "ProductIdentityGate"
+      ],
+      "material_ref": "fixtures/samples/gs-29.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    },
+    {
+      "id": "GS-30",
+      "category": "羊毛开衫",
+      "sku_id": "88104",
+      "scenario": "标准端到端全自动无人工干预生成",
+      "expected_outcome": "DELIVERED",
+      "must_pass": [
+        "ProductIdentityGate",
+        "LanguageIntegrityGate",
+        "SellingPointEvidenceGate"
+      ],
+      "material_ref": "fixtures/samples/gs-30.mp4",
+      "annotated_sku_intervals": [
+        {
+          "start_sec": 5.0,
+          "end_sec": 55.0,
+          "relation": "SAME_SKU"
+        }
+      ],
+      "optimal_cut_points": [
+        12.0,
+        24.5,
+        36.0,
+        48.2
+      ],
+      "expected_duration_range": [
+        45,
+        65
+      ],
+      "expected_metrics": {
+        "min_selling_point_coverage": 2,
+        "max_other_sku_ratio": 0.0,
+        "expected_status": "DELIVERED"
+      }
+    }
+  ]
+}

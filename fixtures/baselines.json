@@ -1,10 +1,10 @@
 {
-  "updated": "2026-10-21 21:03:14",
+  "updated": "2026-11-19 01:11:31",
   "materials": {
     "silk_knitwear_7270": {
       "duration": {
-        "min": 56.682,
-        "max": 65
+        "min": 52.88,
+        "max": 64.88
       },
       "cover_width_ratio": {
         "min": 0.363,
@@ -32,12 +32,12 @@
         "max": 0.02
       },
       "qc_block_total": {
-        "min": 18
+        "min": 20
       }
     },
     "hoodie_11214": {
       "duration": {
-        "min": 58.292,
+        "min": 58.55500000000001,
         "max": 65
       },
       "cover_width_ratio": {
@@ -52,12 +52,12 @@
         "max": 7.6
       },
       "clip_count": {
-        "min": 2,
-        "max": 7
+        "min": 7,
+        "max": 12
       },
       "loudness_lufs": {
-        "min": -14.9,
-        "max": -12.9
+        "min": -14.7,
+        "max": -12.7
       },
       "true_peak_dbtp": {
         "max": -0.5
@@ -66,12 +66,12 @@
         "max": 0.02
       },
       "qc_block_total": {
-        "min": 18
+        "min": 31
       }
     },
     "down_jacket_11241": {
       "duration": {
-        "min": 57.619,
+        "min": 58.019000000000005,
         "max": 65
       },
       "cover_width_ratio": {
@@ -100,12 +100,12 @@
         "max": 0.02
       },
       "qc_block_total": {
-        "min": 18
+        "min": 20
       }
     },
     "workwear_11186": {
       "duration": {
-        "min": 58.590999999999994,
+        "min": 58.592,
         "max": 65
       },
       "cover_width_ratio": {
@@ -124,8 +124,8 @@
         "max": 7
       },
       "loudness_lufs": {
-        "min": -14.9,
-        "max": -12.9
+        "min": -15.0,
+        "max": -13.0
       },
       "true_peak_dbtp": {
         "max": -0.5
@@ -134,12 +134,12 @@
         "max": 0.02
       },
       "qc_block_total": {
-        "min": 18
+        "min": 20
       }
     },
     "grid_coat_11231": {
       "duration": {
-        "min": 56.059,
+        "min": 55.733000000000004,
         "max": 65
       },
       "cover_width_ratio": {
@@ -168,7 +168,7 @@
         "max": 0.02
       },
       "qc_block_total": {
-        "min": 18
+        "min": 20
       }
     }
   }
