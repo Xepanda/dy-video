@@ -295,7 +295,21 @@ class TestPR16Round7P0P1(unittest.TestCase):
             "安全阻断" in str(ctx.exception) or "重叠" in str(ctx.exception) or "素材目录" in str(ctx.exception)
         )
 
-        # 4. 在 stage_render 运行时验证负向篡改拦截
+        # 4. 篡改 output_dir 指向历史交付目录 (如 output/run_hist_01) 必须拦截
+        hist_delivery_dir = os.path.join(self.proj_dir, "output", "run_hist_01")
+        os.makedirs(hist_delivery_dir, exist_ok=True)
+        ctx_hist_tampered = dict(ctx_normal, output_dir=hist_delivery_dir)
+        with self.assertRaises(ValueError) as ctx:
+            resolve_trusted_paths(work_dir, ctx_hist_tampered)
+        self.assertIn("安全阻断: run_context.json 中的 output_dir", str(ctx.exception))
+
+        # 5. 篡改 output_dir 指向项目根目录本身必须拦截
+        ctx_root_tampered = dict(ctx_normal, output_dir=self.proj_dir)
+        with self.assertRaises(ValueError) as ctx:
+            resolve_trusted_paths(work_dir, ctx_root_tampered)
+        self.assertIn("安全阻断", str(ctx.exception))
+
+        # 6. 在 stage_render 运行时验证负向篡改拦截
         with open(os.path.join(work_dir, "run_context.json"), "w", encoding="utf-8") as f:
             json.dump(ctx_tampered, f)
         with open(os.path.join(work_dir, "validated_plan.json"), "w", encoding="utf-8") as f:
@@ -372,6 +386,165 @@ class TestPR16Round7P0P1(unittest.TestCase):
             stage_deliver(work_dir)
         self.assertIn("已完成正式交付签署", str(ctx.exception))
         self.assertIn("交付清单具有不可变性", str(ctx.exception))
+
+        # 同时验证 stage_render 与 stage_qc 在交付后也必须禁止重写交付物
+        with self.assertRaises(RuntimeError) as r_ctx:
+            stage_render(work_dir)
+        self.assertIn("已完成正式交付签署", str(r_ctx.exception))
+
+        with self.assertRaises(RuntimeError) as q_ctx:
+            stage_qc(work_dir)
+        self.assertIn("已完成正式交付签署", str(q_ctx.exception))
+
+    def test_render_rejects_unauthorized_clip_source_id_and_hash_tampering(self):
+        """P0-1: render 阶段必须核验分镜 source_id 白名单与素材 SHA-256 完整性。"""
+        work_dir = os.path.join(self.proj_dir, "work", "run_render_source_audit")
+        output_dir = os.path.join(self.proj_dir, "output", "run_render_source_audit")
+        os.makedirs(work_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
+
+        legit_file = os.path.join(self.mat_dir, "render_legit.mp4")
+        with open(legit_file, "wb") as f:
+            f.write(b"render_legit_video_payload")
+        legit_sha = compute_full_file_sha256(legit_file)
+
+        manifest_data = {
+            "schema_version": "3.1",
+            "source_videos": [
+                {
+                    "source_id": "src_01_render_legit_mp4",
+                    "path": legit_file,
+                    "sha256": legit_sha,
+                }
+            ]
+        }
+        with open(os.path.join(work_dir, "input_manifest.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest_data, f)
+        with open(os.path.join(work_dir, "spec_snapshot.json"), "w", encoding="utf-8") as f:
+            json.dump({"options": {}}, f)
+        with open(os.path.join(work_dir, "run_context.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "schema_version": "3.2",
+                "run_id": "run_render_source_audit",
+                "project_id": "my_project",
+                "output_dir": output_dir,
+            }, f)
+
+        # 1. 尝试使用未授权的 source_id 进行渲染
+        rogue_clip_plan = {
+            "schema_version": "3.2",
+            "run_id": "run_render_source_audit",
+            "clips": [
+                {
+                    "id": "c01",
+                    "source_id": "src_rogue_unauthorized",
+                    "source_file": legit_file,
+                    "source_file_sha256": legit_sha,
+                    "st": 0, "end": 3,
+                }
+            ]
+        }
+        plan_to_hash = {k: v for k, v in rogue_clip_plan.items() if k != "validated_plan_hash"}
+        h1 = hashlib.sha256(json.dumps(plan_to_hash, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        rogue_clip_plan["validated_plan_hash"] = h1
+
+        with open(os.path.join(work_dir, "validated_plan.json"), "w", encoding="utf-8") as f:
+            json.dump(rogue_clip_plan, f)
+        with open(os.path.join(work_dir, "plan_audit.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "audit_status": "APPROVED",
+                "passed": True,
+                "run_id": "run_render_source_audit",
+                "validated_plan_hash": h1,
+            }, f)
+
+        with self.assertRaises(RuntimeError) as ctx1:
+            stage_render(work_dir)
+        self.assertIn("非白名单素材 source_id", str(ctx1.exception))
+
+        # 2. 尝试篡改素材哈希进行渲染
+        tampered_hash_plan = {
+            "schema_version": "3.2",
+            "run_id": "run_render_source_audit",
+            "clips": [
+                {
+                    "id": "c01",
+                    "source_id": "src_01_render_legit_mp4",
+                    "source_file": legit_file,
+                    "source_file_sha256": "tampered_fake_sha256",
+                    "st": 0, "end": 3,
+                }
+            ]
+        }
+        plan_to_hash2 = {k: v for k, v in tampered_hash_plan.items() if k != "validated_plan_hash"}
+        h2 = hashlib.sha256(json.dumps(plan_to_hash2, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        tampered_hash_plan["validated_plan_hash"] = h2
+
+        with open(os.path.join(work_dir, "validated_plan.json"), "w", encoding="utf-8") as f:
+            json.dump(tampered_hash_plan, f)
+        with open(os.path.join(work_dir, "plan_audit.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "audit_status": "APPROVED",
+                "passed": True,
+                "run_id": "run_render_source_audit",
+                "validated_plan_hash": h2,
+            }, f)
+
+        with self.assertRaises(RuntimeError) as ctx2:
+            stage_render(work_dir)
+        self.assertIn("素材哈希与白名单绑定不匹配", str(ctx2.exception))
+
+    def test_render_and_deliver_reject_unapproved_audit_or_run_id_mismatch(self):
+        """P0-3: render 与 deliver 阶段必须强制要求 plan_audit 为 APPROVED 状态且 run_id 严格一致。"""
+        work_dir = os.path.join(self.proj_dir, "work", "run_audit_mismatch")
+        output_dir = os.path.join(self.proj_dir, "output", "run_audit_mismatch")
+        os.makedirs(work_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
+
+        plan = {
+            "schema_version": "3.2",
+            "run_id": "run_audit_mismatch",
+            "clips": [],
+        }
+        plan_to_hash = {k: v for k, v in plan.items() if k != "validated_plan_hash"}
+        h = hashlib.sha256(json.dumps(plan_to_hash, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        plan["validated_plan_hash"] = h
+
+        with open(os.path.join(work_dir, "run_context.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "schema_version": "3.2",
+                "run_id": "run_audit_mismatch",
+                "project_id": "my_project",
+                "output_dir": output_dir,
+            }, f)
+        with open(os.path.join(work_dir, "validated_plan.json"), "w", encoding="utf-8") as f:
+            json.dump(plan, f)
+
+        # 1. audit 状态为 REJECTED
+        with open(os.path.join(work_dir, "plan_audit.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "audit_status": "REJECTED",
+                "passed": False,
+                "run_id": "run_audit_mismatch",
+                "validated_plan_hash": h,
+            }, f)
+
+        with self.assertRaises(ValueError) as r_ctx:
+            stage_render(work_dir)
+        self.assertIn("未通过质量门禁审计", str(r_ctx.exception))
+
+        # 2. audit 的 run_id 与当前运行不符
+        with open(os.path.join(work_dir, "plan_audit.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "audit_status": "APPROVED",
+                "passed": True,
+                "run_id": "other_historical_run",
+                "validated_plan_hash": h,
+            }, f)
+
+        with self.assertRaises(ValueError) as r_ctx2:
+            stage_render(work_dir)
+        self.assertIn("不符", str(r_ctx2.exception))
 
     # -------------------------------------------------------------------------
     # 4. P1: 完整 SHA-256 检测大文件中间篡改

@@ -302,9 +302,17 @@ def test_project_paths_workspace_substring_safety():
 
 def test_cross_platform_and_wsl_path_mapping():
     """测试跨平台路径解析与 WSL 路径映射契约。"""
-    if sys.platform != "win32":
-        # 在 POSIX / Linux 下，Windows 路径 D:/... 自动映射为 /mnt/d/...
+    from unittest.mock import patch
+
+    # 1. 模拟在 POSIX / Linux 下的解析
+    with patch("sys.platform", "linux"):
         win_path = r"D:/dev/workspace/my_video_project"
+        assert normalize_project_path(win_path) == "/mnt/d/dev/workspace/my_video_project"
+        assert normalize_project_path(r"D:\dev\workspace\my_video_project") == "/mnt/d/dev/workspace/my_video_project"
+        assert normalize_project_path("D:") == "/mnt/d"
+        assert normalize_project_path("D:/") == "/mnt/d"
+        assert normalize_project_path("D:\\") == "/mnt/d"
+
         p = ProjectPaths(win_path)
         expected = "/mnt/d/dev/workspace/my_video_project"
         assert p.project_root == expected, f"WSL 映射异常: 期望 {expected}, 实际 {p.project_root}"
@@ -312,9 +320,14 @@ def test_cross_platform_and_wsl_path_mapping():
         win_work_run = r"D:/dev/workspace/my_video_project/work/run_123"
         p_sub = ProjectPaths(win_work_run)
         assert p_sub.project_root == expected
-    else:
-        # 在 Windows 下，WSL 路径 /mnt/d/... 自动映射为 D:\...
+
+    # 2. 模拟在 Windows 下的解析
+    with patch("sys.platform", "win32"):
         wsl_path = "/mnt/d/dev/workspace/my_video_project"
+        assert normalize_project_path(wsl_path) == r"D:\dev\workspace\my_video_project"
+        assert normalize_project_path("/mnt/d") == "D:\\"
+        assert normalize_project_path("/mnt/d/") == "D:\\"
+
         p = ProjectPaths(wsl_path)
         expected = os.path.normpath("D:/dev/workspace/my_video_project")
         assert p.project_root == expected

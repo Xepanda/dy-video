@@ -42,18 +42,18 @@ def normalize_project_path(path_str: str) -> str:
     s = str(path_str).strip()
     if sys.platform != "win32":
         # POSIX / Linux: 将 Windows 盘符路径映射为 WSL 规范路径
-        m = re.match(r"^([a-zA-Z]):[\\/](.*)$", s)
+        m = re.match(r"^([a-zA-Z]):(?:[\\/](.*))?$", s)
         if m:
             drive = m.group(1).lower()
-            rest = m.group(2).replace("\\", "/")
-            return os.path.normpath(f"/mnt/{drive}/{rest}")
+            rest = (m.group(2) or "").replace("\\", "/").strip("/")
+            return f"/mnt/{drive}/{rest}" if rest else f"/mnt/{drive}"
     else:
         # Windows: 将 WSL 路径映射为 Windows 盘符路径
-        m = re.match(r"^/mnt/([a-zA-Z])/(.*)$", s)
+        m = re.match(r"^/mnt/([a-zA-Z])(?:/(.*))?$", s)
         if m:
             drive = m.group(1).upper()
-            rest = m.group(2).replace("/", "\\")
-            return os.path.normpath(f"{drive}:\\{rest}")
+            rest = (m.group(2) or "").replace("/", "\\").strip("\\")
+            return f"{drive}:\\{rest}" if rest else f"{drive}:\\"
     return os.path.normpath(os.path.abspath(s))
 
 
@@ -70,10 +70,18 @@ class ProjectPaths:
         p_parts = Path(norm_root).parts
         if len(p_parts) >= 3 and p_parts[-2] in ("work", "output"):
             # 形如 <project>/work/<run_id> 或 <project>/output/<run_id>
-            norm_root = str(Path(*p_parts[:-2]))
+            if sys.platform != "win32":
+                clean_parts = [part.strip("/\\") for part in p_parts[:-2] if part.strip("/\\")]
+                norm_root = "/" + "/".join(clean_parts)
+            else:
+                norm_root = str(Path(*p_parts[:-2]))
         elif len(p_parts) >= 2 and p_parts[-1] in ("work", "output"):
             # 形如 <project>/work 或 <project>/output
-            norm_root = str(Path(*p_parts[:-1]))
+            if sys.platform != "win32":
+                clean_parts = [part.strip("/\\") for part in p_parts[:-1] if part.strip("/\\")]
+                norm_root = "/" + "/".join(clean_parts)
+            else:
+                norm_root = str(Path(*p_parts[:-1]))
 
         if os.path.basename(norm_root) in ("素材", "materials", "input"):
             materials_dir = materials_dir or norm_root

@@ -35,6 +35,7 @@ from src.core.project_context import (
     compute_file_fast_fingerprint,
     is_historical_output,
     sanitize_id,
+    normalize_project_path,
 )
 from src.core.product_profile import build_product_profile, save_product_profile, ProductProfileError
 from src.core.path_resolver import resolve_path
@@ -99,7 +100,7 @@ def _write_run_state(work_dir: str, status: str, step: str, progress: float, mes
 
 def resolve_run_dir(run_arg: str) -> str:
     """从给定的路径参数解析出具体的 work/<run_id> 目录。"""
-    p = os.path.abspath(run_arg)
+    p = normalize_project_path(run_arg)
     if os.path.isfile(p):
         if os.path.basename(p) in ("run_context.json", "run_state.json", "spec_snapshot.json"):
             return os.path.dirname(p)
@@ -120,18 +121,18 @@ def resolve_trusted_paths(work_dir: str, context: Optional[Dict[str, Any]] = Non
     """根据工作区真实路径与规范结构重新推导并校验可信项目路径。
     防范 run_context.json 中的 output_dir 被外部篡改或指向素材目录/外部目录/历史交付目录。
     """
+    norm_work = normalize_project_path(work_dir)
     if context is None:
-        ctx_path = os.path.join(work_dir, "run_context.json")
+        ctx_path = os.path.join(norm_work, "run_context.json")
         if os.path.isfile(ctx_path):
             with open(ctx_path, "r", encoding="utf-8") as f:
                 context = json.load(f)
         else:
             context = {}
 
-    run_id = context.get("run_id") or os.path.basename(work_dir)
+    run_id = context.get("run_id") or os.path.basename(norm_work)
     # 推导可信 project_root: 绝不信任外部注入的随意绝对路径
     # work_dir 的规范格式应为 <project_root>/work/<run_id>
-    norm_work = os.path.normpath(os.path.abspath(work_dir))
     parts = Path(norm_work).parts
     if len(parts) >= 3 and parts[-2] == "work":
         derived_root = str(Path(*parts[:-2]))
@@ -144,16 +145,52 @@ def resolve_trusted_paths(work_dir: str, context: Optional[Dict[str, Any]] = Non
         materials_dir=context.get("materials_dir"),
     )
 
-    # 交叉核验：如果 run_context 中记录了 output_dir，必须与推导出的 paths.output_dir 完全一致
+    real_trusted_root = os.path.realpath(paths.project_root)
+    real_trusted_out = os.path.realpath(paths.output_dir)
+    real_mat_dir = os.path.realpath(paths.materials_dir) if paths.materials_dir else ""
+
+    # 1. 基础越界校验：输出目录绝不能为项目根目录
+    if os.path.normcase(real_trusted_out) == os.path.normcase(real_trusted_root):
+        raise ValueError(f"安全阻断: 输出目录不能为项目根目录 ({paths.output_dir})")
+
+    # 2. 素材目录隔离校验：输出目录绝不能指向或包含在素材目录下
+    if real_mat_dir:
+        try:
+            if (os.path.normcase(real_trusted_out) == os.path.normcase(real_mat_dir) or
+                os.path.commonpath([real_mat_dir, real_trusted_out]) == real_mat_dir):
+                raise ValueError(
+                    f"安全阻断: 输出目录 ({paths.output_dir}) 位于原始素材目录 ({paths.materials_dir}) 下，存在污染素材风险"
+                )
+        except ValueError:
+            pass
+
+    # 3. 根目录包含校验：输出目录必须位于可信项目根目录下 (commonpath)
+    try:
+        if os.path.commonpath([real_trusted_root, real_trusted_out]) != real_trusted_root:
+            raise ValueError(
+                f"安全阻断: 输出目录 ({paths.output_dir}) 越界脱离项目根目录 ({paths.project_root})"
+            )
+    except ValueError:
+        raise ValueError(
+            f"安全阻断: 输出目录 ({paths.output_dir}) 与项目根目录不在同一驱动器或文件系统"
+        )
+
+    # 4. 交叉核验：如果 run_context 中记录了 output_dir，必须与推导出的 paths.output_dir 完全一致
     ctx_out = context.get("output_dir")
     if ctx_out:
-        real_ctx_out = os.path.normcase(os.path.realpath(os.path.abspath(ctx_out)))
-        real_trusted_out = os.path.normcase(os.path.realpath(os.path.abspath(paths.output_dir)))
-        if real_ctx_out != real_trusted_out:
+        real_ctx_out = os.path.realpath(normalize_project_path(ctx_out))
+        if os.path.normcase(real_ctx_out) != os.path.normcase(real_trusted_out):
             raise ValueError(
                 f"安全阻断: run_context.json 中的 output_dir ({ctx_out}) "
                 f"与可信项目推导路径 ({paths.output_dir}) 不匹配，存在篡改或越界风险"
             )
+        if real_mat_dir:
+            try:
+                if (os.path.normcase(real_ctx_out) == os.path.normcase(real_mat_dir) or
+                    os.path.commonpath([real_mat_dir, real_ctx_out]) == real_mat_dir):
+                    raise ValueError(f"安全阻断: run_context.json 中的 output_dir 指向素材目录 ({ctx_out})")
+            except ValueError:
+                pass
 
     return paths
 
@@ -323,6 +360,8 @@ def stage_analyze(run_arg: str) -> Dict[str, Any]:
     with open(context_path, "r", encoding="utf-8") as f:
         context = json.load(f)
 
+    paths = resolve_trusted_paths(work_dir, context)
+
     spec_path = os.path.join(work_dir, "spec_snapshot.json")
     with open(spec_path, "r", encoding="utf-8") as f:
         spec = json.load(f)
@@ -477,19 +516,21 @@ def stage_analyze(run_arg: str) -> Dict[str, Any]:
     # 建立多源映射表，根据 input_manifest 的唯一 source_id 严格关联
     source_videos_list = manifest.get("source_videos", [])
     src_map_by_id = {s.get("source_id"): s for s in source_videos_list if s.get("source_id")}
-    src_map_by_path = {os.path.normcase(os.path.realpath(os.path.abspath(s["path"]))): s for s in source_videos_list if s.get("path")}
+    src_map_by_path = {os.path.normcase(os.path.realpath(normalize_project_path(s["path"]))): s for s in source_videos_list if s.get("path")}
     src_map_by_name = {s.get("filename"): s for s in source_videos_list if s.get("filename")}
 
     def _resolve_source_meta(src_key: str) -> Dict[str, Any]:
         if src_key in src_map_by_id:
             return src_map_by_id[src_key]
-        if os.path.exists(src_key):
-            norm_k = os.path.normcase(os.path.realpath(os.path.abspath(src_key)))
-            if norm_k in src_map_by_path:
-                return src_map_by_path[norm_k]
+        norm_k = os.path.normcase(os.path.realpath(normalize_project_path(src_key)))
+        if norm_k in src_map_by_path:
+            return src_map_by_path[norm_k]
         fn = os.path.basename(src_key)
         if fn in src_map_by_name:
-            return src_map_by_name[fn]
+            # 只有当同名文件唯一时才按 basename 匹配，避免同名多目录素材 ID 冲突
+            matches = [s for s in source_videos_list if s.get("filename") == fn]
+            if len(matches) == 1:
+                return matches[0]
         return source_videos_list[0] if source_videos_list else {}
 
     for src, utts in utterances_by_source.items():
@@ -627,6 +668,8 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
     with open(context_path, "r", encoding="utf-8") as f:
         context = json.load(f)
 
+    paths = resolve_trusted_paths(work_dir, context)
+
     snapshot_path = os.path.join(work_dir, "analysis", "candidate_pool_snapshot.json")
     if not os.path.isfile(snapshot_path):
         raise FileNotFoundError(f"未找到 candidate_pool_snapshot.json: {snapshot_path}，请先执行 analyze 阶段")
@@ -674,9 +717,18 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
                     valid_source_ids.add(sid)
                     manifest_sources_by_id[sid] = s
                 if sp:
-                    valid_source_paths.add(os.path.normcase(os.path.realpath(os.path.abspath(sp))))
+                    valid_source_paths.add(os.path.normcase(os.path.realpath(normalize_project_path(sp))))
         except Exception:
             pass
+    elif snapshot.get("source_whitelist"):
+        for s in snapshot.get("source_whitelist", []):
+            sid = s.get("source_id")
+            sp = s.get("path")
+            if sid:
+                valid_source_ids.add(sid)
+                manifest_sources_by_id[sid] = s
+            if sp:
+                valid_source_paths.add(os.path.normcase(os.path.realpath(normalize_project_path(sp))))
 
     # 针对全部候选进行源白名单校验与历史成片隔离
     for c in all_candidates:
@@ -690,16 +742,22 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
                 violations.append(f"候选 {cid} 引用了历史成片作为剪辑素材源 ({c_src}): {hist_reason}")
 
         if valid_source_ids:
-            if c_sid and c_sid not in valid_source_ids:
+            if not c_sid or c_sid not in valid_source_ids:
                 violations.append(f"候选 {cid} 的 source_id ({c_sid}) 不在 input_manifest.json 白名单中")
-            if c_src and valid_source_paths:
-                norm_c_src = os.path.normcase(os.path.realpath(os.path.abspath(c_src)))
+            if not c_src:
+                violations.append(f"候选 {cid} 缺失 source_file")
+            elif valid_source_paths:
+                norm_c_src = os.path.normcase(os.path.realpath(normalize_project_path(c_src)))
                 if norm_c_src not in valid_source_paths:
                     violations.append(f"候选 {cid} 的 source_file ({c_src}) 不在 input_manifest.json 白名单中")
                 if c_sid in manifest_sources_by_id:
-                    expected_p = os.path.normcase(os.path.realpath(os.path.abspath(manifest_sources_by_id[c_sid].get("path", ""))))
+                    expected_p = os.path.normcase(os.path.realpath(normalize_project_path(manifest_sources_by_id[c_sid].get("path", ""))))
                     if norm_c_src != expected_p:
                         violations.append(f"候选 {cid} 的 source_file 与 source_id ({c_sid}) 绑定的清单路径不一致")
+                    expected_sha = manifest_sources_by_id[c_sid].get("sha256")
+                    c_sha = c.get("source_file_sha256")
+                    if expected_sha and c_sha and c_sha != expected_sha:
+                        violations.append(f"候选 {cid} 的 source_file_sha256 与清单完整哈希不匹配")
 
     covers_path = os.path.join(work_dir, "analysis", "cover_candidates.json")
     cover_candidates = []
@@ -916,6 +974,7 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
     # 审计判定
     audit_report = {
         "schema_version": "3.2",
+        "run_id": context.get("run_id"),
         "proposal_id": proposal.get("proposal_id", "agent_proposal"),
         "proposal_hash": proposal_hash,
         "candidate_pool_hash": prop_hash,
@@ -1005,6 +1064,10 @@ def stage_render(run_arg: str) -> Dict[str, Any]:
     paths = resolve_trusted_paths(work_dir, context)
     output_dir = paths.output_dir
 
+    deliv_manifest_path = os.path.join(output_dir, "delivery_manifest.json")
+    if os.path.isfile(deliv_manifest_path):
+        raise RuntimeError(f"当前运行 ({context.get('run_id')}) 已完成正式交付签署，禁止重新渲染覆盖已交付成片！如需重新制作请创建新 run_id")
+
     plan_path = os.path.join(work_dir, "validated_plan.json")
     if not os.path.isfile(plan_path):
         raise FileNotFoundError(f"未找到已验证的计划文件: {plan_path}，必须先通过 validate-plan 校验")
@@ -1018,8 +1081,12 @@ def stage_render(run_arg: str) -> Dict[str, Any]:
         raise ValueError(f"未找到计划审计报告: {audit_path}，必须先通过 validate-plan 校验")
     with open(audit_path, "r", encoding="utf-8") as af:
         audit_rep = json.load(af)
-    if not (audit_rep.get("passed") or audit_rep.get("audit_status") == "APPROVED"):
-        raise ValueError("分镜计划未通过质量门禁审计 (处于 REJECTED 状态)")
+    if not (audit_rep.get("passed") and audit_rep.get("audit_status") == "APPROVED"):
+        raise ValueError("分镜计划未通过质量门禁审计 (必须处于 APPROVED 状态且 passed=True)")
+    if audit_rep.get("run_id") and audit_rep.get("run_id") != context.get("run_id"):
+        raise ValueError(f"分镜计划审计报告 run_id ({audit_rep.get('run_id')}) 与当前运行 ({context.get('run_id')}) 不符")
+    if plan.get("run_id") and plan.get("run_id") != context.get("run_id"):
+        raise ValueError(f"执行计划 run_id ({plan.get('run_id')}) 与当前运行 ({context.get('run_id')}) 不符")
 
     # 验证 validated_plan_hash 绑定与执行计划未被篡改
     plan_to_hash = {k: v for k, v in plan.items() if k != "validated_plan_hash"}
@@ -1035,10 +1102,6 @@ def stage_render(run_arg: str) -> Dict[str, Any]:
 
     os.makedirs(output_dir, exist_ok=True)
 
-    deliv_manifest_path = os.path.join(output_dir, "delivery_manifest.json")
-    if os.path.isfile(deliv_manifest_path):
-        raise RuntimeError(f"当前运行 ({context.get('run_id')}) 已完成正式交付签署，禁止重新渲染覆盖已交付成片！如需重新制作请创建新 run_id")
-
     # 重新核验所有剪辑片段的素材源白名单与真实存在性，绝对禁止读取非白名单或历史成片
     manifest_path = os.path.join(work_dir, "input_manifest.json")
     valid_source_paths = set()
@@ -1053,7 +1116,7 @@ def stage_render(run_arg: str) -> Dict[str, Any]:
                 if sid:
                     valid_sources_by_id[sid] = s
                 if sp:
-                    valid_source_paths.add(os.path.normcase(os.path.realpath(os.path.abspath(sp))))
+                    valid_source_paths.add(os.path.normcase(os.path.realpath(normalize_project_path(sp))))
         except Exception:
             pass
 
@@ -1064,15 +1127,21 @@ def stage_render(run_arg: str) -> Dict[str, Any]:
         is_hist, hist_reason = is_historical_output(clip_src, context.get("project_id", ""))
         if is_hist:
             raise RuntimeError(f"渲染使用了历史成片作为输入素材: {clip_src} ({hist_reason})")
+        norm_clip_src = os.path.normcase(os.path.realpath(normalize_project_path(clip_src)))
         if valid_source_paths:
-            norm_clip_src = os.path.normcase(os.path.realpath(os.path.abspath(clip_src)))
             if norm_clip_src not in valid_source_paths:
                 raise RuntimeError(f"渲染使用了非白名单素材源文件: {clip_src}")
         clip_sid = clip.get("source_id")
-        if clip_sid and clip_sid in valid_sources_by_id:
-            expected_p = os.path.normcase(os.path.realpath(os.path.abspath(valid_sources_by_id[clip_sid].get("path", ""))))
-            if os.path.normcase(os.path.realpath(os.path.abspath(clip_src))) != expected_p:
+        if valid_sources_by_id:
+            if not clip_sid or clip_sid not in valid_sources_by_id:
+                raise RuntimeError(f"渲染使用了非白名单素材 source_id: {clip_sid}")
+            expected_p = os.path.normcase(os.path.realpath(normalize_project_path(valid_sources_by_id[clip_sid].get("path", ""))))
+            if norm_clip_src != expected_p:
                 raise RuntimeError(f"渲染分镜素材路径与 source_id ({clip_sid}) 白名单绑定不匹配: {clip_src}")
+            expected_sha = valid_sources_by_id[clip_sid].get("sha256")
+            clip_sha = clip.get("source_file_sha256")
+            if expected_sha and clip_sha and clip_sha != expected_sha:
+                raise RuntimeError(f"渲染分镜素材哈希与白名单绑定不匹配: {clip_sha} != {expected_sha}")
 
     # 渲染新成片必须使下游旧验收产物失效
     for old_artifact in ("technical_qc.json", "editorial_qc.json"):
@@ -1194,6 +1263,13 @@ def stage_qc(run_arg: str) -> Dict[str, Any]:
     # 重新推导与严格核验可信输出目录
     paths = resolve_trusted_paths(work_dir, context)
     output_dir = paths.output_dir
+
+    # 交付清单不可变性防护：已有 DELIVERED 清单必须保持不可变，严禁重写质检结论
+    deliv_manifest_path = os.path.join(output_dir, "delivery_manifest.json")
+    if os.path.isfile(deliv_manifest_path):
+        raise RuntimeError(
+            f"当前运行 ({context.get('run_id')}) 已完成正式交付签署，交付物与质检结论已被锁定为不可变！如需重新质检请创建新 run_id"
+        )
     final_video = os.path.join(output_dir, "final.mp4")
     if not os.path.isfile(final_video):
         raise FileNotFoundError(f"未找到待检成片: {final_video}，请先执行 render 阶段")
@@ -1390,14 +1466,16 @@ def stage_deliver(run_arg: str) -> Dict[str, Any]:
     if os.path.isfile(plan_audit_path):
         with open(plan_audit_path, "r", encoding="utf-8") as paf:
             pa_data = json.load(paf)
-        if not (pa_data.get("passed") or pa_data.get("audit_status") == "APPROVED"):
-            rejections.append("分镜计划审计未通过 (处于 REJECTED 状态)")
+        if not (pa_data.get("passed") and pa_data.get("audit_status") == "APPROVED"):
+            rejections.append("分镜计划审计未通过或未经批准 (处于 REJECTED 状态)")
         if pa_data.get("run_id") and pa_data.get("run_id") != context.get("run_id"):
             rejections.append(f"分镜计划审计报告 run_id ({pa_data.get('run_id')}) 与当前运行 ({context.get('run_id')}) 不符")
 
     if os.path.isfile(plan_path):
         with open(plan_path, "r", encoding="utf-8") as pf:
             plan_obj = json.load(pf)
+        if plan_obj.get("run_id") and plan_obj.get("run_id") != context.get("run_id"):
+            rejections.append(f"执行计划 run_id ({plan_obj.get('run_id')}) 与当前运行 ({context.get('run_id')}) 不符")
         plan_to_hash = {k: v for k, v in plan_obj.items() if k != "validated_plan_hash"}
         plan_bytes = json.dumps(plan_to_hash, sort_keys=True, ensure_ascii=False).encode("utf-8")
         actual_plan_hash = hashlib.sha256(plan_bytes).hexdigest()
