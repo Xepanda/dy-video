@@ -571,7 +571,7 @@ class DesktopSpecApi:
         except Exception as e:
             return {"success": False, "message": f"扫描项目失败: {str(e)}"}
 
-    def save_spec(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def save_spec(self, payload: Dict[str, Any], create_named_copy: bool = True) -> Dict[str, Any]:
         """校验并保存配置至用户素材目录，绝不修改仓库，并打开系统文件资源管理器。"""
         errors = self._manager.validate(payload)
         if errors:
@@ -606,7 +606,7 @@ class DesktopSpecApi:
             self._manager.save_spec(spec, target_path)
 
             project_id = str(payload.get("project_id") or "").strip()
-            if project_id and project_id != "job_spec":
+            if create_named_copy and project_id and project_id != "job_spec":
                 p_spec = os.path.join(material_dir, f"{project_id}_job_spec.json")
                 if os.path.abspath(p_spec) != os.path.abspath(target_path):
                     shutil.copy2(target_path, p_spec)
@@ -614,7 +614,7 @@ class DesktopSpecApi:
             self._last_project_root = paths.project_root if "paths" in locals() else material_dir
             self._last_spec_path = target_path
 
-            if not self._custom_spec_path and not os.environ.get("PYTEST_CURRENT_TEST"):
+            if not self._custom_spec_path and not os.environ.get("PYTEST_CURRENT_TEST") and create_named_copy:
                 try:
                     if os.name == "nt":
                         norm_p = os.path.normpath(target_path)
@@ -637,20 +637,31 @@ class DesktopSpecApi:
     def generate_agent_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """原子保存 job_spec.json 并生成 AGENT_TASK.md，提供可复制的任务指令，绝不隐式启动 Agent 进程。"""
         raw_vids = payload.get("raw_video_paths")
-        if raw_vids is not None and len(raw_vids) == 0:
+        raw_vid = payload.get("raw_video_path")
+        if (raw_vids is not None and len(raw_vids) == 0) or (raw_vids is None and not raw_vid):
             return {
                 "success": False,
                 "status": "NEEDS_INPUT",
                 "message": "未勾选任何原始视频素材，请在素材清单中勾选至少一段原始直播视频！",
             }
 
-        save_res = self.save_spec(payload)
+        save_res = self.save_spec(payload, create_named_copy=False)
         if not save_res.get("success"):
             return save_res
 
         spec = save_res["spec"]
         target_path = save_res["target_path"]
         material_dir = save_res["material_dir"]
+
+        # 确保素材目录下仅保留单一真实来源 job_spec.json，杜绝 <project_id>_job_spec.json 造成配置分叉
+        project_id = str(payload.get("project_id") or "").strip()
+        if project_id and project_id != "job_spec":
+            old_named = os.path.join(material_dir, f"{project_id}_job_spec.json")
+            if os.path.isfile(old_named):
+                try:
+                    os.remove(old_named)
+                except Exception:
+                    pass
 
         from src.core.project_context import ProjectPaths
         paths = ProjectPaths(project_root=material_dir)

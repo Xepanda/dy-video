@@ -165,6 +165,7 @@ def build_resolved_spec(spec: dict, videos: list, texts: dict) -> dict:
 
 
 def main() -> int:
+    print("[DEPRECATED] generate_from_job_spec.py 为旧版一键执行入口。V3.2 已升级为 Agent-First 架构，推荐使用分阶段 CLI (python -m src.cli prepare --spec ...)", file=sys.stderr)
     parser = argparse.ArgumentParser(
         description="依据 job_spec.json 直播任务契约生成最终带货成片")
     parser.add_argument("--spec", default="job_spec.json",

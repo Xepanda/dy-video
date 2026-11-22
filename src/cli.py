@@ -104,15 +104,19 @@ def main() -> int:
 
         if args.subcommand == "prepare":
             res = stage_prepare(spec_path=args.spec, run_id=args.run_id)
+            exit_code = 0 if res.get("status") == "PREPARED" else 1
 
         elif args.subcommand == "analyze":
             res = stage_analyze(run_arg=args.run)
+            exit_code = 0 if res.get("status") == "ANALYZED" else 1
 
         elif args.subcommand == "validate-plan":
             res = stage_validate_plan(run_arg=args.run, proposal_path=args.proposal)
+            exit_code = 0 if res.get("status") == "PLAN_VALIDATED" else 1
 
         elif args.subcommand == "render":
             res = stage_render(run_arg=args.run)
+            exit_code = 0 if res.get("status") == "RENDERED" else 1
 
         elif args.subcommand == "qc":
             res = stage_qc(run_arg=args.run)
@@ -120,9 +124,11 @@ def main() -> int:
 
         elif args.subcommand == "deliver":
             res = stage_deliver(run_arg=args.run)
+            exit_code = 0 if res.get("status") == "DELIVERED" else 1
 
         elif args.subcommand == "status":
             res = stage_status(run_arg=args.run)
+            exit_code = 0
 
         sys.stdout = real_stdout
         _output_json(res, exit_code=exit_code)

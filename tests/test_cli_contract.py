@@ -261,6 +261,122 @@ class TestCliContract(unittest.TestCase):
         quarantined = out["quarantined_files"]
         self.assertTrue(any("test_proj.mp4" in q.get("path", "") for q in quarantined))
 
+    def test_cli_validate_plan_missing_candidate_pool_hash_rejected(self):
+        prep_res = self._run_cli(["prepare", "--spec", self.spec_path])
+        work_dir = json.loads(prep_res.stdout)["work_dir"]
+
+        analysis_dir = os.path.join(work_dir, "analysis")
+        os.makedirs(analysis_dir, exist_ok=True)
+        with open(os.path.join(analysis_dir, "candidates.json"), "w", encoding="utf-8") as f:
+            json.dump([{"candidate_id": "c1", "source_file": self.dummy_video, "source_start_ms": 0, "source_end_ms": 3000, "product_relation": "SAME_SKU", "text": "测试文本"}], f)
+        with open(os.path.join(analysis_dir, "candidate_pool_snapshot.json"), "w", encoding="utf-8") as f:
+            json.dump({"candidate_pool_hash": "hash_ok", "candidate_ids": ["c1"]}, f)
+
+        # 提案故意省略 candidate_pool_hash
+        no_hash_proposal = {
+            "proposal_id": "prop_no_hash",
+            "ordered_candidate_ids": ["c1"],
+        }
+        prop_path = os.path.join(work_dir, "no_hash_proposal.json")
+        with open(prop_path, "w", encoding="utf-8") as f:
+            json.dump(no_hash_proposal, f)
+
+        res = self._run_cli(["validate-plan", "--run", work_dir, "--proposal", prop_path])
+        self.assertNotEqual(res.returncode, 0)
+        out = json.loads(res.stdout)
+        self.assertIn("必须包含 candidate_pool_hash", out.get("error_message", ""))
+
+    def test_cli_validate_plan_mismatched_run_id_rejected(self):
+        prep_res = self._run_cli(["prepare", "--spec", self.spec_path])
+        work_dir = json.loads(prep_res.stdout)["work_dir"]
+
+        analysis_dir = os.path.join(work_dir, "analysis")
+        os.makedirs(analysis_dir, exist_ok=True)
+        with open(os.path.join(analysis_dir, "candidates.json"), "w", encoding="utf-8") as f:
+            json.dump([{"candidate_id": "c1", "source_file": self.dummy_video, "source_start_ms": 0, "source_end_ms": 3000, "product_relation": "SAME_SKU", "text": "测试文本"}], f)
+        with open(os.path.join(analysis_dir, "candidate_pool_snapshot.json"), "w", encoding="utf-8") as f:
+            json.dump({"candidate_pool_hash": "hash_ok", "candidate_ids": ["c1"]}, f)
+
+        # 提案提供错误的 run_id
+        mismatch_run_proposal = {
+            "run_id": "different_run_9999",
+            "candidate_pool_hash": "hash_ok",
+            "ordered_candidate_ids": ["c1"],
+        }
+        prop_path = os.path.join(work_dir, "mismatch_run_proposal.json")
+        with open(prop_path, "w", encoding="utf-8") as f:
+            json.dump(mismatch_run_proposal, f)
+
+        res = self._run_cli(["validate-plan", "--run", work_dir, "--proposal", prop_path])
+        self.assertNotEqual(res.returncode, 0)
+        out = json.loads(res.stdout)
+        self.assertIn("运行编号不匹配", out.get("error_message", ""))
+
+    def test_cli_validate_plan_insufficient_evidence_blocked(self):
+        prep_res = self._run_cli(["prepare", "--spec", self.spec_path])
+        work_dir = json.loads(prep_res.stdout)["work_dir"]
+
+        analysis_dir = os.path.join(work_dir, "analysis")
+        os.makedirs(analysis_dir, exist_ok=True)
+        with open(os.path.join(analysis_dir, "candidates.json"), "w", encoding="utf-8") as f:
+            json.dump([{"candidate_id": "c1", "source_file": self.dummy_video, "source_start_ms": 0, "source_end_ms": 3000, "product_relation": "SAME_SKU", "text": "测试文本"}], f)
+        with open(os.path.join(analysis_dir, "candidate_pool_snapshot.json"), "w", encoding="utf-8") as f:
+            json.dump({"candidate_pool_hash": "hash_ok", "candidate_ids": ["c1"]}, f)
+
+        insufficient_proposal = {
+            "status": "INSUFFICIENT_EVIDENCE",
+            "candidate_pool_hash": "hash_ok",
+            "evidence_gap": ["缺少本品展示证据"],
+        }
+        prop_path = os.path.join(work_dir, "insufficient_proposal.json")
+        with open(prop_path, "w", encoding="utf-8") as f:
+            json.dump(insufficient_proposal, f)
+
+        res = self._run_cli(["validate-plan", "--run", work_dir, "--proposal", prop_path])
+        self.assertNotEqual(res.returncode, 0)
+        out = json.loads(res.stdout)
+        self.assertIn("INSUFFICIENT_EVIDENCE", out.get("error_message", ""))
+
+    def test_cli_deliver_rejects_when_live_spec_tampered(self):
+        prep_res = self._run_cli(["prepare", "--spec", self.spec_path])
+        work_dir = json.loads(prep_res.stdout)["work_dir"]
+        output_dir = os.path.join(self.proj_dir, "output", json.loads(prep_res.stdout)["run_id"])
+        os.makedirs(output_dir, exist_ok=True)
+
+        with open(os.path.join(output_dir, "final.mp4"), "wb") as f:
+            f.write(b"FAKE_FINAL_VIDEO_CONTENT")
+        with open(os.path.join(output_dir, "technical_qc.json"), "w", encoding="utf-8") as f:
+            json.dump({"passed": True}, f)
+        with open(os.path.join(output_dir, "editorial_qc.json"), "w", encoding="utf-8") as f:
+            json.dump({"passed": True, "block_count": 0}, f)
+
+        # 篡改源任务契约的品牌配置
+        tampered_spec = dict(self.spec_data)
+        tampered_spec["brand"] = {"title_en": "TAMPERED_BRAND", "subtitle_cn": "篡改品牌"}
+        with open(self.spec_path, "w", encoding="utf-8") as f:
+            json.dump(tampered_spec, f)
+
+        res = self._run_cli(["deliver", "--run", work_dir])
+        self.assertNotEqual(res.returncode, 0)
+        out = json.loads(res.stdout)
+        self.assertIn("指纹不匹配", out.get("error_message", ""))
+
+    def test_generate_agent_task_does_not_create_duplicate_named_spec(self):
+        from src.tools.desktop_spec_creator import DesktopSpecApi
+        api = DesktopSpecApi()
+        payload = {
+            "project_id": "test_no_duplicate",
+            "project_root": self.proj_dir,
+            "raw_video_paths": [self.dummy_video],
+            "product_title_l1": "无重复配置测试",
+            "product_title_l2": "单一来源",
+        }
+        res = api.generate_agent_task(payload)
+        self.assertTrue(res["success"])
+        # 验证仅生成 job_spec.json，严禁出现 test_no_duplicate_job_spec.json 双真实来源
+        self.assertTrue(os.path.isfile(os.path.join(self.mat_dir, "job_spec.json")))
+        self.assertFalse(os.path.isfile(os.path.join(self.mat_dir, "test_no_duplicate_job_spec.json")))
+
 
 if __name__ == "__main__":
     unittest.main()

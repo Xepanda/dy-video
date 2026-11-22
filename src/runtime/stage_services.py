@@ -386,31 +386,26 @@ def stage_analyze(run_arg: str) -> Dict[str, Any]:
 
     sku_tracker = SkuTracker()
     ranker = CandidateRanker()
-    scored_candidates = []
-    scores_list = []
     warnings = []
 
-    for c in all_candidates:
-        c_text = c.get("text", "")
-        # 尝试抽关键帧
-        frames = provider.get_frames_for_candidate(c)
-        vis_dec = None
-        if not frames:
-            c.setdefault("evidence_gap", []).append("UNVERIFIABLE: 缺失候选视频帧")
+    is_strict_policy = (
+        product_profile.get("quality_policy") == "strict"
+        or product_profile.get("visual_verification") == "required"
+        or product_profile.get("strict") is True
+    )
 
-        rel, conf, reasons, gap = sku_tracker.identify_relation(
-            c_text, product_profile, visual_decision=vis_dec, strict_vision=product_profile.get("strict", False)
-        )
-        c["product_relation"] = rel
-        c["relation_confidence"] = conf
-        c["relation_reasons"] = reasons
-        if gap:
-            c.setdefault("evidence_gap", []).extend(gap)
-        scored_candidates.append(c)
+    relation_decisions = sku_tracker.track_candidates(
+        all_candidates,
+        product_profile,
+        frame_provider=provider,
+        strict_vision=is_strict_policy,
+    )
 
     # 经由 CandidateRanker 精排与门禁
-    rank_res = ranker.score_candidates(scored_candidates, product_profile)
-    final_candidates = rank_res.get("candidates", scored_candidates)
+    rank_res = ranker.score_candidates(
+        all_candidates, product_profile, relation_decisions=relation_decisions
+    )
+    final_candidates = rank_res.get("candidates", all_candidates)
     scores = rank_res.get("scores", [])
 
     # 检查是否有视觉参考图
@@ -443,12 +438,22 @@ def stage_analyze(run_arg: str) -> Dict[str, Any]:
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
+    evidence_manifest = {
+        "schema_version": "3.2",
+        "run_id": context.get("run_id"),
+        "product_relation_decisions": relation_decisions,
+        "warnings": warnings,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
     with open(os.path.join(analysis_dir, "candidates.json"), "w", encoding="utf-8") as f:
         json.dump(final_candidates, f, ensure_ascii=False, indent=2)
     with open(os.path.join(analysis_dir, "scores.json"), "w", encoding="utf-8") as f:
         json.dump(scores, f, ensure_ascii=False, indent=2)
     with open(os.path.join(analysis_dir, "candidate_pool_snapshot.json"), "w", encoding="utf-8") as f:
         json.dump(snapshot_data, f, ensure_ascii=False, indent=2)
+    with open(os.path.join(analysis_dir, "evidence_manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(evidence_manifest, f, ensure_ascii=False, indent=2)
 
     # 停靠点：写入 run_state.json 并停止，等待外部 Agent 提交 proposal
     _log_event(work_dir, "ANALYZE_COMPLETED", f"分析完成，候选池共 {len(final_candidates)} 个片段，哈希: {candidate_pool_hash}", snapshot_data)
@@ -465,6 +470,7 @@ def stage_analyze(run_arg: str) -> Dict[str, Any]:
         "warnings": warnings,
         "candidates_path": os.path.join(analysis_dir, "candidates.json"),
         "snapshot_path": os.path.join(analysis_dir, "candidate_pool_snapshot.json"),
+        "evidence_manifest_path": os.path.join(analysis_dir, "evidence_manifest.json"),
         "next_step": f"python -m src.cli validate-plan --run {work_dir} --proposal <path_to_sequence_proposal.json>",
     }
 
@@ -510,11 +516,13 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
     with open(prop_abs, "r", encoding="utf-8") as f:
         prop_data = json.load(f)
 
-    # 兼容单个 proposal 对象与 { "proposals": [...] }
+    # 兼容单个 proposal 对象与 { "proposals": [...] } 以及显式 INSUFFICIENT_EVIDENCE
     proposal: Dict[str, Any] = {}
     if "proposals" in prop_data and isinstance(prop_data["proposals"], list) and prop_data["proposals"]:
         proposal = prop_data["proposals"][0]
     elif "ordered_candidate_ids" in prop_data:
+        proposal = prop_data
+    elif prop_data.get("status") == "INSUFFICIENT_EVIDENCE":
         proposal = prop_data
     else:
         raise ValueError("提案格式非法: 必须包含 ordered_candidate_ids 字段")
@@ -522,18 +530,29 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
     violations: List[str] = []
     warnings: List[str] = []
 
-    # 1. 验证 candidate_pool_hash 强锁
-    prop_hash = proposal.get("candidate_pool_hash")
+    # 1. 验证 candidate_pool_hash 强锁（不可伪造或绕过）
+    prop_hash = proposal.get("candidate_pool_hash") or prop_data.get("candidate_pool_hash")
     frozen_hash = snapshot.get("candidate_pool_hash")
-    if prop_hash and prop_hash != frozen_hash:
+    if not prop_hash:
+        violations.append("提案必须包含 candidate_pool_hash 字段以锁定候选池快照")
+    elif prop_hash != frozen_hash:
         violations.append(f"候选池哈希不匹配: 提案哈希 ({prop_hash}) != 当前冻结候选池哈希 ({frozen_hash})")
+
+    # 2. 验证 run_id（若提供）
+    prop_run_id = proposal.get("run_id") or prop_data.get("run_id")
+    if prop_run_id and prop_run_id != context.get("run_id"):
+        violations.append(f"运行编号不匹配: 提案 run_id ({prop_run_id}) != 当前工作区 run_id ({context.get('run_id')})")
+
+    # 3. 显式声明证据不足直接阻断
+    if prop_data.get("status") == "INSUFFICIENT_EVIDENCE" or proposal.get("status") == "INSUFFICIENT_EVIDENCE":
+        violations.append("提案显式声明 INSUFFICIENT_EVIDENCE（证据不足），已按门禁规范安全阻断，不予生成执行计划")
 
     ordered_ids = proposal.get("ordered_candidate_ids")
     if not isinstance(ordered_ids, list):
         violations.append("提案中选定候选列表 (ordered_candidate_ids) 必须为数组列表")
         ordered_ids = []
     elif not ordered_ids:
-        violations.append("提案中选定候选列表 (ordered_candidate_ids) 为空")
+        violations.append("提案中选定候选列表 (ordered_candidate_ids) 不能为空")
 
     # 2. 验证候选 ID 白名单与有效性
     selected_cands = []
@@ -624,10 +643,25 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
         raise ValueError(f"提案未通过质量与安全门禁:\n" + "\n".join(f"- {v}" for v in violations))
 
     # 5. 编译为执行计划 validated_plan.json
+    scores_data = {}
+    scores_path = os.path.join(work_dir, "analysis", "scores.json")
+    if os.path.isfile(scores_path):
+        try:
+            with open(scores_path, "r", encoding="utf-8") as sf:
+                raw_s = json.load(sf)
+                if isinstance(raw_s, dict):
+                    scores_data = raw_s
+                elif isinstance(raw_s, list):
+                    scores_data = {"scores": raw_s}
+        except Exception:
+            scores_data = {"scores": all_candidates}
+    else:
+        scores_data = {"scores": all_candidates}
+
     compiled_plan = compile_v3_plan(
         proposal=proposal,
         candidates=all_candidates,
-        scores={"scores": all_candidates},
+        scores=scores_data,
         spec_data=spec,
         constraints=constraints,
     )
@@ -742,8 +776,11 @@ def stage_render(run_arg: str) -> Dict[str, Any]:
 
     # 原子重命名发布成片
     if os.path.exists(final_video):
-        os.remove(final_video)
-    os.rename(tmp_final_video, final_video)
+        try:
+            os.remove(final_video)
+        except Exception:
+            pass
+    os.replace(tmp_final_video, final_video)
 
     # 3. 生成带货文案 copywriting.md
     copywriting_path = os.path.join(output_dir, "copywriting.md")
@@ -945,6 +982,19 @@ def stage_deliver(run_arg: str) -> Dict[str, Any]:
         curr_fp = compute_job_fingerprint(spec, manifest)
         if curr_fp != context.get("spec_fingerprint"):
             rejections.append("任务输入指纹发生变更，严禁跨配置交付")
+
+    live_spec_path = context.get("spec_path")
+    if live_spec_path and os.path.isfile(live_spec_path) and os.path.isfile(manifest_path):
+        try:
+            with open(live_spec_path, "r", encoding="utf-8") as f:
+                live_spec = json.load(f)
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            live_fp = compute_job_fingerprint(live_spec, manifest)
+            if live_fp != context.get("spec_fingerprint"):
+                rejections.append("活任务配置已被外部修改导致指纹不匹配，严禁跨配置交付")
+        except Exception as e:
+            rejections.append(f"活任务配置指纹校验异常: {e}")
 
     if rejections:
         msg = f"交付硬门禁拒绝签署: {'; '.join(rejections)}"
