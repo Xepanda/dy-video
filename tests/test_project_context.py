@@ -19,6 +19,10 @@ from src.core.project_context import (
     is_historical_output,
     sanitize_id,
     compute_job_fingerprint,
+    compute_file_sha256,
+    compute_full_file_sha256,
+    compute_file_fast_fingerprint,
+    normalize_project_path,
 )
 
 
@@ -266,12 +270,19 @@ def test_same_stem_different_extension_source_ids():
 
 def test_project_paths_workspace_substring_safety():
     """验证含 workspace / artwork 等包含 'work' 子串的路径不会被错误截断。"""
-    fake_path = os.path.normpath(r"D:/dev/workspace/my_video_project")
+    if sys.platform == "win32":
+        fake_path = os.path.normpath(r"D:/dev/workspace/my_video_project")
+        work_proj_path = os.path.normpath(r"D:/work/projects/my_video_project")
+        work_run_path = os.path.normpath(r"D:/dev/workspace/my_video_project/work/run_123")
+    else:
+        fake_path = "/opt/dev/workspace/my_video_project"
+        work_proj_path = "/var/work/projects/my_video_project"
+        work_run_path = "/opt/dev/workspace/my_video_project/work/run_123"
+
     p = ProjectPaths(fake_path)
     assert p.project_root == fake_path, f"路径截断防护异常: 期望 {fake_path}, 实际 {p.project_root}"
 
     # 验证含 /work/ 的实际目录结构（如 D:\work\projects\my-video 或 /home/runner/work/dy-video/dy-video）绝不被误截断
-    work_proj_path = os.path.normpath(r"D:/work/projects/my_video_project")
     p3 = ProjectPaths(work_proj_path)
     assert p3.project_root == work_proj_path, f"含有 work 父路径被错误截断: 期望 {work_proj_path}, 实际 {p3.project_root}"
 
@@ -280,7 +291,6 @@ def test_project_paths_workspace_substring_safety():
     assert p4.project_root == ci_path, f"CI runner 路径被错误截断: 期望 {ci_path}, 实际 {p4.project_root}"
 
     # 验证真实 work/run 子目录能正确回溯
-    work_run_path = os.path.normpath(r"D:/dev/workspace/my_video_project/work/run_123")
     p2 = ProjectPaths(work_run_path)
     assert p2.project_root == fake_path, f"work 运行时目录未正确回溯到项目根: 期望 {fake_path}, 实际 {p2.project_root}"
 
@@ -288,6 +298,55 @@ def test_project_paths_workspace_substring_safety():
     for bad_id in ("../素材", "run/01", "run\\01", "..", "run..id", "run@123", " "):
         with pytest.raises(ValueError, match="非法 run_id"):
             ProjectPaths(fake_path, run_id=bad_id)
+
+
+def test_cross_platform_and_wsl_path_mapping():
+    """测试跨平台路径解析与 WSL 路径映射契约。"""
+    if sys.platform != "win32":
+        # 在 POSIX / Linux 下，Windows 路径 D:/... 自动映射为 /mnt/d/...
+        win_path = r"D:/dev/workspace/my_video_project"
+        p = ProjectPaths(win_path)
+        expected = "/mnt/d/dev/workspace/my_video_project"
+        assert p.project_root == expected, f"WSL 映射异常: 期望 {expected}, 实际 {p.project_root}"
+
+        win_work_run = r"D:/dev/workspace/my_video_project/work/run_123"
+        p_sub = ProjectPaths(win_work_run)
+        assert p_sub.project_root == expected
+    else:
+        # 在 Windows 下，WSL 路径 /mnt/d/... 自动映射为 D:\...
+        wsl_path = "/mnt/d/dev/workspace/my_video_project"
+        p = ProjectPaths(wsl_path)
+        expected = os.path.normpath("D:/dev/workspace/my_video_project")
+        assert p.project_root == expected
+
+        win_path = r"D:/dev/workspace/my_video_project"
+        p_win = ProjectPaths(win_path)
+        assert p_win.project_root == os.path.normpath(win_path)
+
+
+def test_full_file_sha256_detects_middle_byte_changes():
+    """验证完整 SHA-256 可检测大文件中间字节修改，而仅采样的快速指纹无法察觉。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_file = os.path.join(tmpdir, "big_video.mp4")
+        # 创建大于 2MB 的文件 (block_size 64KB * 16 blocks = 1MB 头部, 1MB 尾部)
+        total_size = 3 * 1024 * 1024  # 3 MB
+        with open(test_file, "wb") as f:
+            f.write(b"A" * total_size)
+
+        initial_fast = compute_file_fast_fingerprint(test_file)
+        initial_full = compute_full_file_sha256(test_file)
+
+        # 仅修改文件正中间位置的字节 (1.5 MB 处)
+        with open(test_file, "r+b") as f:
+            f.seek(1572864)  # 1.5 MB
+            f.write(b"MODIFIED_MIDDLE_PAYLOAD")
+
+        new_fast = compute_file_fast_fingerprint(test_file)
+        new_full = compute_full_file_sha256(test_file)
+
+        # 验证快速指纹因采样首尾未变而保持相同，但完整 SHA-256 成功检测到篡改！
+        assert initial_fast == new_fast, "首尾采样指纹不应对中间字节修改敏感"
+        assert initial_full != new_full, "完整 SHA-256 必须成功检测出大视频中间字节篡改"
 
 
 def test_compute_job_fingerprint_string_and_none_brand():
@@ -308,6 +367,8 @@ def main():
     test_sanitize_id()
     test_project_paths_structure()
     test_project_paths_workspace_substring_safety()
+    test_cross_platform_and_wsl_path_mapping()
+    test_full_file_sha256_detects_middle_byte_changes()
     test_historical_output_detection()
     test_input_manifest_scans_and_excludes_old_outputs()
     test_input_manifest_explicit_list_rejects_historical_output()

@@ -146,6 +146,7 @@ def compile_v3_plan(
             "text": cand["text"],
             "source_file": cand.get("source_file") or cand.get("source_id") or raw_video_path or "",
             "source_id": cand.get("source_id") or "",
+            "source_file_sha256": cand.get("source_file_sha256") or "",
             "source_tag": os.path.basename(str(cand.get("source_id") or "")),
             "duration_in_range": True,
             "sticker_text": sticker,

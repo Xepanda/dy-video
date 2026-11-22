@@ -32,11 +32,36 @@ def sanitize_id(raw_name: str) -> str:
     return s or "src"
 
 
+def normalize_project_path(path_str: str) -> str:
+    """跨平台统一解析项目根路径。
+    在 Linux/WSL 环境下，Windows 驱动器盘符（如 D:/... 或 D:\\...）将被规范映射到 WSL 挂载路径（/mnt/d/...）；
+    在 Windows 环境下，保持 Windows 驱动器路径；若传入 /mnt/d/... 自动映射为 D:\\...。
+    """
+    if not path_str:
+        return ""
+    s = str(path_str).strip()
+    if sys.platform != "win32":
+        # POSIX / Linux: 将 Windows 盘符路径映射为 WSL 规范路径
+        m = re.match(r"^([a-zA-Z]):[\\/](.*)$", s)
+        if m:
+            drive = m.group(1).lower()
+            rest = m.group(2).replace("\\", "/")
+            return os.path.normpath(f"/mnt/{drive}/{rest}")
+    else:
+        # Windows: 将 WSL 路径映射为 Windows 盘符路径
+        m = re.match(r"^/mnt/([a-zA-Z])/(.*)$", s)
+        if m:
+            drive = m.group(1).upper()
+            rest = m.group(2).replace("/", "\\")
+            return os.path.normpath(f"{drive}:\\{rest}")
+    return os.path.normpath(os.path.abspath(s))
+
+
 class ProjectPaths:
     """项目路径结构与运行时定位。"""
 
     def __init__(self, project_root: str, run_id: Optional[str] = None, materials_dir: Optional[str] = None):
-        norm_root = os.path.normpath(os.path.abspath(project_root))
+        norm_root = normalize_project_path(project_root)
         if os.path.isfile(norm_root):
             norm_root = os.path.dirname(norm_root)
 
@@ -70,7 +95,7 @@ class ProjectPaths:
 
         # 确定素材目录
         if materials_dir:
-            self.materials_dir = os.path.abspath(materials_dir)
+            self.materials_dir = normalize_project_path(materials_dir)
         else:
             # 优先寻找标准已知子目录
             cand_dirs = ["素材", "input", "materials"]
@@ -210,8 +235,26 @@ def is_historical_output(file_path: str, project_id: str) -> Tuple[bool, str]:
     return False, ""
 
 
-def compute_file_sha256(file_path: str, block_size: int = 65536, max_blocks: int = 16) -> str:
-    """快速计算文件首尾块的指纹哈希（兼顾大视频文件性能与可比对性）。"""
+def compute_full_file_sha256(file_path: str, block_size: int = 65536) -> str:
+    """计算文件的完整标准 SHA-256 哈希值 (64位十六进制小写)。
+    遍历整个文件所有字节，用于原始素材不可篡改防护与最终交付物严格审计。
+    """
+    if not os.path.isfile(file_path):
+        return ""
+    h = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        while True:
+            chunk = f.read(block_size)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def compute_file_fast_fingerprint(file_path: str, block_size: int = 65536, max_blocks: int = 16) -> str:
+    """快速计算文件首尾块的采样指纹（16位十六进制）。
+    仅读取首尾各约 1MB 区域，用于快速缓存键生成与初步文件辨识。
+    """
     if not os.path.isfile(file_path):
         return ""
     h = hashlib.sha256()
@@ -233,6 +276,11 @@ def compute_file_sha256(file_path: str, block_size: int = 65536, max_blocks: int
                     break
                 h.update(chunk)
     return h.hexdigest()[:16]
+
+
+def compute_file_sha256(file_path: str, block_size: int = 65536, max_blocks: int = 16) -> str:
+    """计算文件指纹哈希（兼顾性能与可比对性，默认返回快速采样指纹）。"""
+    return compute_file_fast_fingerprint(file_path, block_size=block_size, max_blocks=max_blocks)
 
 
 class InputManifest:
@@ -275,7 +323,8 @@ class InputManifest:
                             "path": fpath,
                             "filename": fname,
                             "size": os.path.getsize(fpath),
-                            "sha256": compute_file_sha256(fpath),
+                            "sha256": compute_full_file_sha256(fpath),
+                            "fast_fingerprint": compute_file_fast_fingerprint(fpath),
                         })
 
         if explicit_video_paths is not None:
@@ -318,7 +367,8 @@ class InputManifest:
                     "filename": os.path.basename(abs_p),
                     "size": os.path.getsize(abs_p),
                     "mtime": os.path.getmtime(abs_p),
-                    "sha256": compute_file_sha256(abs_p),
+                    "sha256": compute_full_file_sha256(abs_p),
+                    "fast_fingerprint": compute_file_fast_fingerprint(abs_p),
                     "is_confirmed": True,
                 })
         else:
@@ -353,7 +403,8 @@ class InputManifest:
                         "filename": fname,
                         "size": os.path.getsize(fpath),
                         "mtime": os.path.getmtime(fpath),
-                        "sha256": compute_file_sha256(fpath),
+                        "sha256": compute_full_file_sha256(fpath),
+                        "fast_fingerprint": compute_file_fast_fingerprint(fpath),
                         "is_confirmed": False,  # 扫描发现，待确认
                     })
 
@@ -406,7 +457,7 @@ def compute_job_fingerprint(spec: Dict[str, Any], manifest: Optional[Dict[str, A
         vids = spec.get("raw_video_paths") or ([spec.get("raw_video_path")] if spec.get("raw_video_path") else [])
         for v in sorted(str(x) for x in vids if x):
             if os.path.isfile(v):
-                h.update(compute_file_sha256(v).encode("utf-8"))
+                h.update(compute_full_file_sha256(v).encode("utf-8"))
             else:
                 h.update(v.encode("utf-8"))
 
@@ -419,7 +470,7 @@ def compute_job_fingerprint(spec: Dict[str, Any], manifest: Optional[Dict[str, A
         p_imgs = (spec.get("product", {}) or {}).get("item_images", [])
         for im in sorted(str(x) for x in p_imgs if x):
             if os.path.isfile(im):
-                h.update(compute_file_sha256(im).encode("utf-8"))
+                h.update(compute_full_file_sha256(im).encode("utf-8"))
             else:
                 h.update(im.encode("utf-8"))
 
