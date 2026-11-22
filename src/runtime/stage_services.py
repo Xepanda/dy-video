@@ -207,6 +207,7 @@ def stage_prepare(spec_path: str, run_id: Optional[str] = None) -> Dict[str, Any
         "output_dir": paths.output_dir,
         "spec_fingerprint": spec_fingerprint,
         "source_videos": [s["path"] for s in source_videos],
+        "quarantined_files": manifest.get("quarantined_files", []),
         "product_profile": profile["name"],
         "next_step": f"python -m src.cli analyze --run {paths.work_dir}",
     }
@@ -527,8 +528,11 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
     if prop_hash and prop_hash != frozen_hash:
         violations.append(f"候选池哈希不匹配: 提案哈希 ({prop_hash}) != 当前冻结候选池哈希 ({frozen_hash})")
 
-    ordered_ids = proposal.get("ordered_candidate_ids") or []
-    if not ordered_ids:
+    ordered_ids = proposal.get("ordered_candidate_ids")
+    if not isinstance(ordered_ids, list):
+        violations.append("提案中选定候选列表 (ordered_candidate_ids) 必须为数组列表")
+        ordered_ids = []
+    elif not ordered_ids:
         violations.append("提案中选定候选列表 (ordered_candidate_ids) 为空")
 
     # 2. 验证候选 ID 白名单与有效性
@@ -538,6 +542,9 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
     clips_by_source: Dict[str, List[Tuple[int, int, str]]] = {}
 
     for cid in ordered_ids:
+        if not isinstance(cid, str):
+            violations.append(f"候选 ID 必须为字符串: {cid}")
+            continue
         if cid in seen_ids:
             violations.append(f"候选片段重复使用: {cid}")
             continue
@@ -555,10 +562,12 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
         elif rel == "UNCERTAIN" and spec.get("options", {}).get("automation", {}).get("quality_policy") == "strict":
             violations.append(f"严格模式下选定片段未通过商品身份核实 (UNCERTAIN): {cid}")
 
-        # 检查同源时间重叠
+        # 检查时间区间合法性与同源时间重叠
         s_file = c.get("source_file") or c.get("source_id", "default")
         st = c.get("source_start_ms", 0)
         en = c.get("source_end_ms", 0)
+        if en <= st:
+            violations.append(f"候选片段时序区间异常 (时长<=0): {cid} [{st}~{en}]")
         if s_file not in clips_by_source:
             clips_by_source[s_file] = []
         for prev_st, prev_en, prev_id in clips_by_source[s_file]:
@@ -1000,6 +1009,8 @@ def stage_deliver(run_arg: str) -> Dict[str, Any]:
 def stage_status(run_arg: str) -> Dict[str, Any]:
     work_dir = resolve_run_dir(run_arg)
     context_path = os.path.join(work_dir, "run_context.json")
+    if not os.path.isdir(work_dir) or not os.path.isfile(context_path):
+        raise FileNotFoundError(f"未找到有效运行目录或 run_context.json: {work_dir}")
     state_path = os.path.join(work_dir, "run_state.json")
 
     context = {}

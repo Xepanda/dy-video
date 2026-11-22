@@ -209,6 +209,58 @@ class TestCliContract(unittest.TestCase):
         out = json.loads(res.stdout)
         self.assertEqual(out.get("status"), "ERROR")
 
+    def test_cli_status_nonexistent_dir_fails(self):
+        res = self._run_cli(["status", "--run", os.path.join(self.tmpdir, "nonexistent_work_dir")])
+        self.assertNotEqual(res.returncode, 0)
+        out = json.loads(res.stdout)
+        self.assertEqual(out.get("status"), "ERROR")
+        self.assertIn("未找到有效运行目录", out.get("error_message", ""))
+
+    def test_cli_validate_plan_invalid_type_ordered_ids_fails(self):
+        prep_res = self._run_cli(["prepare", "--spec", self.spec_path])
+        work_dir = json.loads(prep_res.stdout)["work_dir"]
+
+        analysis_dir = os.path.join(work_dir, "analysis")
+        os.makedirs(analysis_dir, exist_ok=True)
+        with open(os.path.join(analysis_dir, "candidates.json"), "w", encoding="utf-8") as f:
+            json.dump([{"candidate_id": "c1", "source_file": self.dummy_video, "source_start_ms": 0, "source_end_ms": 3000, "product_relation": "SAME_SKU"}], f)
+        with open(os.path.join(analysis_dir, "candidate_pool_snapshot.json"), "w", encoding="utf-8") as f:
+            json.dump({"candidate_pool_hash": "hash_ok", "candidate_ids": ["c1"]}, f)
+
+        # 传入字符串而非数组列表
+        prop_str_ids = {
+            "proposal_id": "prop_bad_type",
+            "candidate_pool_hash": "hash_ok",
+            "ordered_candidate_ids": "not_a_list",
+        }
+        prop_path = os.path.join(work_dir, "bad_type_prop.json")
+        with open(prop_path, "w", encoding="utf-8") as f:
+            json.dump(prop_str_ids, f)
+
+        res = self._run_cli(["validate-plan", "--run", work_dir, "--proposal", prop_path])
+        self.assertNotEqual(res.returncode, 0)
+        out = json.loads(res.stdout)
+        self.assertIn("必须为数组列表", out.get("error_message", ""))
+
+    def test_cli_prepare_includes_quarantined_files(self):
+        # 创建一个历史成片文件并加入显式素材列表
+        fake_old = os.path.join(self.mat_dir, "test_proj.mp4")
+        with open(fake_old, "wb") as f:
+            f.write(b"OLD_OUTPUT_VIDEO")
+
+        spec_with_old = dict(self.spec_data)
+        spec_with_old["raw_video_paths"] = [self.dummy_video, fake_old]
+        old_spec_p = os.path.join(self.mat_dir, "spec_with_old.json")
+        with open(old_spec_p, "w", encoding="utf-8") as f:
+            json.dump(spec_with_old, f)
+
+        res = self._run_cli(["prepare", "--spec", old_spec_p])
+        self.assertEqual(res.returncode, 0)
+        out = json.loads(res.stdout)
+        self.assertIn("quarantined_files", out)
+        quarantined = out["quarantined_files"]
+        self.assertTrue(any("test_proj.mp4" in q.get("path", "") for q in quarantined))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -264,14 +264,42 @@ def test_same_stem_different_extension_source_ids():
         assert c1[0]["frame_ids"][0] != c2[0]["frame_ids"][0], "同 stem 不同扩展名的 frame_id 严禁冲突"
 
 
+def test_project_paths_workspace_substring_safety():
+    """验证含 workspace / artwork 等包含 'work' 子串的路径不会被错误截断。"""
+    fake_path = os.path.normpath(r"D:/dev/workspace/my_video_project")
+    p = ProjectPaths(fake_path)
+    assert p.project_root == fake_path, f"路径截断防护异常: 期望 {fake_path}, 实际 {p.project_root}"
+
+    # 验证真实 work/run 子目录能正确回溯
+    work_run_path = os.path.normpath(r"D:/dev/workspace/my_video_project/work/run_123")
+    p2 = ProjectPaths(work_run_path)
+    assert p2.project_root == fake_path, f"work 运行时目录未正确回溯到项目根: 期望 {fake_path}, 实际 {p2.project_root}"
+
+
+def test_compute_job_fingerprint_string_and_none_brand():
+    """验证 brand 为纯字符串、None、空字典时均能安全稳定计算指纹。"""
+    base_spec = {"project_id": "test", "product": {"name": "针织衫"}}
+
+    fp_none = compute_job_fingerprint(dict(base_spec, brand=None))
+    fp_empty = compute_job_fingerprint(dict(base_spec, brand={}))
+    fp_str = compute_job_fingerprint(dict(base_spec, brand="MIXCITY"))
+    fp_dict = compute_job_fingerprint(dict(base_spec, brand={"title_en": "MIXCITY", "subtitle_cn": ""}))
+
+    assert fp_none == fp_empty, "None 品牌与空字典品牌指纹应等价"
+    assert fp_str == fp_dict, "字符串品牌与等价字典品牌指纹应一致"
+    assert fp_str != fp_none, "有品牌与无品牌指纹应严格隔离"
+
+
 def main():
     test_sanitize_id()
     test_project_paths_structure()
+    test_project_paths_workspace_substring_safety()
     test_historical_output_detection()
     test_input_manifest_scans_and_excludes_old_outputs()
     test_input_manifest_explicit_list_rejects_historical_output()
     test_input_manifest_product_images_discovery()
     test_compute_job_fingerprint_sensitivity()
+    test_compute_job_fingerprint_string_and_none_brand()
     test_same_stem_different_extension_source_ids()
     print("[PASS] All project_context tests passed!")
 

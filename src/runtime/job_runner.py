@@ -15,6 +15,7 @@ import sys
 import json
 import time
 import shutil
+import subprocess
 from typing import Dict, Any, List, Optional, Tuple, Callable
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -24,7 +25,6 @@ if PROJECT_ROOT not in sys.path:
 from src.core.path_resolver import resolve_path
 from src.core.product_profile import build_product_profile, save_product_profile, ProductProfileError
 from src.runtime.adapters.agent_protocol import AgentStatus, AgentResponse, AgentAdapter
-from src.runtime.adapters.agy_headless import AgyHeadlessAdapter
 
 
 class JobStage:

@@ -17,6 +17,7 @@ import json
 import time
 import uuid
 import hashlib
+from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
 # 视频扩展名定义
@@ -40,12 +41,13 @@ class ProjectPaths:
             norm_root = os.path.dirname(norm_root)
 
         # 保护：若路径指向 work 或 output 运行时子目录，自动回溯到真实的 project_root
-        sep_work = os.sep + "work"
-        sep_output = os.sep + "output"
-        if sep_work in norm_root:
-            norm_root = norm_root[:norm_root.find(sep_work)]
-        elif sep_output in norm_root:
-            norm_root = norm_root[:norm_root.find(sep_output)]
+        p_parts = Path(norm_root).parts
+        if "work" in p_parts:
+            idx = p_parts.index("work")
+            norm_root = str(Path(*p_parts[:idx]))
+        elif "output" in p_parts:
+            idx = p_parts.index("output")
+            norm_root = str(Path(*p_parts[:idx]))
 
         if os.path.basename(norm_root) in ("素材", "materials", "input"):
             materials_dir = materials_dir or norm_root
@@ -381,17 +383,26 @@ def compute_job_fingerprint(spec: Dict[str, Any], manifest: Optional[Dict[str, A
             else:
                 h.update(im.encode("utf-8"))
 
-    # 3. 品牌要素指纹（修改品牌必换指纹）
-    brand = spec.get("brand", {}) or {}
-    brand_core = {
-        "title_en": str(brand.get("title_en", "")).strip(),
-        "subtitle_cn": str(brand.get("subtitle_cn", "")).strip(),
-    }
+    # 3. 品牌要素指纹（修改品牌必换指纹，兼容 dict/str/None）
+    brand = spec.get("brand") or {}
+    if isinstance(brand, str):
+        brand_core = {"title_en": brand.strip(), "subtitle_cn": ""}
+    elif isinstance(brand, dict):
+        brand_core = {
+            "title_en": str(brand.get("title_en", "")).strip(),
+            "subtitle_cn": str(brand.get("subtitle_cn", "")).strip(),
+        }
+    else:
+        brand_core = {"title_en": "", "subtitle_cn": ""}
     h.update(json.dumps(brand_core, sort_keys=True, ensure_ascii=False).encode("utf-8"))
 
     # 4. 商品核心要素与规则配置
-    prod = spec.get("product", {}) or {}
-    opts = spec.get("options", {}) or {}
+    prod = spec.get("product") or {}
+    if not isinstance(prod, dict):
+        prod = {}
+    opts = spec.get("options") or {}
+    if not isinstance(opts, dict):
+        opts = {}
     config_core = {
         "sku_id": str(prod.get("sku_id", "")),
         "name": str(prod.get("name") or prod.get("title_line1", "")),
