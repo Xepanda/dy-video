@@ -438,6 +438,11 @@ def main():
         json.dump(sanitized_summary, f, ensure_ascii=False, indent=2)
     print(f"\n[DONE] A08 本地验收报告已落盘至: {summary_file}")
     print(json.dumps(sanitized_summary, indent=2))
+
+    if deliv_status != "DELIVERED":
+        print(f"\n[FAIL] 验收失败：预期正式出库交付未完成（状态为 {deliv_status}，非 DELIVERED）！")
+        return 1
+
     return 0
 
 

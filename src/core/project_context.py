@@ -40,14 +40,15 @@ class ProjectPaths:
         if os.path.isfile(norm_root):
             norm_root = os.path.dirname(norm_root)
 
-        # 保护：若路径指向 work 或 output 运行时子目录，自动回溯到真实的 project_root
+        # 保护：只识别明确的 project/work/<run_id> 或 project/output/<run_id> 结构
+        # 绝不从路径头部/祖先目录搜索 'work'，防止 D:\work\proj 或 /home/runner/work 误截断
         p_parts = Path(norm_root).parts
-        if "work" in p_parts:
-            idx = p_parts.index("work")
-            norm_root = str(Path(*p_parts[:idx]))
-        elif "output" in p_parts:
-            idx = p_parts.index("output")
-            norm_root = str(Path(*p_parts[:idx]))
+        if len(p_parts) >= 3 and p_parts[-2] in ("work", "output"):
+            # 形如 <project>/work/<run_id> 或 <project>/output/<run_id>
+            norm_root = str(Path(*p_parts[:-2]))
+        elif len(p_parts) >= 2 and p_parts[-1] in ("work", "output"):
+            # 形如 <project>/work 或 <project>/output
+            norm_root = str(Path(*p_parts[:-1]))
 
         if os.path.basename(norm_root) in ("素材", "materials", "input"):
             materials_dir = materials_dir or norm_root
@@ -56,7 +57,16 @@ class ProjectPaths:
             self.project_root = norm_root
 
         self.project_id = os.path.basename(self.project_root)
-        self.run_id = run_id or time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4]
+
+        if run_id:
+            raw_run_id = str(run_id).strip()
+            if not raw_run_id or ".." in raw_run_id or "/" in raw_run_id or "\\" in raw_run_id:
+                raise ValueError(f"非法 run_id: '{run_id}'，禁止包含路径分隔符或 '..'")
+            if not re.fullmatch(r"[\w\-]+", raw_run_id):
+                raise ValueError(f"非法 run_id: '{run_id}'，仅允许包含字母、数字、下划线和连字符")
+            self.run_id = raw_run_id
+        else:
+            self.run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4]
 
         # 确定素材目录
         if materials_dir:
@@ -79,6 +89,36 @@ class ProjectPaths:
         self.work_dir = os.path.join(self.work_base, self.run_id)
         self.output_dir = os.path.join(self.output_base, self.run_id)
         self.latest_pointer = os.path.join(self.output_base, "latest.json")
+
+        # 真实路径做目录包含校验，禁止逃逸出 work_base 与 output_base，且禁止进入素材目录
+        real_work = os.path.realpath(self.work_dir)
+        real_work_base = os.path.realpath(self.work_base)
+        real_output = os.path.realpath(self.output_dir)
+        real_output_base = os.path.realpath(self.output_base)
+        real_materials = os.path.realpath(self.materials_dir)
+        real_project_root = os.path.realpath(self.project_root)
+
+        try:
+            if os.path.commonpath([real_work, real_work_base]) != real_work_base:
+                raise ValueError(f"非法 work_dir: {self.work_dir}，路径越界逃逸出 work 根目录")
+        except Exception as e:
+            raise ValueError(f"非法 work_dir: {self.work_dir} ({e})")
+
+        try:
+            if os.path.commonpath([real_output, real_output_base]) != real_output_base:
+                raise ValueError(f"非法 output_dir: {self.output_dir}，路径越界逃逸出 output 根目录")
+        except Exception as e:
+            raise ValueError(f"非法 output_dir: {self.output_dir} ({e})")
+
+        if real_work == real_materials:
+            raise ValueError(f"运行时目录冲突: work_dir ({self.work_dir}) 不能与素材目录重叠")
+        if real_output == real_materials:
+            raise ValueError(f"交付目录冲突: output_dir ({self.output_dir}) 不能与素材目录重叠")
+        if real_materials != real_project_root:
+            if os.path.commonpath([real_work, real_materials]) == real_materials:
+                raise ValueError(f"运行时目录冲突: work_dir ({self.work_dir}) 不能位于素材目录 ({self.materials_dir}) 内")
+            if os.path.commonpath([real_output, real_materials]) == real_materials:
+                raise ValueError(f"交付目录冲突: output_dir ({self.output_dir}) 不能位于素材目录 ({self.materials_dir}) 内")
 
         # 配置文件路径优先位于素材目录下
         spec_in_mat = os.path.join(self.materials_dir, "job_spec.json")

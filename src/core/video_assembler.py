@@ -44,7 +44,14 @@ OUT_W, OUT_H, FPS = 1080, 1920, 60
 FONT_BOLD = "C:/Windows/Fonts/msyhbd.ttc" if os.name == "nt" else "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 
-def run_cmd(cmd: List[str], cwd: str = None, desc: str = "", cancel_token: Any = None, timeout: Optional[float] = None) -> str:
+def run_cmd(
+    cmd: List[str],
+    cwd: str = None,
+    desc: str = "",
+    cancel_token: Any = None,
+    timeout: Optional[float] = None,
+    return_stderr: bool = False,
+) -> str:
     """运行子进程并实时排空输出，支持取消令牌中断与进程树终止，杜绝管道缓冲死锁"""
     if cancel_token:
         is_c = getattr(cancel_token, "is_canceled", False)
@@ -134,7 +141,7 @@ def run_cmd(cmd: List[str], cwd: str = None, desc: str = "", cancel_token: Any =
     if ret != 0:
         err_msg = stderr[-1500:] if stderr else "未知错误"
         raise RuntimeError(f"FFmpeg 执行失败 ({desc}):\n{err_msg}")
-    return stdout
+    return stderr if return_stderr else stdout
 
 
 def ffprobe_get_duration(path: str) -> float:
@@ -354,8 +361,8 @@ class VideoAssembler:
         # 放大镜素材缓存（clip_id -> (mask_png, ring_png, ring_size)）
         self._magnifier_assets: Dict[str, Any] = {}
 
-    def _run_cmd(self, cmd: List[str], cwd: str = None, desc: str = "") -> str:
-        return run_cmd(cmd, cwd=cwd or self.work_dir, desc=desc, cancel_token=self.cancel_token)
+    def _run_cmd(self, cmd: List[str], cwd: str = None, desc: str = "", return_stderr: bool = False) -> str:
+        return run_cmd(cmd, cwd=cwd or self.work_dir, desc=desc, cancel_token=self.cancel_token, return_stderr=return_stderr)
 
     def _load_violation_handling(self) -> Dict[str, Any]:
         hp = os.path.join(self.work_dir, "violation_handling.json")
@@ -647,64 +654,7 @@ class VideoAssembler:
                 "-filter_complex", fc_m,
                 "-map", "[aout]", "-f", "null", "-"
             ]
-            if self.cancel_token:
-                is_c = getattr(self.cancel_token, "is_canceled", False)
-                if callable(is_c):
-                    is_c = is_c()
-                if is_c:
-                    from src.runtime.job_runner import JobCanceledError
-                    raise JobCanceledError("响度测量已被用户取消")
-
-            proc = subprocess.Popen(
-                cmd,
-                cwd=self.work_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace"
-            )
-            if self.cancel_token and hasattr(self.cancel_token, "register_process"):
-                self.cancel_token.register_process(proc)
-
-            st = time.time()
-            res_stderr = ""
-            try:
-                while True:
-                    if self.cancel_token:
-                        is_c = getattr(self.cancel_token, "is_canceled", False)
-                        if callable(is_c):
-                            is_c = is_c()
-                        if is_c:
-                            try:
-                                from src.runtime.job_runner import terminate_process_tree
-                                terminate_process_tree(proc)
-                            except Exception:
-                                try:
-                                    proc.kill()
-                                except Exception:
-                                    pass
-                            from src.runtime.job_runner import JobCanceledError
-                            raise JobCanceledError("任务已被用户取消")
-                    ret = proc.poll()
-                    if ret is not None:
-                        _, res_stderr = proc.communicate()
-                        break
-                    if time.time() - st > 120:
-                        try:
-                            from src.runtime.job_runner import terminate_process_tree
-                            terminate_process_tree(proc)
-                        except Exception:
-                            try:
-                                proc.kill()
-                            except Exception:
-                                pass
-                        break
-                    time.sleep(0.05)
-            finally:
-                if self.cancel_token and hasattr(self.cancel_token, "unregister_process"):
-                    self.cancel_token.unregister_process(proc)
-
+            res_stderr = self._run_cmd(cmd, desc="两遍响度分析", return_stderr=True)
             m = _re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", res_stderr, _re.DOTALL)
             if not m:
                 print("[LOUDNORM] 测量输出解析失败，降级单遍动态模式")

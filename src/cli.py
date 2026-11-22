@@ -62,6 +62,7 @@ def main() -> int:
     p_prepare = subparsers.add_parser("prepare", help="初始化任务运行环境、素材白名单与快照")
     p_prepare.add_argument("--spec", required=True, help="job_spec.json 任务契约路径")
     p_prepare.add_argument("--run-id", default=None, help="显式指定运行编号（可选）")
+    p_prepare.add_argument("--resume", action="store_true", default=False, help="恢复已有运行编号的工作区，校验任务指纹而不重置历史文件")
 
     # 2. analyze
     p_analyze = subparsers.add_parser("analyze", help="执行 ASR、分镜抽帧、候选片段提取与冻结")
@@ -103,8 +104,8 @@ def main() -> int:
         exit_code = 0
 
         if args.subcommand == "prepare":
-            res = stage_prepare(spec_path=args.spec, run_id=args.run_id)
-            exit_code = 0 if res.get("status") == "PREPARED" else 1
+            res = stage_prepare(spec_path=args.spec, run_id=args.run_id, resume=args.resume)
+            exit_code = 0 if res.get("status") in ("PREPARED", "RESUMED") else 1
 
         elif args.subcommand == "analyze":
             res = stage_analyze(run_arg=args.run)

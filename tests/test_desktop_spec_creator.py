@@ -281,6 +281,14 @@ def test_html_content_embedded_js_syntax() -> None:
     # 1. 结构与闭合检查
     assert "create_new_project" in script
     assert "setProductImageByIndex" in script
+    assert "generateAgentTaskAction" in script
+    assert "collectPayload" in script
+    assert "validateStep" not in script, "严禁调用未定义的 validateStep 函数"
+    assert "collectFormData" not in script, "严禁调用未定义的 collectFormData 函数"
+    assert "copyTaskPrompt" in script
+    assert 'onclick="generateAgentTaskAction()"' in html
+    assert 'id="agentTaskHandoffCard"' in html
+    assert 'id="taskPromptText"' in html
 
     # 2. 若本地存在 node 环境，执行严格的编译器语法验证 (node -c)
     node_bin = shutil.which("node")
@@ -378,6 +386,15 @@ def test_api_generate_agent_task_branded_unbranded_and_zero_selection() -> None:
             saved_spec_b = json.load(f)
             assert saved_spec_b["brand"]["title_en"] == "NEW_BRAND"
             assert saved_spec_b["brand"]["subtitle_cn"] == "高端设计"
+
+        # 4. 非破坏性兼容：验证旧的 <project_id>_job_spec.json 绝不被删除
+        mat_dir = os.path.join(td, "素材")
+        old_named = os.path.join(mat_dir, "test_branded_job_spec.json")
+        with open(old_named, "w", encoding="utf-8") as f:
+            f.write('{"legacy": true}')
+        res_non_destructive = api.generate_agent_task(branded_payload)
+        assert res_non_destructive["success"] is True
+        assert os.path.isfile(old_named), "非破坏性规范要求：旧的命名配置文件绝不允许被强制删除！"
 
     print("  [PASS] DesktopSpecApi：任务交接生成、零勾选阻断与空品牌/有品牌支持完全正确")
 

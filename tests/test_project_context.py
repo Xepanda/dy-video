@@ -270,10 +270,24 @@ def test_project_paths_workspace_substring_safety():
     p = ProjectPaths(fake_path)
     assert p.project_root == fake_path, f"路径截断防护异常: 期望 {fake_path}, 实际 {p.project_root}"
 
+    # 验证含 /work/ 的实际目录结构（如 D:\work\projects\my-video 或 /home/runner/work/dy-video/dy-video）绝不被误截断
+    work_proj_path = os.path.normpath(r"D:/work/projects/my_video_project")
+    p3 = ProjectPaths(work_proj_path)
+    assert p3.project_root == work_proj_path, f"含有 work 父路径被错误截断: 期望 {work_proj_path}, 实际 {p3.project_root}"
+
+    ci_path = os.path.abspath("/home/runner/work/dy-video/dy-video")
+    p4 = ProjectPaths(ci_path)
+    assert p4.project_root == ci_path, f"CI runner 路径被错误截断: 期望 {ci_path}, 实际 {p4.project_root}"
+
     # 验证真实 work/run 子目录能正确回溯
     work_run_path = os.path.normpath(r"D:/dev/workspace/my_video_project/work/run_123")
     p2 = ProjectPaths(work_run_path)
     assert p2.project_root == fake_path, f"work 运行时目录未正确回溯到项目根: 期望 {fake_path}, 实际 {p2.project_root}"
+
+    # 验证非法 run_id 注入拦截
+    for bad_id in ("../素材", "run/01", "run\\01", "..", "run..id", "run@123", " "):
+        with pytest.raises(ValueError, match="非法 run_id"):
+            ProjectPaths(fake_path, run_id=bad_id)
 
 
 def test_compute_job_fingerprint_string_and_none_brand():

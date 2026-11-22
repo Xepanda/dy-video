@@ -71,6 +71,7 @@ UNIT_TESTS = [
     "tests/test_pr16_round3_p0_p1.py",
     "tests/test_pr16_round4_p0_p1.py",
     "tests/test_cli_contract.py",
+    "tests/test_pr16_round6_p0_p1.py",
 ]
 
 PYTHON = sys.executable

@@ -653,15 +653,13 @@ class DesktopSpecApi:
         target_path = save_res["target_path"]
         material_dir = save_res["material_dir"]
 
-        # 确保素材目录下仅保留单一真实来源 job_spec.json，杜绝 <project_id>_job_spec.json 造成配置分叉
+        # 确保素材目录下以 job_spec.json 作为权威基准；旧版命名的 <project_id>_job_spec.json 进行非破坏性保留与提示
         project_id = str(payload.get("project_id") or "").strip()
         if project_id and project_id != "job_spec":
             old_named = os.path.join(material_dir, f"{project_id}_job_spec.json")
             if os.path.isfile(old_named):
-                try:
-                    os.remove(old_named)
-                except Exception:
-                    pass
+                # 非破坏性兼容：保留旧文件资产，绝不调用 os.remove 删除用户既有配置文件
+                pass
 
         from src.core.project_context import ProjectPaths
         paths = ProjectPaths(project_root=material_dir)
@@ -680,9 +678,10 @@ class DesktopSpecApi:
 > 本任务由 Windows EXE 配置向导生成。EXE 仅作为配置器与交接器，不启动任何 Agent 进程。
 > 请外部 Agent（AGY / Codex / Claude Code）作为总导演，调用统一 CLI 执行带货视频制作流水线。
 
-## 1. 任务元信息
+## 1. 任务元信息与环境要求
 - **任务代号**: `{project_id}`
 - **推荐商品**: {prod_name}
+- **工具仓库路径 (Working Directory)**: `{PROJECT_ROOT}`
 - **项目根目录**: `{project_root}`
 - **任务契约文件**: `{target_path}`
 - **选定源素材清单**:
@@ -690,7 +689,11 @@ class DesktopSpecApi:
 
 ## 2. 外部 Agent 标准工作流规范 (ADR-001)
 所有媒体处理、候选提取、时间线编译、音画渲染与双层质检门禁均由仓库统一 CLI 承载。
-请在当前 Agent 会话的终端中，依次执行以下确定性阶段命令：
+**请务必先将工作目录切换至工具代码仓库根目录：**
+```bash
+cd "{PROJECT_ROOT}"
+```
+然后依次执行以下确定性阶段命令：
 
 ### 阶段 1: 初始化项目与白名单
 ```bash
@@ -749,17 +752,18 @@ python -m src.cli deliver --run "<work_dir>"
 
         task_prompt = (
             f"请按照 dy-video 标准工作流制作带货视频：\n"
+            f"工具仓库根目录: {PROJECT_ROOT}\n"
             f"项目根目录: {project_root}\n"
             f"配置契约: {target_path}\n"
             f"任务指南: {task_md_path}\n\n"
-            f"请依次在终端执行通用 CLI 阶段命令：\n"
+            f"请先在终端切换到工具仓库根目录 (cd \"{PROJECT_ROOT}\")，依次执行通用 CLI 阶段命令：\n"
             f'1. python -m src.cli prepare --spec "{target_path}"\n'
             f'2. python -m src.cli analyze --run "<work_dir>"\n'
             f'3. 审查候选池并保存 decisions/sequence_proposal.json\n'
             f'4. python -m src.cli validate-plan --run "<work_dir>" --proposal "<work_dir>/decisions/sequence_proposal.json"\n'
             f'5. python -m src.cli render --run "<work_dir>"\n'
             f'6. python -m src.cli qc --run "<work_dir>"\n'
-            f'7. python -m src.cli deliver --run "<work_dir>"'
+            f'7. python -m src.cli deliver --run "<work_dir>"\n'
         )
 
         return {
@@ -788,7 +792,7 @@ python -m src.cli deliver --run "<work_dir>"
         return self.open_path(target)
 
     def start_pipeline(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """校验、保存配置并调度 JobRunner 端到端执行一键全自动智能剪辑（同步执行，兼顾测试）。"""
+        """[旧版兼容入口 / Deprecated for Agent-First] 校验、保存配置并调度 JobRunner 端到端执行一键全自动智能剪辑（仅作历史兼容与旧测试适配，EXE 默认流程已切换为 generate_agent_task 任务交接）。"""
         raw_vids = payload.get("raw_video_paths")
         if raw_vids is not None and len(raw_vids) == 0:
             return {
@@ -830,7 +834,7 @@ python -m src.cli deliver --run "<work_dir>"
             }
 
     def start_pipeline_async(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """后台异步启动剪辑流水线，支持实时状态与阶段轮询。"""
+        """[旧版兼容入口 / Deprecated for Agent-First] 后台异步启动剪辑流水线（仅作历史兼容与旧测试适配）。"""
         raw_vids = payload.get("raw_video_paths")
         if raw_vids is not None and len(raw_vids) == 0:
             return {
@@ -2386,10 +2390,15 @@ def get_html_content() -> str:
         }
 
         async function generateAgentTaskAction() {
-            if (!validateStep(4)) return;
-            const payload = collectFormData();
+            const payload = collectPayload();
             if (payload.raw_video_paths && payload.raw_video_paths.length === 0) {
                 showAlert(false, "未勾选任何原始视频素材，请在素材清单中勾选至少一段原始直播视频！");
+                goToStep(2);
+                return;
+            }
+            if (!payload.product_name) {
+                showAlert(false, "请填写商品核心名称！");
+                goToStep(3);
                 return;
             }
 

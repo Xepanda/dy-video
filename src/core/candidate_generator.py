@@ -55,10 +55,11 @@ class CandidateGenerator:
         if "\\" in clean_source_id or "/" in clean_source_id or ":" in clean_source_id or "." in clean_source_id:
             stem, ext = os.path.splitext(os.path.basename(clean_source_id))
             ext_clean = ext.lstrip(".").lower()
+            clean_stem = re.sub(r'[^\w\-]', '_', stem).strip('_')
             if ext_clean:
-                clean_source_id = f"{re.sub(r'[^\w\-]', '_', stem).strip('_')}_{ext_clean}"
+                clean_source_id = f"{clean_stem}_{ext_clean}"
             else:
-                clean_source_id = re.sub(r"[^\w\-]", "_", stem).strip("_") or "src_0"
+                clean_source_id = clean_stem or "src_0"
 
         selling_points = product_profile.get("selling_points", [])
         sku_name = product_profile.get("name", "")

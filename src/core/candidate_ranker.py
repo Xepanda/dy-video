@@ -40,8 +40,18 @@ class CandidateRanker:
         candidates: List[Dict[str, Any]],
         product_profile: Dict[str, Any],
         relation_decisions: Optional[Dict[str, Any]] = None,
+        strict: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """批量计算候选的多维得分并打上叙事角色与聚类标签。"""
+        if strict is not None:
+            is_strict_profile = bool(strict)
+        else:
+            is_strict_profile = (
+                product_profile.get("quality_policy") == "strict" or
+                product_profile.get("visual_verification") == "required" or
+                product_profile.get("strict") is True
+            )
+
         rel_map = {}
         if relation_decisions:
             for d in relation_decisions.get("decisions", []):
@@ -166,11 +176,6 @@ class CandidateRanker:
             elif relation == "ACCESSORY_OR_STYLING":
                 # 上游已核实为合规搭配片段；只要不主动推销其他商品，即使文本包含下装词（如"西裤"）也不被品类负向词误杀
                 # 严格模式下：搭配片段必须具备本品可见、主品身份已核实或其他明确关联证据；严禁缺失证据的搭配片段逃逸
-                is_strict_profile = (
-                    product_profile.get("quality_policy") == "strict" or
-                    product_profile.get("visual_verification") == "required" or
-                    product_profile.get("strict") is True
-                )
                 cand_gaps = (rel_info.get("evidence_gap") or []) + (cand.get("evidence_gap") or [])
                 has_gap = any("UNVERIFIABLE" in str(g) or "视觉证据不足" in str(g) or "视觉冲突" in str(g) for g in cand_gaps)
                 conf = float(rel_info.get("confidence") or cand.get("relation_confidence") or 0.85)
@@ -191,11 +196,6 @@ class CandidateRanker:
                 else:
                     # 包含搭配话术但上游未核实身份，坚决维持 UNCERTAIN，严禁升级为已验证关系
                     relation = "UNCERTAIN"
-                    is_strict_profile = (
-                        product_profile.get("quality_policy") == "strict" or
-                        product_profile.get("visual_verification") == "required" or
-                        product_profile.get("strict") is True
-                    )
                     if is_strict_profile:
                         eligible = False
                         rejection_reasons.append("严格模式下未通过身份核实 (UNCERTAIN)")
