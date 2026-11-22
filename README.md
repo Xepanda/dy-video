@@ -164,30 +164,36 @@ python -m src.cli analyze --run "<work_dir>"
 ```bash
 python -m src.cli validate-plan --run "<work_dir>" --proposal "<work_dir>/decisions/sequence_proposal.json"
 ```
-- 硬门禁校验：候选 ID 白名单校验、同源镜头时间戳防重叠校验、总时长合法性 [45, 65]s 校验、封面门禁校验；
-- 校验通过后编译出冻结的 `validated_plan.json`。
+- **候选初筛合格性硬门禁**：逐个读取 `scores.json`，强制要求选定候选 `eligible is True`、商品关系合法、所有 `rejection_reasons` 无硬阻断（如断句、违规词、他款推销）；
+- **严格 SKU 策略透传**：依据任务契约 `options.automation.quality_policy` 与 `visual_verification`，严格模式下无有效视觉证据的片段严禁进入排片；
+- **候选池与证据防篡改校验**：重算 `candidates.json`、`scores.json` 与 `evidence_manifest.json` 真实文件哈希，杜绝快照漂移与数据篡改；
+- **硬性时长上限超限阻断**：预计总时长超出硬上限即时拒绝提案；
+- **完整性签名冻结**：审计通过后编译出 `validated_plan.json`，生成 `validated_plan_hash` 并写入 `plan_audit.json`。
 
 #### 阶段 5: 物理混流装配与封面渲染 (`render`)
 ```bash
 python -m src.cli render --run "<work_dir>"
 ```
-- FFmpeg 物理音画 PTS 锁定装配，统一 60FPS (1080×1920) 高清输出；
-- 烧录动态发光字幕、Hook 标题卡 (720×168) 与挂角贴纸；
-- 先在临时文件渲染，校验完整性后原子移动至 `output/<run_id>/final.mp4` 与 `cover.jpg`。
+- **计划内容完整性防篡改**：校验 `validated_plan.json` 实际内容哈希与 `plan_audit.json` 签名完全一致，防止未经审计直接篡改计划渲染；
+- **历史交付物保护**：当前运行若已正式交付签署（存在 `delivery_manifest.json`），严禁重复渲染覆盖成片；
+- **下游验收自动失效**：重新渲染自动清除旧 QC 报告；
+- **原子合成与封面渲染**：FFmpeg 物理音画 PTS 锁定装配，统一 60FPS (1080×1920) 高清输出，先在临时文件渲染并校验大小后原子移动至 `output/<run_id>/final.mp4`。
 
 #### 阶段 6: 双层质量验收门禁 (`qc`)
 ```bash
 python -m src.cli qc --run "<work_dir>"
 ```
-- **工程技术 QC**：黑帧、静音、响度（-14 LUFS）、字幕零价格、封面几何与清晰度复测；
-- **内容 Editorial QC**：违规极限词扫描、原声口播完整度、卖点真实性。
+- **工程技术 QC**：黑帧、静音、响度（-14 LUFS）、字幕零价格、封面几何与清晰度复测，记录被审核视频的 `target_video_sha256`；
+- **内容 Editorial QC**：违规极限词扫描、原声口播完整度、卖点真实性，记录被审核视频的 `target_video_sha256`。
 
 #### 阶段 7: 正式出库交付签署 (`deliver`)
 ```bash
 python -m src.cli deliver --run "<work_dir>"
 ```
-- 硬核准则：**只有技术 QC PASS 且内容 QC PASS 且任务指纹与文件真实有效时，才允许签发出库**；
-- 生成 `output/<run_id>/delivery_manifest.json`，并原子更新 `output/latest.json`。
+- **质检哈希强绑定**：技术 QC 与内容 QC 必须全部 PASS，且 QC 报告审核的 `target_video_sha256` 必须与成片当前实际 SHA-256 严格一致（防止重新渲染后沿用旧报告签署）；
+- **完整哈希链校验**：`proposal_hash -> validated_plan_hash -> video_sha256 -> qc_target_sha256 -> delivery_manifest`；
+- **任务指纹强校验**：运行上下文指纹与活配置契约完全一致，严禁跨配置交付；
+- **正式交付**：生成 `output/<run_id>/delivery_manifest.json`，并原子更新 `output/latest.json`。
 
 ---
 

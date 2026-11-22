@@ -133,10 +133,12 @@ def stage_prepare(spec_path: str, run_id: Optional[str] = None, resume: bool = F
     # 初始化项目路径，确保 project_root 绝不指向 素材/
     paths = ProjectPaths(project_root=spec_abs, run_id=run_id)
 
-    # 防覆盖与恢复运行隔离机制
-    if os.path.exists(paths.work_dir) or os.path.exists(paths.output_dir):
+    # 防覆盖与恢复运行隔离机制：以 run_context.json 或已有输出产物作为历史运行标志
+    has_existing_work = os.path.isdir(paths.work_dir) and os.path.isfile(os.path.join(paths.work_dir, "run_context.json"))
+    has_existing_output = os.path.isdir(paths.output_dir) and any(os.path.isfile(os.path.join(paths.output_dir, f)) for f in os.listdir(paths.output_dir))
+    if has_existing_work or has_existing_output:
         if not resume:
-            raise FileExistsError(f"运行目录已存在: {paths.work_dir}。为保护历史交付物不被覆盖，禁止直接创建同名运行。如需恢复请指定 --resume 或更换 run_id")
+            raise FileExistsError(f"运行目录已存在历史运行产物: {paths.work_dir}。为保护历史交付物不被覆盖，禁止直接创建同名运行。如需恢复请指定 --resume 或更换 run_id")
         ctx_file = os.path.join(paths.work_dir, "run_context.json")
         if not os.path.isfile(ctx_file):
             raise FileNotFoundError(f"无法恢复运行: 在 {paths.work_dir} 未找到历史 run_context.json")
@@ -466,22 +468,29 @@ def stage_analyze(run_arg: str) -> Dict[str, Any]:
     ]
     candidate_pool_hash = hashlib.sha256(json.dumps(hash_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:24]
 
-    snapshot_data = {
-        "schema_version": "3.2",
-        "run_id": context.get("run_id"),
-        "candidate_pool_hash": candidate_pool_hash,
-        "total_candidates": len(final_candidates),
-        "eligible_candidates": len([c for c in final_candidates if c.get("eligible")]),
-        "cover_candidates_count": len(cover_candidates),
-        "candidate_ids": [c["candidate_id"] for c in final_candidates],
-        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-    }
+    scores_bytes = json.dumps(scores, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    scores_hash = hashlib.sha256(scores_bytes).hexdigest()[:24]
 
     evidence_manifest = {
         "schema_version": "3.2",
         "run_id": context.get("run_id"),
         "product_relation_decisions": relation_decisions,
         "warnings": warnings,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    evidence_bytes = json.dumps(evidence_manifest, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    evidence_manifest_hash = hashlib.sha256(evidence_bytes).hexdigest()[:24]
+
+    snapshot_data = {
+        "schema_version": "3.2",
+        "run_id": context.get("run_id"),
+        "candidate_pool_hash": candidate_pool_hash,
+        "scores_hash": scores_hash,
+        "evidence_manifest_hash": evidence_manifest_hash,
+        "total_candidates": len(final_candidates),
+        "eligible_candidates": len([c for c in final_candidates if c.get("eligible")]),
+        "cover_candidates_count": len(cover_candidates),
+        "candidate_ids": [c["candidate_id"] for c in final_candidates],
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -566,10 +575,12 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
     scores_data = {}
     scores_path = os.path.join(work_dir, "analysis", "scores.json")
     score_by_id: Dict[str, Dict[str, Any]] = {}
+    scores_raw_data = None
     if os.path.isfile(scores_path):
         try:
             with open(scores_path, "r", encoding="utf-8") as sf:
                 raw_s = json.load(sf)
+                scores_raw_data = raw_s
                 if isinstance(raw_s, dict):
                     scores_data = raw_s
                     s_list = raw_s.get("scores", [])
@@ -580,10 +591,12 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
                     s_list = []
                 score_by_id = {s["candidate_id"]: s for s in s_list if isinstance(s, dict) and "candidate_id" in s}
         except Exception as e:
-            warnings.append(f"读取 scores.json 异常: {e}")
+            violations.append(f"读取 scores.json 异常: {e}")
             scores_data = {"scores": all_candidates}
     else:
         scores_data = {"scores": all_candidates}
+        if snapshot.get("scores_hash"):
+            violations.append("缺失必要打分文件: scores.json 不存在")
 
     spec_path = os.path.join(work_dir, "spec_snapshot.json")
     with open(spec_path, "r", encoding="utf-8") as f:
@@ -596,6 +609,8 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
         quality_policy == "strict"
         or visual_verification == "required"
         or spec.get("options", {}).get("strict") is True
+        or spec.get("product", {}).get("quality_policy") == "strict"
+        or spec.get("product", {}).get("strict") is True
     )
 
     prop_abs = os.path.abspath(proposal_path)
@@ -622,6 +637,27 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
     if frozen_hash and len(frozen_hash) == 24 and all(ch in "0123456789abcdefABCDEF" for ch in frozen_hash):
         if computed_pool_hash != frozen_hash:
             violations.append(f"候选池文件完整性校验失败: 实际计算哈希 ({computed_pool_hash}) 与分析快照哈希 ({frozen_hash}) 不一致，候选池已被篡改")
+
+    if snapshot.get("scores_hash") and scores_raw_data is not None:
+        current_scores_bytes = json.dumps(scores_raw_data, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        current_scores_hash = hashlib.sha256(current_scores_bytes).hexdigest()[:24]
+        if current_scores_hash != snapshot.get("scores_hash"):
+            violations.append(f"打分数据完整性校验失败: scores.json 实际计算哈希 ({current_scores_hash}) 与分析快照哈希 ({snapshot.get('scores_hash')}) 不一致，打分数据已被篡改")
+
+    evidence_path = os.path.join(work_dir, "analysis", "evidence_manifest.json")
+    if snapshot.get("evidence_manifest_hash"):
+        if not os.path.isfile(evidence_path):
+            violations.append("缺失必要证据清单文件: evidence_manifest.json 不存在")
+        else:
+            try:
+                with open(evidence_path, "r", encoding="utf-8") as ef:
+                    ev_data = json.load(ef)
+                current_ev_bytes = json.dumps(ev_data, sort_keys=True, ensure_ascii=False).encode("utf-8")
+                current_ev_hash = hashlib.sha256(current_ev_bytes).hexdigest()[:24]
+                if current_ev_hash != snapshot.get("evidence_manifest_hash"):
+                    violations.append(f"证据清单完整性校验失败: evidence_manifest.json 实际计算哈希 ({current_ev_hash}) 与分析快照哈希 ({snapshot.get('evidence_manifest_hash')}) 不一致，证据清单已被篡改")
+            except Exception as e:
+                violations.append(f"读取 evidence_manifest.json 异常: {e}")
 
     if not prop_hash:
         violations.append("提案必须包含 candidate_pool_hash 字段以锁定候选池快照")
@@ -668,8 +704,8 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
 
         # 初筛合格性硬门禁 (eligible is True)
         is_eligible = sc.get("eligible") if "eligible" in sc else c.get("eligible")
-        if is_eligible is False:
-            violations.append(f"选定候选未通过初筛合格性检验 (eligible=False): {cid}")
+        if is_eligible is not True:
+            violations.append(f"选定候选未通过初筛合格性检验 (eligible!=True, eligible={is_eligible}): {cid}")
 
         # 检查硬性阻断原因 (rejection_reasons)
         rej_reasons = sc.get("rejection_reasons") or c.get("rejection_reasons") or []
@@ -717,7 +753,7 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
     total_dur_s = total_dur_ms / 1000.0
 
     # 硬性时长上限门禁（超出硬性上限拒绝提案，轻微偏差产生警告）
-    hard_max_s = max_s + 5.0
+    hard_max_s = float(auto_cfg.get("hard_max_duration") or spec.get("options", {}).get("hard_max_duration") or (max_s + 5.0))
     if total_dur_s > hard_max_s:
         violations.append(f"成片预计总时长 ({total_dur_s:.1f}s) 严重超过目标硬性上限 ({hard_max_s:.1f}s)")
     elif total_dur_s < min_s - 5.0 or total_dur_s > max_s:
@@ -787,7 +823,8 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
     except Exception as e:
         print(f"  [WARN] 自动避脸计算跳过: {e}", file=sys.stderr)
 
-    plan_bytes = json.dumps(compiled_plan, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    plan_to_hash = {k: v for k, v in compiled_plan.items() if k != "validated_plan_hash"}
+    plan_bytes = json.dumps(plan_to_hash, sort_keys=True, ensure_ascii=False).encode("utf-8")
     validated_plan_hash = hashlib.sha256(plan_bytes).hexdigest()
     compiled_plan["validated_plan_hash"] = validated_plan_hash
 
@@ -844,10 +881,12 @@ def stage_render(run_arg: str) -> Dict[str, Any]:
     if not (audit_rep.get("passed") or audit_rep.get("audit_status") == "APPROVED"):
         raise ValueError("分镜计划未通过质量门禁审计 (处于 REJECTED 状态)")
 
-    # 验证 validated_plan_hash 绑定
-    plan_bytes = json.dumps(plan, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    # 验证 validated_plan_hash 绑定与执行计划未被篡改
+    plan_to_hash = {k: v for k, v in plan.items() if k != "validated_plan_hash"}
+    plan_bytes = json.dumps(plan_to_hash, sort_keys=True, ensure_ascii=False).encode("utf-8")
     actual_plan_hash = hashlib.sha256(plan_bytes).hexdigest()
-    if audit_rep.get("validated_plan_hash") and audit_rep.get("validated_plan_hash") != actual_plan_hash and audit_rep.get("validated_plan_hash") != plan.get("validated_plan_hash"):
+    expected_plan_hash = audit_rep.get("validated_plan_hash")
+    if not expected_plan_hash or actual_plan_hash != expected_plan_hash:
         raise ValueError("分镜计划完整性校验失败: 当前计划哈希与审计签名不一致，禁止渲染未经审计的修改计划")
 
     spec_path = os.path.join(work_dir, "spec_snapshot.json")
@@ -857,8 +896,12 @@ def stage_render(run_arg: str) -> Dict[str, Any]:
     output_dir = context.get("output_dir")
     os.makedirs(output_dir, exist_ok=True)
 
+    deliv_manifest_path = os.path.join(output_dir, "delivery_manifest.json")
+    if os.path.isfile(deliv_manifest_path):
+        raise RuntimeError(f"当前运行 ({context.get('run_id')}) 已完成正式交付签署，禁止重新渲染覆盖已交付成片！如需重新制作请创建新 run_id")
+
     # 渲染新成片必须使下游旧验收产物失效
-    for old_artifact in ("technical_qc.json", "editorial_qc.json", "delivery_manifest.json"):
+    for old_artifact in ("technical_qc.json", "editorial_qc.json"):
         old_art_p = os.path.join(output_dir, old_artifact)
         if os.path.isfile(old_art_p):
             try:
@@ -1126,7 +1169,7 @@ def stage_deliver(run_arg: str) -> Dict[str, Any]:
         if not (t_data.get("all_passed", False) or t_data.get("passed", False)):
             rejections.append("工程技术质检未通过")
         t_target_sha = t_data.get("target_video_sha256") or t_data.get("video_sha256")
-        if t_target_sha and current_video_sha256 and t_target_sha != current_video_sha256:
+        if not t_target_sha or not current_video_sha256 or t_target_sha != current_video_sha256:
             rejections.append(f"技术质检报告审核的目标视频哈希 ({t_target_sha}) 与当前成片哈希 ({current_video_sha256}) 不匹配，重新渲染后必须重新执行 qc 阶段")
 
     if not os.path.isfile(editorial_qc_path):
@@ -1137,7 +1180,7 @@ def stage_deliver(run_arg: str) -> Dict[str, Any]:
         if not e_data.get("passed", False) or e_data.get("block_count", 0) > 0:
             rejections.append(f"内容质检门禁阻断 (BLOCK={e_data.get('block_count', 0)})")
         e_target_sha = e_data.get("target_video_sha256") or e_data.get("video_sha256")
-        if e_target_sha and current_video_sha256 and e_target_sha != current_video_sha256:
+        if not e_target_sha or not current_video_sha256 or e_target_sha != current_video_sha256:
             rejections.append(f"内容质检报告审核的目标视频哈希 ({e_target_sha}) 与当前成片哈希 ({current_video_sha256}) 不匹配，重新渲染后必须重新执行 qc 阶段")
 
     plan_audit_path = os.path.join(work_dir, "plan_audit.json")
@@ -1150,9 +1193,11 @@ def stage_deliver(run_arg: str) -> Dict[str, Any]:
     if os.path.isfile(plan_path):
         with open(plan_path, "r", encoding="utf-8") as pf:
             plan_obj = json.load(pf)
-        plan_bytes = json.dumps(plan_obj, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        plan_to_hash = {k: v for k, v in plan_obj.items() if k != "validated_plan_hash"}
+        plan_bytes = json.dumps(plan_to_hash, sort_keys=True, ensure_ascii=False).encode("utf-8")
         actual_plan_hash = hashlib.sha256(plan_bytes).hexdigest()
-        if pa_data.get("validated_plan_hash") and pa_data.get("validated_plan_hash") != actual_plan_hash and pa_data.get("validated_plan_hash") != plan_obj.get("validated_plan_hash"):
+        expected_plan_hash = pa_data.get("validated_plan_hash")
+        if not expected_plan_hash or actual_plan_hash != expected_plan_hash:
             rejections.append("执行计划哈希与审计签名不一致，禁止跨计划交付")
 
     spec_path = os.path.join(work_dir, "spec_snapshot.json")

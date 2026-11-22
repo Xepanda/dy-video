@@ -890,7 +890,7 @@ class AgentDirector:
                 # 5. 多模态候选精排
                 ranker = CandidateRanker()
                 candidate_scores = ranker.score_candidates(
-                    all_candidates, product_profile, relation_decisions=relation_decisions
+                    all_candidates, product_profile, relation_decisions=relation_decisions, strict=is_strict_policy
                 )
 
                 # 6. 全局序列优化与 Agent 编排

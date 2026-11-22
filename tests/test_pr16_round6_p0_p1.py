@@ -272,6 +272,9 @@ class TestPR16Round6P0P1(unittest.TestCase):
         scored_cand = rank_res["scores"][0]
         self.assertFalse(scored_cand["eligible"], "严格模式下身份未核实的候选 eligible 必须为 False")
         self.assertTrue(any("严格模式下未通过身份核实" in r for r in scored_cand["rejection_reasons"]))
+        self.assertFalse(cand.get("eligible"), "CandidateRanker 必须同步更新 cand 自身的 eligible 字段为 False")
+        self.assertEqual(cand.get("product_relation"), "UNCERTAIN")
+        self.assertIn("candidates", rank_res)
 
     # -------------------------------------------------------------------------
     # 4. P0: 提案时长超出硬上限门禁 (validate-plan)
@@ -510,6 +513,213 @@ class TestPR16Round6P0P1(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             stage_validate_plan(work_dir, prop_file)
         self.assertIn("候选池文件完整性校验失败", str(ctx.exception))
+
+    # -------------------------------------------------------------------------
+    # 9. P0: 候选缺少 eligible 字段或为 None 时必须被拒绝
+    # -------------------------------------------------------------------------
+    def test_validate_plan_rejects_missing_or_none_eligible(self):
+        """P0: 当候选的 eligible 为 None 或缺失时，validate-plan 必须强制拦截，不能因不是 False 而放行。"""
+        work_dir = os.path.join(self.proj_dir, "work", "run_none_eligible")
+        analysis_dir = os.path.join(work_dir, "analysis")
+        os.makedirs(analysis_dir, exist_ok=True)
+
+        with open(os.path.join(work_dir, "run_context.json"), "w", encoding="utf-8") as f:
+            json.dump({"schema_version": "3.2", "run_id": "run_none_eligible"}, f)
+        with open(os.path.join(work_dir, "spec_snapshot.json"), "w", encoding="utf-8") as f:
+            json.dump({"options": {}}, f)
+
+        # 候选不带 eligible 字段
+        cands = [{
+            "candidate_id": "cand_no_eligible",
+            "source_id": "s1",
+            "source_start_ms": 0,
+            "source_end_ms": 10000,
+            "text": "测试未标注合格性的候选",
+            "product_relation": "SAME_SKU",
+        }]
+        with open(os.path.join(analysis_dir, "candidates.json"), "w", encoding="utf-8") as f:
+            json.dump(cands, f, ensure_ascii=False)
+
+        # scores.json 中 eligible 为 None
+        scores = [{"candidate_id": "cand_no_eligible", "eligible": None, "product_relation": "SAME_SKU"}]
+        with open(os.path.join(analysis_dir, "scores.json"), "w", encoding="utf-8") as f:
+            json.dump({"scores": scores}, f)
+
+        import hashlib
+        hash_payload = [{"id": "cand_no_eligible", "source_id": "s1", "st": 0, "en": 10000, "rel": "SAME_SKU", "eligible": False, "text": "测试未标注合格性的候选"}]
+        p_hash = hashlib.sha256(json.dumps(hash_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:24]
+        with open(os.path.join(analysis_dir, "candidate_pool_snapshot.json"), "w", encoding="utf-8") as f:
+            json.dump({"schema_version": "3.2", "candidate_pool_hash": p_hash}, f)
+
+        prop = {
+            "proposal_id": "prop_none_eligible",
+            "candidate_pool_hash": p_hash,
+            "ordered_candidate_ids": ["cand_no_eligible"],
+        }
+        prop_file = os.path.join(self.proj_dir, "prop_none.json")
+        with open(prop_file, "w", encoding="utf-8") as f:
+            json.dump(prop, f)
+
+        with self.assertRaises(ValueError) as ctx:
+            stage_validate_plan(work_dir, prop_file)
+        self.assertIn("eligible!=True", str(ctx.exception))
+
+    # -------------------------------------------------------------------------
+    # 10. P1: scores.json 与 evidence_manifest.json 篡改检测
+    # -------------------------------------------------------------------------
+    def test_scores_and_evidence_manifest_tampering_detected(self):
+        """P1: validate-plan 必须验证 scores.json 与 evidence_manifest.json 的哈希完整性。"""
+        work_dir = os.path.join(self.proj_dir, "work", "run_score_tamper")
+        analysis_dir = os.path.join(work_dir, "analysis")
+        os.makedirs(analysis_dir, exist_ok=True)
+
+        with open(os.path.join(work_dir, "run_context.json"), "w", encoding="utf-8") as f:
+            json.dump({"schema_version": "3.2", "run_id": "run_score_tamper"}, f)
+        with open(os.path.join(work_dir, "spec_snapshot.json"), "w", encoding="utf-8") as f:
+            json.dump({"options": {}}, f)
+
+        cands = [{
+            "candidate_id": "c1",
+            "source_id": "s1",
+            "source_start_ms": 0,
+            "source_end_ms": 10000,
+            "text": "测试文本",
+            "product_relation": "SAME_SKU",
+            "eligible": True,
+        }]
+        with open(os.path.join(analysis_dir, "candidates.json"), "w", encoding="utf-8") as f:
+            json.dump(cands, f)
+
+        import hashlib
+        c_hash = hashlib.sha256(json.dumps([{"id": "c1", "source_id": "s1", "st": 0, "en": 10000, "rel": "SAME_SKU", "eligible": True, "text": "测试文本"}], sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:24]
+
+        orig_scores = [{"candidate_id": "c1", "eligible": True}]
+        s_hash = hashlib.sha256(json.dumps(orig_scores, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:24]
+
+        # 写入 snapshot
+        with open(os.path.join(analysis_dir, "candidate_pool_snapshot.json"), "w", encoding="utf-8") as f:
+            json.dump({"schema_version": "3.2", "candidate_pool_hash": c_hash, "scores_hash": s_hash}, f)
+
+        # 外部篡改 scores.json
+        tampered_scores = [{"candidate_id": "c1", "eligible": True, "tampered": True}]
+        with open(os.path.join(analysis_dir, "scores.json"), "w", encoding="utf-8") as f:
+            json.dump(tampered_scores, f)
+
+        prop = {"proposal_id": "p1", "candidate_pool_hash": c_hash, "ordered_candidate_ids": ["c1"]}
+        prop_file = os.path.join(self.proj_dir, "prop_s_tamper.json")
+        with open(prop_file, "w", encoding="utf-8") as f:
+            json.dump(prop, f)
+
+        with self.assertRaises(ValueError) as ctx:
+            stage_validate_plan(work_dir, prop_file)
+        self.assertIn("打分数据完整性校验失败", str(ctx.exception))
+
+    # -------------------------------------------------------------------------
+    # 11. P0: validated_plan.json 内容篡改检测（保留 validated_plan_hash 字段不变）
+    # -------------------------------------------------------------------------
+    def test_plan_content_tampering_detected_even_if_hash_field_intact(self):
+        """P0: 如果外部篡改了 validated_plan.json 的内容但保留原 hash 字段，render 与 deliver 必须强行拦截。"""
+        work_dir = os.path.join(self.proj_dir, "work", "run_plan_tamper")
+        output_dir = os.path.join(self.proj_dir, "output", "run_plan_tamper")
+        os.makedirs(work_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
+
+        with open(os.path.join(work_dir, "run_context.json"), "w", encoding="utf-8") as f:
+            json.dump({"schema_version": "3.2", "run_id": "run_plan_tamper", "output_dir": output_dir}, f)
+        with open(os.path.join(work_dir, "spec_snapshot.json"), "w", encoding="utf-8") as f:
+            json.dump({"options": {}}, f)
+
+        plan = {"schema_version": "3.2", "clips": [{"id": "c01", "st": 0.0, "end": 10.0, "dur": 10.0}]}
+        import hashlib
+        plan_bytes = json.dumps(plan, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        h = hashlib.sha256(plan_bytes).hexdigest()
+
+        # 写入 audit 报告
+        with open(os.path.join(work_dir, "plan_audit.json"), "w", encoding="utf-8") as f:
+            json.dump({"audit_status": "APPROVED", "passed": True, "validated_plan_hash": h}, f)
+
+        # 外部篡改 plan 的 clips 内容，但保留 validated_plan_hash == h
+        plan["clips"].append({"id": "hacked_clip", "st": 10.0, "end": 20.0, "dur": 10.0})
+        plan["validated_plan_hash"] = h
+        with open(os.path.join(work_dir, "validated_plan.json"), "w", encoding="utf-8") as f:
+            json.dump(plan, f)
+
+        with self.assertRaises(ValueError) as ctx:
+            stage_render(work_dir)
+        self.assertIn("分镜计划完整性校验失败", str(ctx.exception))
+
+    # -------------------------------------------------------------------------
+    # 12. P0: 禁止重新渲染覆盖已完成正式交付的产物
+    # -------------------------------------------------------------------------
+    def test_render_forbids_overwriting_delivered_artifacts(self):
+        """P0: 当前运行若已存在 delivery_manifest.json（已出库），render 必须拒绝覆盖执行。"""
+        work_dir = os.path.join(self.proj_dir, "work", "run_delivered_render")
+        output_dir = os.path.join(self.proj_dir, "output", "run_delivered_render")
+        os.makedirs(work_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
+
+        with open(os.path.join(work_dir, "run_context.json"), "w", encoding="utf-8") as f:
+            json.dump({"schema_version": "3.2", "run_id": "run_delivered_render", "output_dir": output_dir}, f)
+        with open(os.path.join(work_dir, "spec_snapshot.json"), "w", encoding="utf-8") as f:
+            json.dump({"options": {}}, f)
+
+        # 标记已交付
+        with open(os.path.join(output_dir, "delivery_manifest.json"), "w", encoding="utf-8") as f:
+            json.dump({"status": "DELIVERED"}, f)
+
+        plan = {"schema_version": "3.2", "clips": []}
+        import hashlib
+        h = hashlib.sha256(json.dumps(plan, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        plan["validated_plan_hash"] = h
+        with open(os.path.join(work_dir, "validated_plan.json"), "w", encoding="utf-8") as f:
+            json.dump(plan, f)
+        with open(os.path.join(work_dir, "plan_audit.json"), "w", encoding="utf-8") as f:
+            json.dump({"audit_status": "APPROVED", "passed": True, "validated_plan_hash": h}, f)
+
+        with self.assertRaises(RuntimeError) as ctx:
+            stage_render(work_dir)
+        self.assertIn("已完成正式交付签署，禁止重新渲染覆盖已交付成片", str(ctx.exception))
+
+    # -------------------------------------------------------------------------
+    # 13. P0: deliver 必须拒绝缺失 target_video_sha256 的质检报告
+    # -------------------------------------------------------------------------
+    def test_deliver_rejects_qc_report_missing_target_video_sha256(self):
+        """P0: deliver 阶段必须要求 QC 报告明确包含并匹配当前成片的 SHA-256，严禁无哈希旧报告签署交付。"""
+        work_dir = os.path.join(self.proj_dir, "work", "run_no_qc_hash")
+        output_dir = os.path.join(self.proj_dir, "output", "run_no_qc_hash")
+        os.makedirs(work_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
+
+        final_video = os.path.join(output_dir, "final.mp4")
+        with open(final_video, "wb") as f:
+            f.write(b"video_bytes_test")
+
+        with open(os.path.join(work_dir, "run_context.json"), "w", encoding="utf-8") as f:
+            json.dump({"schema_version": "3.2", "run_id": "run_no_qc_hash", "output_dir": output_dir, "spec_fingerprint": "fp_test"}, f)
+        with open(os.path.join(work_dir, "spec_snapshot.json"), "w", encoding="utf-8") as f:
+            json.dump({"options": {}}, f)
+        with open(os.path.join(work_dir, "input_manifest.json"), "w", encoding="utf-8") as f:
+            json.dump({"source_videos": []}, f)
+
+        plan = {"schema_version": "3.2", "clips": []}
+        import hashlib
+        h = hashlib.sha256(json.dumps(plan, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        plan["validated_plan_hash"] = h
+        with open(os.path.join(work_dir, "validated_plan.json"), "w", encoding="utf-8") as f:
+            json.dump(plan, f)
+        with open(os.path.join(work_dir, "plan_audit.json"), "w", encoding="utf-8") as f:
+            json.dump({"audit_status": "APPROVED", "passed": True, "validated_plan_hash": h}, f)
+
+        # 缺少 target_video_sha256 字段
+        with open(os.path.join(output_dir, "technical_qc.json"), "w", encoding="utf-8") as f:
+            json.dump({"passed": True, "all_passed": True}, f)
+        with open(os.path.join(output_dir, "editorial_qc.json"), "w", encoding="utf-8") as f:
+            json.dump({"passed": True, "block_count": 0}, f)
+
+        with patch("src.runtime.stage_services.compute_job_fingerprint", return_value="fp_test"):
+            with self.assertRaises(ValueError) as ctx:
+                stage_deliver(work_dir)
+            self.assertIn("不匹配，重新渲染后必须重新执行 qc 阶段", str(ctx.exception))
 
 
 if __name__ == "__main__":

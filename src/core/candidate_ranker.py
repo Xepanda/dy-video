@@ -263,6 +263,10 @@ class CandidateRanker:
             # 综合得分
             total_score = sum(subscores[k] * self.weights.get(k, 0.0) for k in subscores)
             cand["composite_score"] = round(total_score, 2)
+            cand["eligible"] = eligible
+            cand["product_relation"] = relation
+            cand["rejection_reasons"] = rejection_reasons
+            cand["missing_evidence"] = missing_evidence
 
             # 3. 叙事角色推断
             narrative_role = "PROOF"
@@ -294,4 +298,5 @@ class CandidateRanker:
         return {
             "schema_version": "3.0",
             "scores": scores_list,
+            "candidates": candidates,
         }

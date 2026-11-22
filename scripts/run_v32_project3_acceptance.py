@@ -19,6 +19,7 @@ import json
 import time
 import shutil
 import hashlib
+import tempfile
 from typing import Dict, Any, List
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -167,11 +168,12 @@ def main():
             }
         }
     }
+    os.makedirs(work_dir, exist_ok=True)
     spec_path = os.path.join(work_dir, "task_spec.json")
     with open(spec_path, "w", encoding="utf-8") as f:
         json.dump(task_spec, f, ensure_ascii=False, indent=2)
 
-    # 预先同步已有 ASR 缓存以加速 analyze 运行
+    # 同步已有 ASR 缓存以加速 analyze 运行
     cached_run_base = os.path.join(PROJECT3_DIR, "work", "run_v31_20261121_041915")
     cached_asr_src = os.path.join(cached_run_base, "asr")
     target_asr_dir = os.path.join(work_dir, "asr")
@@ -284,9 +286,15 @@ def main():
     intervals_by_source = {}  # source -> list of (start_ms, end_ms)
 
     for c in all_candidates:
+        if c.get("eligible") is not True:
+            continue
+        if c.get("rejection_reasons"):
+            continue
         if c.get("product_relation") != "SAME_SKU":
             continue
         if contains_price(c.get("text", ""))[0]:
+            continue
+        if re.search(r'\d', c.get("text", "")):
             continue
         if find_violation_matches(c.get("text", "")):
             continue
