@@ -193,7 +193,16 @@ def compile_v3_plan(
             "dur": 2.5,
             "y": 280,
         },
+        "hook": {
+            "text": options.get("hook_card_text") or _derive_hook_text(spec_data),
+            "dur": 2.5,
+            "y": 280,
+        },
         "cta": {
+            "text": options.get("cta_text") or _derive_cta_text(spec_data),
+            "dur": 2.5,
+        },
+        "cta_card": {
             "text": options.get("cta_text") or _derive_cta_text(spec_data),
             "dur": 2.5,
         },

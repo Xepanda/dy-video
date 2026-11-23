@@ -673,6 +673,28 @@ class DesktopSpecApi:
         prod_name = (spec.get("product") or {}).get("name") or (spec.get("product") or {}).get("title_line1") or "带货商品"
         project_id = spec.get("project_id", "project")
 
+        # 寻找并核验 Python 工具仓库根目录 (必须包含 src/cli.py)
+        candidate_roots = [
+            PROJECT_ROOT,
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            os.getcwd(),
+        ]
+        repo_root = None
+        for cr in candidate_roots:
+            if cr and os.path.isfile(os.path.join(cr, "src", "cli.py")):
+                repo_root = os.path.abspath(cr)
+                break
+        if not repo_root:
+            repo_root = PROJECT_ROOT
+
+        cli_available = os.path.isfile(os.path.join(repo_root, "src", "cli.py"))
+
+        from src.core.project_context import normalize_project_path
+        win_repo = normalize_project_path(repo_root, target_platform="win32")
+        wsl_repo = normalize_project_path(repo_root, target_platform="linux")
+        win_target = normalize_project_path(target_path, target_platform="win32")
+        wsl_target = normalize_project_path(target_path, target_platform="linux")
+
         agent_task_content = f"""# dy-video V3.2 带货视频剪辑任务指令
 
 > 本任务由 Windows EXE 配置向导生成。EXE 仅作为配置器与交接器，不启动任何 Agent 进程。
@@ -681,7 +703,9 @@ class DesktopSpecApi:
 ## 1. 任务元信息与环境要求
 - **任务代号**: `{project_id}`
 - **推荐商品**: {prod_name}
-- **工具仓库路径 (Working Directory)**: `{PROJECT_ROOT}`
+- **工具仓库路径 (Windows)**: `{win_repo}`
+- **工具仓库路径 (WSL / Linux)**: `{wsl_repo}`
+- **CLI 可用状态**: {"[PASS] src.cli 验证就绪" if cli_available else "[WARN] 未在仓库根目录下直接检测到 src/cli.py，请确保切换至 dy-video 代码仓库"}
 - **项目根目录**: `{project_root}`
 - **任务契约文件**: `{target_path}`
 - **选定源素材清单**:
@@ -689,10 +713,20 @@ class DesktopSpecApi:
 
 ## 2. 外部 Agent 标准工作流规范 (ADR-001)
 所有媒体处理、候选提取、时间线编译、音画渲染与双层质检门禁均由仓库统一 CLI 承载。
-**请务必先将工作目录切换至工具代码仓库根目录：**
-```bash
-cd "{PROJECT_ROOT}"
+
+### 终端环境准备与执行指令
+**若使用 Windows 原生终端 (PowerShell / CMD)**:
+```powershell
+cd "{win_repo}"
+python -m src.cli prepare --spec "{win_target}"
 ```
+
+**若使用 WSL / Linux 终端 (bash)**:
+```bash
+cd "{wsl_repo}"
+python3 -m src.cli prepare --spec "{wsl_target}"
+```
+
 然后依次执行以下确定性阶段命令：
 
 ### 阶段 1: 初始化项目与白名单
@@ -752,12 +786,19 @@ python -m src.cli deliver --run "<work_dir>"
 
         task_prompt = (
             f"请按照 dy-video 标准工作流制作带货视频：\n"
-            f"工具仓库根目录: {PROJECT_ROOT}\n"
+            f"工具仓库根目录 (Windows): {win_repo}\n"
+            f"工具仓库根目录 (WSL / Linux): {wsl_repo}\n"
             f"项目根目录: {project_root}\n"
             f"配置契约: {target_path}\n"
             f"任务指南: {task_md_path}\n\n"
-            f"请先在终端切换到工具仓库根目录 (cd \"{PROJECT_ROOT}\")，依次执行通用 CLI 阶段命令：\n"
-            f'1. python -m src.cli prepare --spec "{target_path}"\n'
+            f"【Windows PowerShell 执行指令】\n"
+            f'cd "{win_repo}"\n'
+            f'python -m src.cli prepare --spec "{win_target}"\n\n'
+            f"【WSL / Linux bash 执行指令】\n"
+            f'cd "{wsl_repo}"\n'
+            f'python3 -m src.cli prepare --spec "{wsl_target}"\n\n'
+            f"流水线执行步骤：\n"
+            f'1. prepare 初始化获取 work_dir\n'
             f'2. python -m src.cli analyze --run "<work_dir>"\n'
             f'3. 审查候选池并保存 decisions/sequence_proposal.json\n'
             f'4. python -m src.cli validate-plan --run "<work_dir>" --proposal "<work_dir>/decisions/sequence_proposal.json"\n'

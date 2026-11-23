@@ -17,7 +17,9 @@ import json
 import time
 import uuid
 import hashlib
-from pathlib import Path
+import ntpath
+import posixpath
+from pathlib import Path, PureWindowsPath, PurePosixPath
 from typing import Dict, Any, List, Optional, Tuple
 
 # 视频扩展名定义
@@ -32,21 +34,24 @@ def sanitize_id(raw_name: str) -> str:
     return s or "src"
 
 
-def normalize_project_path(path_str: str) -> str:
+def normalize_project_path(path_str: str, target_platform: Optional[str] = None) -> str:
     """跨平台统一解析项目根路径。
     在 Linux/WSL 环境下，Windows 驱动器盘符（如 D:/... 或 D:\\...）将被规范映射到 WSL 挂载路径（/mnt/d/...）；
     在 Windows 环境下，保持 Windows 驱动器路径；若传入 /mnt/d/... 自动映射为 D:\\...。
+    可通过 target_platform 显式指定目标平台语义（'win32' 或 'linux'），实现与测试宿主解耦。
     """
     if not path_str:
         return ""
     s = str(path_str).strip()
-    if sys.platform != "win32":
+    plat = target_platform if target_platform is not None else sys.platform
+    if plat != "win32":
         # POSIX / Linux: 将 Windows 盘符路径映射为 WSL 规范路径
         m = re.match(r"^([a-zA-Z]):(?:[\\/](.*))?$", s)
         if m:
             drive = m.group(1).lower()
             rest = (m.group(2) or "").replace("\\", "/").strip("/")
             return f"/mnt/{drive}/{rest}" if rest else f"/mnt/{drive}"
+        return posixpath.normpath(s)
     else:
         # Windows: 将 WSL 路径映射为 Windows 盘符路径
         m = re.match(r"^/mnt/([a-zA-Z])(?:/(.*))?$", s)
@@ -54,7 +59,7 @@ def normalize_project_path(path_str: str) -> str:
             drive = m.group(1).upper()
             rest = (m.group(2) or "").replace("/", "\\").strip("\\")
             return f"{drive}:\\{rest}" if rest else f"{drive}:\\"
-    return os.path.normpath(os.path.abspath(s))
+        return ntpath.normpath(s)
 
 
 class ProjectPaths:
@@ -65,23 +70,53 @@ class ProjectPaths:
         if os.path.isfile(norm_root):
             norm_root = os.path.dirname(norm_root)
 
-        # 保护：只识别明确的 project/work/<run_id> 或 project/output/<run_id> 结构
-        # 绝不从路径头部/祖先目录搜索 'work'，防止 D:\work\proj 或 /home/runner/work 误截断
+        # 保护：优先使用显式项目根目录；只有存在有效 run_context.json 时才反向识别运行目录并截断
+        # 绝不盲目依据路径末尾的 'work/<目录名>' 猜测截断，防止类似 D:\projects\work\my-video 被误判
+        is_sub_run_dir = False
+        if os.path.isfile(os.path.join(norm_root, "run_context.json")):
+            try:
+                with open(os.path.join(norm_root, "run_context.json"), "r", encoding="utf-8") as f:
+                    ctx_info = json.load(f)
+                if isinstance(ctx_info, dict) and "run_id" in ctx_info:
+                    is_sub_run_dir = True
+            except Exception:
+                pass
+
+        # 针对尚未物理创建的 mock/测试路径：仅当父目录名为 work/output 且当前目录名符合 run_id 典型特征时才识别
         p_parts = Path(norm_root).parts
-        if len(p_parts) >= 3 and p_parts[-2] in ("work", "output"):
-            # 形如 <project>/work/<run_id> 或 <project>/output/<run_id>
+        if not is_sub_run_dir and len(p_parts) >= 3 and p_parts[-2] in ("work", "output"):
+            last_part = p_parts[-1]
+            has_project_files = (
+                os.path.isfile(os.path.join(norm_root, "job_spec.json")) or
+                os.path.isdir(os.path.join(norm_root, "素材")) or
+                os.path.isdir(os.path.join(norm_root, "materials")) or
+                os.path.isdir(os.path.join(norm_root, "input"))
+            )
+            if not has_project_files and (
+                last_part.startswith("run_") or
+                last_part.startswith("run-") or
+                re.match(r"^\d{8}", last_part)
+            ):
+                is_sub_run_dir = True
+
+        if is_sub_run_dir:
             if sys.platform != "win32":
                 clean_parts = [part.strip("/\\") for part in p_parts[:-2] if part.strip("/\\")]
                 norm_root = "/" + "/".join(clean_parts)
             else:
                 norm_root = str(Path(*p_parts[:-2]))
         elif len(p_parts) >= 2 and p_parts[-1] in ("work", "output"):
-            # 形如 <project>/work 或 <project>/output
-            if sys.platform != "win32":
-                clean_parts = [part.strip("/\\") for part in p_parts[:-1] if part.strip("/\\")]
-                norm_root = "/" + "/".join(clean_parts)
-            else:
-                norm_root = str(Path(*p_parts[:-1]))
+            has_project_files = (
+                os.path.isfile(os.path.join(norm_root, "job_spec.json")) or
+                os.path.isdir(os.path.join(norm_root, "素材")) or
+                os.path.isdir(os.path.join(norm_root, "materials"))
+            )
+            if not has_project_files:
+                if sys.platform != "win32":
+                    clean_parts = [part.strip("/\\") for part in p_parts[:-1] if part.strip("/\\")]
+                    norm_root = "/" + "/".join(clean_parts)
+                else:
+                    norm_root = str(Path(*p_parts[:-1]))
 
         if os.path.basename(norm_root) in ("素材", "materials", "input"):
             materials_dir = materials_dir or norm_root
@@ -180,25 +215,53 @@ class ProjectPaths:
             return False
 
 
-def is_historical_output(file_path: str, project_id: str) -> Tuple[bool, str]:
+def is_historical_output(file_path: str, project_id: str = "", project_root: Optional[str] = None) -> Tuple[bool, str]:
     """判定文件是否为既有成品、中间文件或导出产物，防止被重新当成原始素材。"""
-    norm_p = os.path.normpath(os.path.abspath(file_path))
-    parts = norm_p.split(os.sep)
+    if not file_path:
+        return False, ""
+    norm_p = normalize_project_path(os.path.abspath(file_path))
+    parts = Path(norm_p).parts
 
-    # 1. 位于 output 或 work 目录下的文件
-    if "output" in parts or "work" in parts or "work_dir" in parts or "work_dirs" in parts:
-        return True, "文件位于 output/work 系统产物目录"
+    # 1. 严格检查是否位于当前项目的 output 或 work 系统产物目录下
+    # 若提供了 project_root，以真实物理包含关系为准，绝不误杀祖先叫 work 的素材目录
+    if project_root:
+        norm_root = normalize_project_path(os.path.abspath(project_root))
+        try:
+            real_p = os.path.normcase(os.path.realpath(norm_p))
+            real_work = os.path.normcase(os.path.realpath(os.path.join(norm_root, "work")))
+            real_out = os.path.normcase(os.path.realpath(os.path.join(norm_root, "output")))
+            if real_p == real_work or os.path.commonpath([real_p, real_work]) == real_work:
+                return True, "文件位于项目 work 系统产物目录"
+            if real_p == real_out or os.path.commonpath([real_p, real_out]) == real_out:
+                return True, "文件位于项目 output 系统产物目录"
+        except Exception:
+            pass
+
+    # 路径各级结构判定：
+    # 绝不能只要祖先目录包含 'work' 就把文件判死（如 /home/dev/work/project-3/素材/live.mp4）
+    # 只有当 'work' 或 'output' 作为系统生成目录（位于 project_id 之后，且其后不含 '素材'/'materials'/'input'）时才生效
+    for i, part in enumerate(parts[:-1]):
+        if part in ("output", "work", "work_dir", "work_dirs"):
+            sub_parts = parts[i+1:]
+            # 检查此 'work' / 'output' 后面是否有素材目录标记
+            if any(sp in ("素材", "materials", "input") for sp in sub_parts):
+                continue
+            # 若给定了 project_id 且 project_id 在此 part 之后，说明也是宿主外层工作区目录
+            if project_id and project_id in sub_parts:
+                continue
+            return True, "文件位于 output/work 系统产物目录"
 
     base_name = os.path.basename(norm_p)
     stem, ext = os.path.splitext(base_name)
     stem_lower = stem.lower()
 
     # 2. 匹配 project_id 同名成片或标准输出名
-    pid_lower = project_id.lower()
-    if stem_lower == pid_lower:
-        return True, f"文件名匹配项目成片命名 '{pid_lower}'"
-    if stem_lower in (f"{pid_lower}_final", f"{pid_lower}_cover", f"{pid_lower}_out"):
-        return True, "文件名匹配历史成片派生命名"
+    if project_id:
+        pid_lower = project_id.lower()
+        if stem_lower == pid_lower:
+            return True, f"文件名匹配项目成片命名 '{pid_lower}'"
+        if stem_lower in (f"{pid_lower}_final", f"{pid_lower}_cover", f"{pid_lower}_out"):
+            return True, "文件名匹配历史成片派生命名"
     if stem_lower in ("final", "output", "render", "delivered", "out"):
         return True, "文件名匹配常见成品关键字"
     if stem_lower.endswith("_final") or stem_lower.startswith("final_"):
@@ -210,7 +273,7 @@ def is_historical_output(file_path: str, project_id: str) -> Tuple[bool, str]:
         return True, "同目录下存在对应的质检报告，判定为历史成片"
     if os.path.isfile(os.path.join(parent_dir, f"{stem}_generation_manifest.json")):
         return True, "同目录下存在对应的生成清单，判定为历史成片"
-    if os.path.isfile(os.path.join(parent_dir, "delivery_manifest.json")) and stem_lower in ("final", pid_lower):
+    if os.path.isfile(os.path.join(parent_dir, "delivery_manifest.json")) and stem_lower in ("final", pid_lower if project_id else "final"):
         return True, "同目录下存在交付清单，判定为成片"
 
     # 4. 结合历史交付 Manifest 深度比对（无论是否位于标准子目录）
@@ -319,7 +382,7 @@ class InputManifest:
                 if not os.path.isfile(fpath):
                     continue
                 if fname.lower().endswith(IMAGE_EXTENSIONS):
-                    is_hist, reason = is_historical_output(fpath, pid)
+                    is_hist, reason = is_historical_output(fpath, pid, self.paths.project_root)
                     if is_hist:
                         self.excluded.append({
                             "path": fpath,
@@ -341,10 +404,16 @@ class InputManifest:
             for raw_p in explicit_video_paths:
                 if not raw_p or not str(raw_p).strip():
                     continue
-                abs_p = raw_p if os.path.isabs(raw_p) else os.path.normpath(os.path.join(mat_dir, raw_p))
+                # 跨平台路径映射支持 (Windows盘符与WSL路径互通)
+                norm_raw_p = normalize_project_path(str(raw_p).strip())
+                if os.path.isabs(norm_raw_p):
+                    abs_p = norm_raw_p
+                else:
+                    abs_p = os.path.normpath(os.path.join(mat_dir, norm_raw_p))
+
                 if not os.path.isfile(abs_p):
                     # 尝试从 project_root 解析
-                    alt_p = os.path.normpath(os.path.join(self.paths.project_root, raw_p))
+                    alt_p = os.path.normpath(os.path.join(self.paths.project_root, norm_raw_p))
                     if os.path.isfile(alt_p):
                         abs_p = alt_p
                     else:
@@ -355,7 +424,7 @@ class InputManifest:
                         })
                         continue
 
-                is_hist, reason = is_historical_output(abs_p, pid)
+                is_hist, reason = is_historical_output(abs_p, pid, self.paths.project_root)
                 if is_hist:
                     self.excluded.append({
                         "path": abs_p,
@@ -391,7 +460,7 @@ class InputManifest:
                     if not fname.lower().endswith(VIDEO_EXTENSIONS):
                         continue
 
-                    is_hist, reason = is_historical_output(fpath, pid)
+                    is_hist, reason = is_historical_output(fpath, pid, self.paths.project_root)
                     if is_hist:
                         self.excluded.append({
                             "path": fpath,

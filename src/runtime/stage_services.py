@@ -361,6 +361,14 @@ def stage_analyze(run_arg: str) -> Dict[str, Any]:
         context = json.load(f)
 
     paths = resolve_trusted_paths(work_dir, context)
+    output_dir = paths.output_dir
+
+    # 交付清单不可变性防护：已有 DELIVERED 清单必须保持不可变，严禁重写计划
+    deliv_manifest_path = os.path.join(output_dir, "delivery_manifest.json")
+    if os.path.isfile(deliv_manifest_path):
+        raise RuntimeError(
+            f"当前运行 ({context.get('run_id')}) 已完成正式交付签署，计划与产物已被锁定为不可变！如需修改计划请创建新 run_id"
+        )
 
     spec_path = os.path.join(work_dir, "spec_snapshot.json")
     with open(spec_path, "r", encoding="utf-8") as f:
@@ -503,7 +511,12 @@ def stage_analyze(run_arg: str) -> Dict[str, Any]:
     aligner = UtteranceAligner(merge_gap_ms=600, min_utterance_ms=1200, max_utterance_ms=10000)
     raw_by_source: Dict[str, List[Any]] = {}
     for s in segments:
-        src = s.get("source_file") or (raw_videos[0] if raw_videos else "")
+        src = s.get("source_file")
+        if not src:
+            if len(raw_videos) == 1:
+                src = raw_videos[0]
+            else:
+                raise ValueError(f"SOURCE_UNRESOLVED: 多源素材模式下 ASR 片段未标注 source_file: {s.get('text', '')}")
         raw_by_source.setdefault(src, []).append(s)
 
     utterances_by_source = {}
@@ -520,6 +533,8 @@ def stage_analyze(run_arg: str) -> Dict[str, Any]:
     src_map_by_name = {s.get("filename"): s for s in source_videos_list if s.get("filename")}
 
     def _resolve_source_meta(src_key: str) -> Dict[str, Any]:
+        if not src_key:
+            raise ValueError("SOURCE_UNRESOLVED: 素材来源标识为空，无法关联输入清单")
         if src_key in src_map_by_id:
             return src_map_by_id[src_key]
         norm_k = os.path.normcase(os.path.realpath(normalize_project_path(src_key)))
@@ -531,7 +546,9 @@ def stage_analyze(run_arg: str) -> Dict[str, Any]:
             matches = [s for s in source_videos_list if s.get("filename") == fn]
             if len(matches) == 1:
                 return matches[0]
-        return source_videos_list[0] if source_videos_list else {}
+            elif len(matches) > 1:
+                raise ValueError(f"SOURCE_UNRESOLVED: 存在多个同名素材文件 '{fn}'，无法仅凭文件名解析，禁止自动归属")
+        raise ValueError(f"SOURCE_UNRESOLVED: 素材来源 '{src_key}' 未在 input_manifest.json 清单中登记，禁止自动归属第一段视频")
 
     for src, utts in utterances_by_source.items():
         shots_for_src = scene_cuts_by_source.get(src, [])
@@ -669,6 +686,14 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
         context = json.load(f)
 
     paths = resolve_trusted_paths(work_dir, context)
+    output_dir = paths.output_dir
+
+    # 交付清单不可变性防护：已有 DELIVERED 清单必须保持不可变，严禁重写计划
+    deliv_manifest_path = os.path.join(output_dir, "delivery_manifest.json")
+    if os.path.isfile(deliv_manifest_path):
+        raise RuntimeError(
+            f"当前运行 ({context.get('run_id')}) 已完成正式交付签署，计划与产物已被锁定为不可变！如需修改计划请创建新 run_id"
+        )
 
     snapshot_path = os.path.join(work_dir, "analysis", "candidate_pool_snapshot.json")
     if not os.path.isfile(snapshot_path):
@@ -1006,6 +1031,8 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
     )
     if selected_cover:
         compiled_plan["selected_cover"] = selected_cover
+        compiled_plan["cover"] = selected_cover
+    compiled_plan["chosen_cover_id"] = chosen_cover_id or (selected_cover.get("id") if selected_cover else None)
 
     compiled_plan["proposal_hash"] = proposal_hash
     compiled_plan["candidate_pool_hash"] = prop_hash
@@ -1031,6 +1058,30 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
     audit_report["validated_plan_hash"] = validated_plan_hash
     with open(audit_path, "w", encoding="utf-8") as f:
         json.dump(audit_report, f, ensure_ascii=False, indent=2)
+
+    # P0-2: 新计划审批生效后，必须使下游既有成片、封面、清单与质检报告彻底失效，杜绝跨计划复用旧产物
+    downstream_files = [
+        "final.mp4",
+        "cover.jpg",
+        "cover_meta.json",
+        "copywriting.md",
+        "render_manifest.json",
+        "technical_qc.json",
+        "editorial_qc.json",
+    ]
+    for df in downstream_files:
+        df_p = os.path.join(output_dir, df)
+        if os.path.isfile(df_p):
+            try:
+                os.remove(df_p)
+            except Exception:
+                pass
+    work_rm = os.path.join(work_dir, "render_manifest.json")
+    if os.path.isfile(work_rm):
+        try:
+            os.remove(work_rm)
+        except Exception:
+            pass
 
     _write_run_state(work_dir, "PLAN_VALIDATED", "validate_plan", 0.65, f"提案审计通过 ({len(selected_cands)} 分镜, {total_dur_s:.1f}s)，计划已冻结")
     _log_event(work_dir, "PLAN_VALIDATED", f"分镜计划编译成功: {len(selected_cands)} 个分镜", audit_report)
@@ -1102,63 +1153,104 @@ def stage_render(run_arg: str) -> Dict[str, Any]:
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # 重新核验所有剪辑片段的素材源白名单与真实存在性，绝对禁止读取非白名单或历史成片
-    manifest_path = os.path.join(work_dir, "input_manifest.json")
-    valid_source_paths = set()
-    valid_sources_by_id = {}
-    if os.path.isfile(manifest_path):
-        try:
-            with open(manifest_path, "r", encoding="utf-8") as mf:
-                manifest_data = json.load(mf)
-            for s in manifest_data.get("source_videos", []):
-                sid = s.get("source_id")
-                sp = s.get("path")
-                if sid:
-                    valid_sources_by_id[sid] = s
-                if sp:
-                    valid_source_paths.add(os.path.normcase(os.path.realpath(normalize_project_path(sp))))
-        except Exception:
-            pass
+    clips = plan.get("clips", [])
+    if not clips:
+        raise RuntimeError("分镜计划 clips 列表为空，无法执行渲染")
 
-    for clip in plan.get("clips", []):
+    # 1. 优先校验分镜源文件真实存在性与防历史成片隔离
+    for clip in clips:
         clip_src = clip.get("source_file")
         if not clip_src or not os.path.isfile(clip_src):
             raise RuntimeError(f"渲染素材源文件不存在: {clip_src}")
-        is_hist, hist_reason = is_historical_output(clip_src, context.get("project_id", ""))
+        is_hist, hist_reason = is_historical_output(clip_src, context.get("project_id", ""), paths.project_root)
         if is_hist:
             raise RuntimeError(f"渲染使用了历史成片作为输入素材: {clip_src} ({hist_reason})")
+
+    # 2. 重新核验所有剪辑片段的素材源白名单与真实存在性，绝对禁止读取非白名单 (P0-3)
+    manifest_path = os.path.join(work_dir, "input_manifest.json")
+    if not os.path.isfile(manifest_path):
+        raise RuntimeError("未找到输入清单 input_manifest.json，严禁无清单渲染！")
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as mf:
+            manifest_data = json.load(mf)
+        if not isinstance(manifest_data, dict):
+            raise ValueError("清单格式非字典")
+    except Exception as e:
+        raise RuntimeError(f"输入清单 input_manifest.json 解析失败: {e}")
+
+    source_videos = manifest_data.get("source_videos", [])
+    if not source_videos:
+        raise RuntimeError("输入清单 input_manifest.json 中有效源视频列表为空，拒绝渲染")
+
+    valid_source_paths = set()
+    valid_sources_by_id = {}
+    for s in source_videos:
+        sid = s.get("source_id")
+        sp = s.get("path")
+        sha = s.get("sha256")
+        if not sid or not sp or not sha or len(sha) != 64:
+            raise RuntimeError(f"输入清单包含不合规素材记录 (缺少 source_id、path 或 64位完整 SHA-256): {s}")
+        valid_sources_by_id[sid] = s
+        valid_source_paths.add(os.path.normcase(os.path.realpath(normalize_project_path(sp))))
+
+    checked_raw_files = {}
+
+    for clip in clips:
+        clip_src = clip.get("source_file")
         norm_clip_src = os.path.normcase(os.path.realpath(normalize_project_path(clip_src)))
-        if valid_source_paths:
-            if norm_clip_src not in valid_source_paths:
-                raise RuntimeError(f"渲染使用了非白名单素材源文件: {clip_src}")
+        if norm_clip_src not in valid_source_paths:
+            raise RuntimeError(f"渲染使用了非白名单素材源文件: {clip_src}")
         clip_sid = clip.get("source_id")
-        if valid_sources_by_id:
-            if not clip_sid or clip_sid not in valid_sources_by_id:
-                raise RuntimeError(f"渲染使用了非白名单素材 source_id: {clip_sid}")
-            expected_p = os.path.normcase(os.path.realpath(normalize_project_path(valid_sources_by_id[clip_sid].get("path", ""))))
-            if norm_clip_src != expected_p:
-                raise RuntimeError(f"渲染分镜素材路径与 source_id ({clip_sid}) 白名单绑定不匹配: {clip_src}")
-            expected_sha = valid_sources_by_id[clip_sid].get("sha256")
-            clip_sha = clip.get("source_file_sha256")
-            if expected_sha and clip_sha and clip_sha != expected_sha:
-                raise RuntimeError(f"渲染分镜素材哈希与白名单绑定不匹配: {clip_sha} != {expected_sha}")
+        if not clip_sid or clip_sid not in valid_sources_by_id:
+            raise RuntimeError(f"渲染使用了非白名单素材 source_id: {clip_sid}")
+        expected_p = os.path.normcase(os.path.realpath(normalize_project_path(valid_sources_by_id[clip_sid].get("path", ""))))
+        if norm_clip_src != expected_p:
+            raise RuntimeError(f"渲染分镜素材路径与 source_id ({clip_sid}) 白名单绑定不匹配: {clip_src}")
+
+        expected_sha = valid_sources_by_id[clip_sid].get("sha256")
+        clip_sha = clip.get("source_file_sha256")
+        if expected_sha and clip_sha and clip_sha != expected_sha:
+            raise RuntimeError(f"渲染分镜素材哈希与白名单绑定不匹配: {clip_sha} != {expected_sha}")
+
+        # P0-1: 渲染开始前对实际使用的物理源视频重新计算完整 SHA-256，与清单及分镜记录比对
+        if norm_clip_src not in checked_raw_files:
+            disk_sha = compute_full_file_sha256(clip_src)
+            checked_raw_files[norm_clip_src] = disk_sha
+        else:
+            disk_sha = checked_raw_files[norm_clip_src]
+
+        if disk_sha != expected_sha:
+            raise RuntimeError(
+                f"渲染前素材完整性校验失败: 磁盘源文件 '{clip_src}' 的实际 SHA-256 ({disk_sha}) "
+                f"与输入清单记录 ({expected_sha}) 不匹配！素材可能在中途被篡改或替换。"
+            )
+        if clip_sha and clip_sha != disk_sha:
+            raise RuntimeError(
+                f"渲染分镜素材哈希与磁盘文件实际哈希不一致: {clip_sha} != {disk_sha}"
+            )
 
     # 渲染新成片必须使下游旧验收产物失效
-    for old_artifact in ("technical_qc.json", "editorial_qc.json"):
+    for old_artifact in ("technical_qc.json", "editorial_qc.json", "render_manifest.json"):
         old_art_p = os.path.join(output_dir, old_artifact)
         if os.path.isfile(old_art_p):
             try:
                 os.remove(old_art_p)
             except Exception:
                 pass
+    work_rm_old = os.path.join(work_dir, "render_manifest.json")
+    if os.path.isfile(work_rm_old):
+        try:
+            os.remove(work_rm_old)
+        except Exception:
+            pass
 
     _write_run_state(work_dir, "RENDERING", "render", 0.70, "启动 FFmpeg 音画物理强锁渲染...")
     _log_event(work_dir, "RENDER_START", "开始视频物理合成与封面生成")
 
-    # 1. 封面渲染
+    # 1. 封面渲染 (P1: 严格优先使用计划中选定的 selected_cover / cover)
     final_cover_path = os.path.join(output_dir, "cover.jpg")
     cover_meta_path = os.path.join(output_dir, "cover_meta.json")
-    cover_info = plan.get("cover") or {}
+    cover_info = plan.get("selected_cover") or plan.get("cover") or {}
     cover_source_img = cover_info.get("image_path")
     if not cover_source_img or not os.path.isfile(cover_source_img):
         # 尝试使用分析中的候选图
@@ -1167,7 +1259,16 @@ def stage_render(run_arg: str) -> Dict[str, Any]:
             try:
                 with open(cov_cand_file, "r", encoding="utf-8") as cf:
                     cc_list = json.load(cf)
-                if cc_list and os.path.isfile(cc_list[0].get("image_path", "")):
+                target_cov_id = plan.get("chosen_cover_id") or cover_info.get("id")
+                found_cand = None
+                if target_cov_id:
+                    for c in cc_list:
+                        if c.get("id") == target_cov_id and os.path.isfile(c.get("image_path", "")):
+                            found_cand = c
+                            break
+                if found_cand:
+                    cover_source_img = found_cand["image_path"]
+                elif cc_list and os.path.isfile(cc_list[0].get("image_path", "")):
                     cover_source_img = cc_list[0]["image_path"]
             except Exception:
                 pass
@@ -1213,10 +1314,12 @@ def stage_render(run_arg: str) -> Dict[str, Any]:
             pass
     os.replace(tmp_final_video, final_video)
 
-    # 3. 生成带货文案 copywriting.md
+    # 3. 生成带货文案 copywriting.md (P1: 统一 hook 与 cta 字段)
     copywriting_path = os.path.join(output_dir, "copywriting.md")
-    hook_text = (plan.get("hook_card") or {}).get("text", "")
-    cta_text = (plan.get("cta_card") or {}).get("text", "")
+    hook_info = plan.get("hook_card") or plan.get("hook") or {}
+    hook_text = hook_info.get("text", "") if isinstance(hook_info, dict) else str(hook_info)
+    cta_info = plan.get("cta") or plan.get("cta_card") or {}
+    cta_text = cta_info.get("text", "") if isinstance(cta_info, dict) else str(cta_info)
     prod_name = (spec.get("product") or {}).get("name", "本品")
     md_content = f"""# 带货视频文案与分镜说明
 
@@ -1233,6 +1336,31 @@ def stage_render(run_arg: str) -> Dict[str, Any]:
 
     with open(copywriting_path, "w", encoding="utf-8") as f:
         f.write(md_content)
+
+    # 4. 生成不可变渲染清单 render_manifest.json (P0-2)
+    final_video_sha256 = compute_full_file_sha256(final_video)
+    final_video_fast = compute_file_sha256(final_video)
+    cover_sha256 = compute_full_file_sha256(final_cover_path) if os.path.isfile(final_cover_path) else ""
+
+    render_manifest = {
+        "schema_version": "3.2",
+        "run_id": context.get("run_id"),
+        "project_id": context.get("project_id"),
+        "validated_plan_hash": actual_plan_hash,
+        "video_path": final_video,
+        "video_sha256": final_video_sha256,
+        "video_fast_fingerprint": final_video_fast,
+        "cover_path": final_cover_path,
+        "cover_sha256": cover_sha256,
+        "rendered_at": time.time(),
+        "rendered_at_str": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    render_manifest_path = os.path.join(output_dir, "render_manifest.json")
+    with open(render_manifest_path, "w", encoding="utf-8") as f:
+        json.dump(render_manifest, f, ensure_ascii=False, indent=2)
+    work_render_manifest_path = os.path.join(work_dir, "render_manifest.json")
+    with open(work_render_manifest_path, "w", encoding="utf-8") as f:
+        json.dump(render_manifest, f, ensure_ascii=False, indent=2)
 
     _write_run_state(work_dir, "RENDERED", "render", 0.85, f"成片与封面渲染完成 ({os.path.basename(final_video)})")
     _log_event(work_dir, "RENDER_COMPLETED", f"渲染成片已就绪: {final_video}")
@@ -1275,8 +1403,36 @@ def stage_qc(run_arg: str) -> Dict[str, Any]:
         raise FileNotFoundError(f"未找到待检成片: {final_video}，请先执行 render 阶段")
 
     plan_path = os.path.join(work_dir, "validated_plan.json")
+    if not os.path.isfile(plan_path):
+        raise FileNotFoundError(f"未找到已验证的分镜计划 validated_plan.json，请先执行 validate-plan")
     with open(plan_path, "r", encoding="utf-8") as f:
         plan = json.load(f)
+
+    # P0-2: 验证渲染清单 render_manifest.json 存在性与计划版本强闭环
+    render_manifest_path = os.path.join(output_dir, "render_manifest.json")
+    if not os.path.isfile(render_manifest_path):
+        work_rm = os.path.join(work_dir, "render_manifest.json")
+        if os.path.isfile(work_rm):
+            render_manifest_path = work_rm
+        else:
+            raise FileNotFoundError(f"未找到渲染清单 render_manifest.json，请先执行 render 阶段")
+
+    with open(render_manifest_path, "r", encoding="utf-8") as rmf:
+        render_manifest = json.load(rmf)
+
+    plan_to_hash = {k: v for k, v in plan.items() if k != "validated_plan_hash"}
+    current_plan_hash = hashlib.sha256(json.dumps(plan_to_hash, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+    if render_manifest.get("validated_plan_hash") != current_plan_hash:
+        raise RuntimeError(
+            f"渲染清单记录的计划哈希 ({render_manifest.get('validated_plan_hash')}) 与当前执行计划哈希 ({current_plan_hash}) 不一致！"
+            f"计划重新审批后，下游成片必须重新执行 render 阶段"
+        )
+
+    current_video_sha256 = compute_full_file_sha256(final_video)
+    if render_manifest.get("video_sha256") != current_video_sha256:
+        raise RuntimeError(
+            f"成片文件被外部修改：实际 SHA-256 ({current_video_sha256}) 与渲染清单记录 ({render_manifest.get('video_sha256')}) 不一致！"
+        )
 
     spec_path = os.path.join(work_dir, "spec_snapshot.json")
     with open(spec_path, "r", encoding="utf-8") as f:
@@ -1356,6 +1512,8 @@ def stage_qc(run_arg: str) -> Dict[str, Any]:
     ed_report["target_video_sha256"] = current_video_sha256
     ed_report["video_sha256"] = current_video_sha256
     ed_report["video_fast_fingerprint"] = current_video_fast
+    ed_report["validated_plan_hash"] = current_plan_hash
+    ed_report["render_manifest_sha256"] = compute_full_file_sha256(render_manifest_path)
     with open(editorial_qc_path, "w", encoding="utf-8") as f:
         json.dump(ed_report, f, ensure_ascii=False, indent=2)
 
@@ -1364,6 +1522,8 @@ def stage_qc(run_arg: str) -> Dict[str, Any]:
     tech_report["target_video_sha256"] = current_video_sha256
     tech_report["video_sha256"] = current_video_sha256
     tech_report["video_fast_fingerprint"] = current_video_fast
+    tech_report["validated_plan_hash"] = current_plan_hash
+    tech_report["render_manifest_sha256"] = compute_full_file_sha256(render_manifest_path)
     with open(tech_qc_path, "w", encoding="utf-8") as f:
         json.dump(tech_report, f, ensure_ascii=False, indent=2)
 
@@ -1438,7 +1598,7 @@ def stage_deliver(run_arg: str) -> Dict[str, Any]:
     if not os.path.isfile(plan_audit_path):
         rejections.append("缺失必要分镜计划审计报告: plan_audit.json 不存在")
 
-    # 2. 契约与输入清单指纹强核验
+    # 2. 契约与输入清单指纹强核验及物理源视频完整哈希终审 (P0-1 & P0-3)
     if os.path.isfile(spec_path) and os.path.isfile(manifest_path):
         with open(spec_path, "r", encoding="utf-8") as f:
             spec = json.load(f)
@@ -1459,6 +1619,20 @@ def stage_deliver(run_arg: str) -> Dict[str, Any]:
                     rejections.append("活任务配置已被外部修改导致指纹不匹配，严禁跨配置交付")
             except Exception as e:
                 rejections.append(f"活任务配置指纹校验异常: {e}")
+
+        # 磁盘物理源视频完整哈希复核 (P0-1)
+        for s in manifest.get("source_videos", []):
+            sp = s.get("path")
+            norm_sp = normalize_project_path(sp) if sp else ""
+            if not norm_sp or not os.path.isfile(norm_sp):
+                rejections.append(f"输入清单登记的原始素材文件不存在: {sp}")
+            else:
+                disk_src_sha = compute_full_file_sha256(norm_sp)
+                expected_src_sha = s.get("sha256")
+                if expected_src_sha and disk_src_sha != expected_src_sha:
+                    rejections.append(
+                        f"原始素材 '{sp}' 磁盘实际 SHA-256 ({disk_src_sha}) 与清单记录 ({expected_src_sha}) 不一致，素材在交付前被篡改"
+                    )
 
     # 3. 计划审计与执行计划强一致性核验
     pa_data = {}
@@ -1483,13 +1657,41 @@ def stage_deliver(run_arg: str) -> Dict[str, Any]:
         if not expected_plan_hash or actual_plan_hash != expected_plan_hash:
             rejections.append("执行计划哈希与审计签名不一致，禁止跨计划交付")
 
+    # 3.1 渲染清单强制存在性与计划哈希一致性核验 (P0-2)
+    render_manifest_path = os.path.join(output_dir, "render_manifest.json")
+    if not os.path.isfile(render_manifest_path):
+        work_rm = os.path.join(work_dir, "render_manifest.json")
+        if os.path.isfile(work_rm):
+            render_manifest_path = work_rm
+        else:
+            rejections.append("未找到渲染清单 render_manifest.json")
+    if os.path.isfile(render_manifest_path):
+        try:
+            with open(render_manifest_path, "r", encoding="utf-8") as rmf:
+                rm_data = json.load(rmf)
+            if rm_data.get("run_id") and rm_data.get("run_id") != context.get("run_id"):
+                rejections.append(f"渲染清单 run_id ({rm_data.get('run_id')}) 与当前运行不符")
+            if actual_plan_hash and rm_data.get("validated_plan_hash") != actual_plan_hash:
+                rejections.append("渲染清单记录的计划哈希与当前执行计划不一致，计划更新后必须重新 render 与 qc")
+        except Exception as e:
+            rejections.append(f"渲染清单解析异常: {e}")
+
     # 4. 交付成片物理文件存在性与哈希核验
     current_video_sha256 = compute_full_file_sha256(final_video) if os.path.isfile(final_video) else ""
     current_video_fast = compute_file_sha256(final_video) if os.path.isfile(final_video) else ""
     if not os.path.isfile(final_video) or os.path.getsize(final_video) == 0:
         rejections.append("成片视频文件不存在或为空")
 
-    # 5. 双重质检报告强制存在性、结论与成片哈希强绑定核验
+    if os.path.isfile(render_manifest_path):
+        try:
+            with open(render_manifest_path, "r", encoding="utf-8") as rmf:
+                rm_data = json.load(rmf)
+            if current_video_sha256 and rm_data.get("video_sha256") != current_video_sha256:
+                rejections.append("成片视频实际完整 SHA-256 与渲染清单记录不一致")
+        except Exception:
+            pass
+
+    # 5. 双重质检报告强制存在性、结论与成片严格 64 位完整 SHA-256 强绑定核验 (P0-4)
     if not os.path.isfile(tech_qc_path):
         rejections.append("未找到技术质检报告 technical_qc.json")
     else:
@@ -1497,8 +1699,11 @@ def stage_deliver(run_arg: str) -> Dict[str, Any]:
             t_data = json.load(f)
         if not (t_data.get("all_passed", False) or t_data.get("passed", False)):
             rejections.append("工程技术质检未通过")
+        t_plan_h = t_data.get("validated_plan_hash")
+        if actual_plan_hash and t_plan_h and t_plan_h != actual_plan_hash:
+            rejections.append("技术质检报告绑定的计划哈希与当前批准的执行计划不一致，必须重新执行 qc 阶段")
         t_target_sha = t_data.get("target_video_sha256") or t_data.get("video_sha256")
-        if not t_target_sha or not current_video_sha256 or (t_target_sha != current_video_sha256 and t_target_sha != current_video_fast):
+        if not t_target_sha or len(t_target_sha) != 64 or t_target_sha != current_video_sha256:
             rejections.append(f"技术质检报告审核的目标视频哈希 ({t_target_sha}) 与当前成片哈希不匹配，重新渲染后必须重新执行 qc 阶段")
 
     if not os.path.isfile(editorial_qc_path):
@@ -1508,8 +1713,11 @@ def stage_deliver(run_arg: str) -> Dict[str, Any]:
             e_data = json.load(f)
         if not e_data.get("passed", False) or e_data.get("block_count", 0) > 0:
             rejections.append(f"内容质检门禁阻断 (BLOCK={e_data.get('block_count', 0)})")
+        e_plan_h = e_data.get("validated_plan_hash")
+        if actual_plan_hash and e_plan_h and e_plan_h != actual_plan_hash:
+            rejections.append("内容质检报告绑定的计划哈希与当前批准的执行计划不一致，必须重新执行 qc 阶段")
         e_target_sha = e_data.get("target_video_sha256") or e_data.get("video_sha256")
-        if not e_target_sha or not current_video_sha256 or (e_target_sha != current_video_sha256 and e_target_sha != current_video_fast):
+        if not e_target_sha or len(e_target_sha) != 64 or e_target_sha != current_video_sha256:
             rejections.append(f"内容质检报告审核的目标视频哈希 ({e_target_sha}) 与当前成片哈希不匹配，重新渲染后必须重新执行 qc 阶段")
 
     if rejections:
@@ -1527,6 +1735,8 @@ def stage_deliver(run_arg: str) -> Dict[str, Any]:
         "job_fingerprint": context.get("spec_fingerprint"),
         "proposal_hash": pa_data.get("proposal_hash") if "pa_data" in locals() else None,
         "validated_plan_hash": actual_plan_hash if "actual_plan_hash" in locals() else None,
+        "render_manifest_path": render_manifest_path,
+        "render_manifest_sha256": compute_full_file_sha256(render_manifest_path) if os.path.isfile(render_manifest_path) else "",
         "video_path": final_video,
         "video_sha256": current_video_sha256 or compute_full_file_sha256(final_video),
         "video_fast_fingerprint": current_video_fast or compute_file_sha256(final_video),

@@ -14,6 +14,7 @@ A08 任务本地终验脚本：
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -30,6 +31,7 @@ from src.core.project_context import (
     ProjectPaths,
     InputManifest,
     compute_file_sha256,
+    compute_full_file_sha256,
     compute_job_fingerprint,
     is_historical_output,
 )
@@ -57,7 +59,7 @@ def compute_folder_hashes(folder: str) -> Dict[str, Dict[str, Any]]:
             record[f] = {
                 "size": os.path.getsize(fp),
                 "mtime": os.path.getmtime(fp),
-                "sha256": compute_file_sha256(fp),
+                "sha256": compute_full_file_sha256(fp),
             }
     return record
 
@@ -193,7 +195,7 @@ def main():
 
     # 阶段 1: prepare
     print("\n[CLI: prepare]")
-    prep_res = stage_prepare(spec_path, run_id=run_id)
+    prep_res = stage_prepare(spec_path, run_id=run_id, resume=bool(args.run_id))
     assert prep_res["run_id"] == run_id
     assert len(prep_res["source_videos"]) == 3
     print(f"  [PASS] prepare 完成: 3 个源素材已登记，指纹: {prep_res['spec_fingerprint'][:16]}...")

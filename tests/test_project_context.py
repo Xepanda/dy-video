@@ -301,40 +301,48 @@ def test_project_paths_workspace_substring_safety():
 
 
 def test_cross_platform_and_wsl_path_mapping():
-    """测试跨平台路径解析与 WSL 路径映射契约。"""
-    from unittest.mock import patch
+    """测试跨平台路径解析与 WSL 路径映射契约 (使用 ntpath / PureWindowsPath 明确解耦)。"""
+    import ntpath
+    from pathlib import PureWindowsPath, PurePosixPath
 
-    # 1. 模拟在 POSIX / Linux 下的解析
-    with patch("sys.platform", "linux"):
-        win_path = r"D:/dev/workspace/my_video_project"
-        assert normalize_project_path(win_path) == "/mnt/d/dev/workspace/my_video_project"
-        assert normalize_project_path(r"D:\dev\workspace\my_video_project") == "/mnt/d/dev/workspace/my_video_project"
-        assert normalize_project_path("D:") == "/mnt/d"
-        assert normalize_project_path("D:/") == "/mnt/d"
-        assert normalize_project_path("D:\\") == "/mnt/d"
+    # 1. POSIX / Linux / WSL 目标平台路径映射验证
+    win_path = r"D:/dev/workspace/my_video_project"
+    assert normalize_project_path(win_path, target_platform="linux") == "/mnt/d/dev/workspace/my_video_project"
+    assert normalize_project_path(r"D:\dev\workspace\my_video_project", target_platform="linux") == "/mnt/d/dev/workspace/my_video_project"
+    assert normalize_project_path("D:", target_platform="linux") == "/mnt/d"
+    assert normalize_project_path("D:/", target_platform="linux") == "/mnt/d"
+    assert normalize_project_path("D:\\", target_platform="linux") == "/mnt/d"
 
-        p = ProjectPaths(win_path)
-        expected = "/mnt/d/dev/workspace/my_video_project"
-        assert p.project_root == expected, f"WSL 映射异常: 期望 {expected}, 实际 {p.project_root}"
+    posix_pure = PurePosixPath(normalize_project_path(win_path, target_platform="linux"))
+    assert str(posix_pure) == "/mnt/d/dev/workspace/my_video_project"
+    assert posix_pure.parts == ("/", "mnt", "d", "dev", "workspace", "my_video_project")
 
+    # 2. Windows 目标平台路径映射验证 (使用 ntpath / PureWindowsPath 语义解耦)
+    wsl_path = "/mnt/d/dev/workspace/my_video_project"
+    assert normalize_project_path(wsl_path, target_platform="win32") == r"D:\dev\workspace\my_video_project"
+    assert normalize_project_path("/mnt/d", target_platform="win32") == "D:\\"
+    assert normalize_project_path("/mnt/d/", target_platform="win32") == "D:\\"
+    assert normalize_project_path("D:/dev/workspace/my_video_project", target_platform="win32") == r"D:\dev\workspace\my_video_project"
+
+    win_pure = PureWindowsPath(normalize_project_path(wsl_path, target_platform="win32"))
+    assert str(win_pure) == r"D:\dev\workspace\my_video_project"
+    assert win_pure.drive == "D:"
+    assert win_pure.parts == ("D:\\", "dev", "workspace", "my_video_project")
+
+    # 3. 宿主物理 ProjectPaths 验证
+    if sys.platform == "win32":
+        p = ProjectPaths(wsl_path)
+        assert p.project_root == ntpath.normpath(r"D:\dev\workspace\my_video_project")
         win_work_run = r"D:/dev/workspace/my_video_project/work/run_123"
         p_sub = ProjectPaths(win_work_run)
-        assert p_sub.project_root == expected
-
-    # 2. 模拟在 Windows 下的解析
-    with patch("sys.platform", "win32"):
-        wsl_path = "/mnt/d/dev/workspace/my_video_project"
-        assert normalize_project_path(wsl_path) == r"D:\dev\workspace\my_video_project"
-        assert normalize_project_path("/mnt/d") == "D:\\"
-        assert normalize_project_path("/mnt/d/") == "D:\\"
-
-        p = ProjectPaths(wsl_path)
-        expected = os.path.normpath("D:/dev/workspace/my_video_project")
+        assert p_sub.project_root == ntpath.normpath(r"D:\dev\workspace\my_video_project")
+    else:
+        p = ProjectPaths(win_path)
+        expected = "/mnt/d/dev/workspace/my_video_project"
         assert p.project_root == expected
-
-        win_path = r"D:/dev/workspace/my_video_project"
-        p_win = ProjectPaths(win_path)
-        assert p_win.project_root == os.path.normpath(win_path)
+        posix_work_run = "/mnt/d/dev/workspace/my_video_project/work/run_123"
+        p_sub = ProjectPaths(posix_work_run)
+        assert p_sub.project_root == expected
 
 
 def test_full_file_sha256_detects_middle_byte_changes():
