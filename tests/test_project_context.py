@@ -322,6 +322,8 @@ def test_cross_platform_and_wsl_path_mapping():
     assert normalize_project_path(wsl_path, target_platform="win32") == r"D:\dev\workspace\my_video_project"
     assert normalize_project_path("/mnt/d", target_platform="win32") == "D:\\"
     assert normalize_project_path("/mnt/d/", target_platform="win32") == "D:\\"
+    assert normalize_project_path("D:", target_platform="win32") == "D:\\"
+    assert normalize_project_path("D:/", target_platform="win32") == "D:\\"
     assert normalize_project_path("D:/dev/workspace/my_video_project", target_platform="win32") == r"D:\dev\workspace\my_video_project"
 
     win_pure = PureWindowsPath(normalize_project_path(wsl_path, target_platform="win32"))
@@ -329,7 +331,7 @@ def test_cross_platform_and_wsl_path_mapping():
     assert win_pure.drive == "D:"
     assert win_pure.parts == ("D:\\", "dev", "workspace", "my_video_project")
 
-    # 3. 宿主物理 ProjectPaths 验证
+    # 3. 宿主物理 ProjectPaths 验证 (跨平台路径统一映射与子目录截断)
     if sys.platform == "win32":
         p = ProjectPaths(wsl_path)
         assert p.project_root == ntpath.normpath(r"D:\dev\workspace\my_video_project")
@@ -340,9 +342,14 @@ def test_cross_platform_and_wsl_path_mapping():
         p = ProjectPaths(win_path)
         expected = "/mnt/d/dev/workspace/my_video_project"
         assert p.project_root == expected
+        p_wsl = ProjectPaths(wsl_path)
+        assert p_wsl.project_root == expected
         posix_work_run = "/mnt/d/dev/workspace/my_video_project/work/run_123"
         p_sub = ProjectPaths(posix_work_run)
         assert p_sub.project_root == expected
+        win_work_run = r"D:/dev/workspace/my_video_project/work/run_123"
+        p_win_sub = ProjectPaths(win_work_run)
+        assert p_win_sub.project_root == expected
 
 
 def test_full_file_sha256_detects_middle_byte_changes():

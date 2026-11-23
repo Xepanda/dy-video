@@ -537,6 +537,232 @@ class TestPR16Round8P0P1(unittest.TestCase):
         self.assertIn("工具仓库路径 (WSL / Linux)", md_content)
         self.assertIn("CLI 可用状态", md_content)
 
+    # -------------------------------------------------------------------------
+    # R8 补充加固门禁测试
+    # -------------------------------------------------------------------------
+    def test_r8_deliver_rejects_qc_missing_validated_plan_hash(self):
+        """R8 加固 / P0-2: deliver 必须拒绝缺失 validated_plan_hash 的质检报告，杜绝字段缺失绕过。"""
+        work_dir = os.path.join(self.proj_dir, "work", "run_r8_missing_planhash")
+        output_dir = os.path.join(self.proj_dir, "output", "run_r8_missing_planhash")
+        os.makedirs(work_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
+
+        vid_path = os.path.join(self.mat_dir, "legit.mp4")
+        with open(vid_path, "wb") as f:
+            f.write(b"source_content_raw")
+        raw_sha = compute_full_file_sha256(vid_path)
+
+        manifest = {"schema_version": "3.1", "source_videos": [{"source_id": "src_01", "path": vid_path, "sha256": raw_sha}]}
+        with open(os.path.join(work_dir, "input_manifest.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f)
+        with open(os.path.join(work_dir, "spec_snapshot.json"), "w", encoding="utf-8") as f:
+            json.dump({"options": {}}, f)
+
+        final_video = os.path.join(output_dir, "final.mp4")
+        with open(final_video, "wb") as f:
+            f.write(b"final_rendered_video_bytes")
+        full_vid_sha = compute_full_file_sha256(final_video)
+
+        plan = {"schema_version": "3.2", "clips": []}
+        plan_to_hash = {k: v for k, v in plan.items() if k != "validated_plan_hash"}
+        plan_h = hashlib.sha256(json.dumps(plan_to_hash, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        plan["validated_plan_hash"] = plan_h
+
+        with open(os.path.join(work_dir, "validated_plan.json"), "w", encoding="utf-8") as f:
+            json.dump(plan, f)
+        with open(os.path.join(work_dir, "plan_audit.json"), "w", encoding="utf-8") as f:
+            json.dump({"audit_status": "APPROVED", "passed": True, "validated_plan_hash": plan_h}, f)
+        with open(os.path.join(work_dir, "run_context.json"), "w", encoding="utf-8") as f:
+            json.dump({"schema_version": "3.2", "run_id": "run_r8_missing_planhash", "output_dir": output_dir, "spec_fingerprint": "fp_test"}, f)
+
+        rm_path = os.path.join(output_dir, "render_manifest.json")
+        with open(rm_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "run_id": "run_r8_missing_planhash",
+                "validated_plan_hash": plan_h,
+                "video_sha256": full_vid_sha,
+            }, f)
+        rm_sha = compute_full_file_sha256(rm_path)
+
+        # 模拟技术质检报告缺失 validated_plan_hash (设为 None 或缺省)
+        with open(os.path.join(output_dir, "technical_qc.json"), "w", encoding="utf-8") as f:
+            json.dump({"passed": True, "all_passed": True, "target_video_sha256": full_vid_sha, "render_manifest_sha256": rm_sha}, f)
+        with open(os.path.join(output_dir, "editorial_qc.json"), "w", encoding="utf-8") as f:
+            json.dump({"passed": True, "block_count": 0, "validated_plan_hash": plan_h, "target_video_sha256": full_vid_sha, "render_manifest_sha256": rm_sha}, f)
+
+        with patch("src.runtime.stage_services.compute_job_fingerprint", return_value="fp_test"):
+            with self.assertRaises(ValueError) as ctx:
+                stage_deliver(work_dir)
+            self.assertIn("技术质检报告未绑定当前批准的计划哈希", str(ctx.exception))
+
+    def test_r8_deliver_verifies_render_manifest_sha256_in_qc(self):
+        """R8 加固 / P0-2: deliver 严格核验质检报告中绑定的 render_manifest_sha256，与磁盘渲染清单一致。"""
+        work_dir = os.path.join(self.proj_dir, "work", "run_r8_rm_sha_mismatch")
+        output_dir = os.path.join(self.proj_dir, "output", "run_r8_rm_sha_mismatch")
+        os.makedirs(work_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
+
+        vid_path = os.path.join(self.mat_dir, "legit.mp4")
+        with open(vid_path, "wb") as f:
+            f.write(b"source_content_raw")
+        raw_sha = compute_full_file_sha256(vid_path)
+
+        manifest = {"schema_version": "3.1", "source_videos": [{"source_id": "src_01", "path": vid_path, "sha256": raw_sha}]}
+        with open(os.path.join(work_dir, "input_manifest.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f)
+        with open(os.path.join(work_dir, "spec_snapshot.json"), "w", encoding="utf-8") as f:
+            json.dump({"options": {}}, f)
+
+        final_video = os.path.join(output_dir, "final.mp4")
+        with open(final_video, "wb") as f:
+            f.write(b"final_rendered_video_bytes")
+        full_vid_sha = compute_full_file_sha256(final_video)
+
+        plan = {"schema_version": "3.2", "clips": []}
+        plan_to_hash = {k: v for k, v in plan.items() if k != "validated_plan_hash"}
+        plan_h = hashlib.sha256(json.dumps(plan_to_hash, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        plan["validated_plan_hash"] = plan_h
+
+        with open(os.path.join(work_dir, "validated_plan.json"), "w", encoding="utf-8") as f:
+            json.dump(plan, f)
+        with open(os.path.join(work_dir, "plan_audit.json"), "w", encoding="utf-8") as f:
+            json.dump({"audit_status": "APPROVED", "passed": True, "validated_plan_hash": plan_h}, f)
+        with open(os.path.join(work_dir, "run_context.json"), "w", encoding="utf-8") as f:
+            json.dump({"schema_version": "3.2", "run_id": "run_r8_rm_sha_mismatch", "output_dir": output_dir, "spec_fingerprint": "fp_test"}, f)
+
+        rm_path = os.path.join(output_dir, "render_manifest.json")
+        with open(rm_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "run_id": "run_r8_rm_sha_mismatch",
+                "validated_plan_hash": plan_h,
+                "video_sha256": full_vid_sha,
+            }, f)
+
+        # 模拟技术质检报告中的 render_manifest_sha256 为旧值
+        fake_old_rm_sha = "0000000000000000000000000000000000000000000000000000000000000000"
+        with open(os.path.join(output_dir, "technical_qc.json"), "w", encoding="utf-8") as f:
+            json.dump({"passed": True, "all_passed": True, "validated_plan_hash": plan_h, "target_video_sha256": full_vid_sha, "render_manifest_sha256": fake_old_rm_sha}, f)
+        with open(os.path.join(output_dir, "editorial_qc.json"), "w", encoding="utf-8") as f:
+            json.dump({"passed": True, "block_count": 0, "validated_plan_hash": plan_h, "target_video_sha256": full_vid_sha, "render_manifest_sha256": fake_old_rm_sha}, f)
+
+        with patch("src.runtime.stage_services.compute_job_fingerprint", return_value="fp_test"):
+            with self.assertRaises(ValueError) as ctx:
+                stage_deliver(work_dir)
+            self.assertIn("技术质检报告绑定的渲染清单哈希与当前渲染清单不一致", str(ctx.exception))
+
+    def test_r8_qc_rejects_mismatched_run_id_in_render_manifest(self):
+        """R8 加固 / P0-2: stage_qc 校验 render_manifest.json 中的 run_id 必须与当前运行一致。"""
+        work_dir = os.path.join(self.proj_dir, "work", "run_r8_qc_run_id")
+        output_dir = os.path.join(self.proj_dir, "output", "run_r8_qc_run_id")
+        os.makedirs(work_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
+
+        final_video = os.path.join(output_dir, "final.mp4")
+        with open(final_video, "wb") as f:
+            f.write(b"video_bytes")
+        vid_sha = compute_full_file_sha256(final_video)
+
+        plan = {"schema_version": "3.2", "clips": []}
+        plan_h = hashlib.sha256(json.dumps(plan, sort_keys=True).encode("utf-8")).hexdigest()
+
+        with open(os.path.join(work_dir, "run_context.json"), "w", encoding="utf-8") as f:
+            json.dump({"schema_version": "3.2", "run_id": "run_r8_qc_run_id", "output_dir": output_dir}, f)
+        with open(os.path.join(work_dir, "validated_plan.json"), "w", encoding="utf-8") as f:
+            json.dump(plan, f)
+
+        # 写入另一个 run 的 render_manifest.json
+        with open(os.path.join(output_dir, "render_manifest.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "run_id": "different_run_other_123",
+                "validated_plan_hash": plan_h,
+                "video_sha256": vid_sha,
+            }, f)
+
+        with self.assertRaises(RuntimeError) as ctx:
+            stage_qc(work_dir)
+        self.assertIn("渲染清单 run_id", str(ctx.exception))
+        self.assertIn("不符", str(ctx.exception))
+
+    def test_r8_chosen_cover_id_takes_effect_over_selected_cover(self):
+        """R8 加固 / R8-06: stage_render 中 chosen_cover_id 必须始终生效于最终封面。"""
+        work_dir = os.path.join(self.proj_dir, "work", "run_r8_cover_override")
+        output_dir = os.path.join(self.proj_dir, "output", "run_r8_cover_override")
+        analysis_dir = os.path.join(work_dir, "analysis")
+        os.makedirs(analysis_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
+
+        vid_path = os.path.join(self.mat_dir, "live.mp4")
+        with open(vid_path, "wb") as f:
+            f.write(b"video_bytes_cov")
+        vid_sha = compute_full_file_sha256(vid_path)
+
+        cov1_p = os.path.join(analysis_dir, "cov1.jpg")
+        cov2_p = os.path.join(analysis_dir, "cov2.jpg")
+        with open(cov1_p, "wb") as f:
+            f.write(b"cover_1_content")
+        with open(cov2_p, "wb") as f:
+            f.write(b"cover_2_content")
+
+        cover_cands = [
+            {"id": "cand_01", "image_path": cov1_p},
+            {"id": "cand_02", "image_path": cov2_p},
+        ]
+        with open(os.path.join(analysis_dir, "cover_candidates.json"), "w", encoding="utf-8") as f:
+            json.dump(cover_cands, f)
+
+        # 构造 plan：selected_cover 设为 cand_01，但 chosen_cover_id 显式指定为 cand_02
+        plan = {
+            "schema_version": "3.2",
+            "run_id": "run_r8_cover_override",
+            "selected_cover": cover_cands[0],
+            "chosen_cover_id": "cand_02",
+            "clips": [{"id": "c1", "source_id": "src_01", "source_file": vid_path, "source_file_sha256": vid_sha, "start": 0, "end": 2}],
+        }
+        plan_to_hash = {k: v for k, v in plan.items() if k != "validated_plan_hash"}
+        plan_h = hashlib.sha256(json.dumps(plan_to_hash, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        plan["validated_plan_hash"] = plan_h
+
+        with open(os.path.join(work_dir, "validated_plan.json"), "w", encoding="utf-8") as f:
+            json.dump(plan, f)
+        with open(os.path.join(work_dir, "plan_audit.json"), "w", encoding="utf-8") as f:
+            json.dump({"audit_status": "APPROVED", "passed": True, "validated_plan_hash": plan_h}, f)
+        with open(os.path.join(work_dir, "run_context.json"), "w", encoding="utf-8") as f:
+            json.dump({"schema_version": "3.2", "run_id": "run_r8_cover_override", "output_dir": output_dir}, f)
+        with open(os.path.join(work_dir, "spec_snapshot.json"), "w", encoding="utf-8") as f:
+            json.dump({"product": {"name": "羊绒衫"}, "options": {}}, f)
+        with open(os.path.join(work_dir, "input_manifest.json"), "w", encoding="utf-8") as f:
+            json.dump({"schema_version": "3.1", "source_videos": [{"source_id": "src_01", "path": vid_path, "sha256": vid_sha}]}, f)
+
+        used_cover_src = []
+        def fake_render_cover(src_img, spec, out_cov, out_meta):
+            used_cover_src.append(src_img)
+            with open(out_cov, "wb") as f:
+                f.write(b"rendered_cover_bytes")
+
+        def fake_assemble(plan_arg, out_p):
+            with open(out_p, "wb") as f:
+                f.write(b"video_bytes")
+            return out_p, 2.0
+
+        mock_assembler = MagicMock()
+        mock_assembler.assemble_final_video.side_effect = fake_assemble
+        with patch("src.runtime.stage_services.VideoAssembler", return_value=mock_assembler), \
+             patch("src.runtime.stage_services.render_cover_with_meta", side_effect=fake_render_cover):
+            stage_render(work_dir)
+
+        self.assertEqual(len(used_cover_src), 1)
+        self.assertEqual(used_cover_src[0], cov2_p, "stage_render 未使用 chosen_cover_id 指定的第二张封面")
+
+    def test_r8_is_historical_output_github_actions_runner_path(self):
+        """R8 加固 / R8-05: GitHub Actions runner 路径 (/home/runner/work/...) 绝不误判为历史成片。"""
+        ci_mat_path = "/home/runner/work/dy-video/dy-video/fixtures/materials/sample.mp4"
+        is_hist, reason = is_historical_output(ci_mat_path, project_id="")
+        self.assertFalse(is_hist, f"CI runner 路径被误判为历史成片: {reason}")
+
+        ci_mat_with_pid = "/home/runner/work/dy-video/dy-video/data/live.mp4"
+        is_hist_pid, reason_pid = is_historical_output(ci_mat_with_pid, project_id="test_proj")
+        self.assertFalse(is_hist_pid, f"CI runner 路径被误判为历史成片: {reason_pid}")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1247,31 +1247,41 @@ def stage_render(run_arg: str) -> Dict[str, Any]:
     _write_run_state(work_dir, "RENDERING", "render", 0.70, "启动 FFmpeg 音画物理强锁渲染...")
     _log_event(work_dir, "RENDER_START", "开始视频物理合成与封面生成")
 
-    # 1. 封面渲染 (P1: 严格优先使用计划中选定的 selected_cover / cover)
+    # 1. 封面渲染 (P1: 严格优先使用计划中选定的 chosen_cover_id / selected_cover / cover)
     final_cover_path = os.path.join(output_dir, "cover.jpg")
     cover_meta_path = os.path.join(output_dir, "cover_meta.json")
+    target_cov_id = plan.get("chosen_cover_id")
     cover_info = plan.get("selected_cover") or plan.get("cover") or {}
-    cover_source_img = cover_info.get("image_path")
-    if not cover_source_img or not os.path.isfile(cover_source_img):
-        # 尝试使用分析中的候选图
-        cov_cand_file = os.path.join(work_dir, "analysis", "cover_candidates.json")
-        if os.path.isfile(cov_cand_file):
-            try:
-                with open(cov_cand_file, "r", encoding="utf-8") as cf:
-                    cc_list = json.load(cf)
-                target_cov_id = plan.get("chosen_cover_id") or cover_info.get("id")
-                found_cand = None
-                if target_cov_id:
-                    for c in cc_list:
-                        if c.get("id") == target_cov_id and os.path.isfile(c.get("image_path", "")):
-                            found_cand = c
-                            break
-                if found_cand:
-                    cover_source_img = found_cand["image_path"]
-                elif cc_list and os.path.isfile(cc_list[0].get("image_path", "")):
-                    cover_source_img = cc_list[0]["image_path"]
-            except Exception:
-                pass
+    cov_cand_file = os.path.join(work_dir, "analysis", "cover_candidates.json")
+
+    found_by_id = None
+    if target_cov_id and os.path.isfile(cov_cand_file):
+        try:
+            with open(cov_cand_file, "r", encoding="utf-8") as cf:
+                cc_list = json.load(cf)
+            for c in cc_list:
+                if c.get("id") == target_cov_id and os.path.isfile(c.get("image_path", "")):
+                    found_by_id = c
+                    break
+        except Exception:
+            pass
+
+    if found_by_id:
+        cover_info = found_by_id
+        cover_source_img = found_by_id.get("image_path")
+    else:
+        cover_source_img = cover_info.get("image_path")
+        if not cover_source_img or not os.path.isfile(cover_source_img):
+            # 尝试使用分析中的第一张有效候选图
+            if os.path.isfile(cov_cand_file):
+                try:
+                    with open(cov_cand_file, "r", encoding="utf-8") as cf:
+                        cc_list = json.load(cf)
+                    if cc_list and os.path.isfile(cc_list[0].get("image_path", "")):
+                        cover_info = cc_list[0]
+                        cover_source_img = cc_list[0]["image_path"]
+                except Exception:
+                    pass
 
     if cover_source_img and os.path.isfile(cover_source_img):
         render_cover_with_meta(cover_source_img, spec, final_cover_path, cover_meta_path)
@@ -1419,6 +1429,11 @@ def stage_qc(run_arg: str) -> Dict[str, Any]:
 
     with open(render_manifest_path, "r", encoding="utf-8") as rmf:
         render_manifest = json.load(rmf)
+
+    if render_manifest.get("run_id") and render_manifest.get("run_id") != context.get("run_id"):
+        raise RuntimeError(
+            f"渲染清单 run_id ({render_manifest.get('run_id')}) 与当前运行 ({context.get('run_id')}) 不符"
+        )
 
     plan_to_hash = {k: v for k, v in plan.items() if k != "validated_plan_hash"}
     current_plan_hash = hashlib.sha256(json.dumps(plan_to_hash, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
@@ -1665,7 +1680,9 @@ def stage_deliver(run_arg: str) -> Dict[str, Any]:
             render_manifest_path = work_rm
         else:
             rejections.append("未找到渲染清单 render_manifest.json")
+    actual_rm_sha256 = ""
     if os.path.isfile(render_manifest_path):
+        actual_rm_sha256 = compute_full_file_sha256(render_manifest_path)
         try:
             with open(render_manifest_path, "r", encoding="utf-8") as rmf:
                 rm_data = json.load(rmf)
@@ -1682,14 +1699,9 @@ def stage_deliver(run_arg: str) -> Dict[str, Any]:
     if not os.path.isfile(final_video) or os.path.getsize(final_video) == 0:
         rejections.append("成片视频文件不存在或为空")
 
-    if os.path.isfile(render_manifest_path):
-        try:
-            with open(render_manifest_path, "r", encoding="utf-8") as rmf:
-                rm_data = json.load(rmf)
-            if current_video_sha256 and rm_data.get("video_sha256") != current_video_sha256:
-                rejections.append("成片视频实际完整 SHA-256 与渲染清单记录不一致")
-        except Exception:
-            pass
+    if os.path.isfile(render_manifest_path) and "rm_data" in locals():
+        if current_video_sha256 and rm_data.get("video_sha256") != current_video_sha256:
+            rejections.append("成片视频实际完整 SHA-256 与渲染清单记录不一致")
 
     # 5. 双重质检报告强制存在性、结论与成片严格 64 位完整 SHA-256 强绑定核验 (P0-4)
     if not os.path.isfile(tech_qc_path):
@@ -1700,8 +1712,11 @@ def stage_deliver(run_arg: str) -> Dict[str, Any]:
         if not (t_data.get("all_passed", False) or t_data.get("passed", False)):
             rejections.append("工程技术质检未通过")
         t_plan_h = t_data.get("validated_plan_hash")
-        if actual_plan_hash and t_plan_h and t_plan_h != actual_plan_hash:
-            rejections.append("技术质检报告绑定的计划哈希与当前批准的执行计划不一致，必须重新执行 qc 阶段")
+        if actual_plan_hash and (not t_plan_h or t_plan_h != actual_plan_hash):
+            rejections.append("技术质检报告未绑定当前批准的计划哈希或哈希不匹配，必须重新执行 qc 阶段")
+        t_rm_sha = t_data.get("render_manifest_sha256")
+        if actual_rm_sha256 and (not t_rm_sha or t_rm_sha != actual_rm_sha256):
+            rejections.append("技术质检报告绑定的渲染清单哈希与当前渲染清单不一致，重新渲染后必须重新执行 qc 阶段")
         t_target_sha = t_data.get("target_video_sha256") or t_data.get("video_sha256")
         if not t_target_sha or len(t_target_sha) != 64 or t_target_sha != current_video_sha256:
             rejections.append(f"技术质检报告审核的目标视频哈希 ({t_target_sha}) 与当前成片哈希不匹配，重新渲染后必须重新执行 qc 阶段")
@@ -1714,10 +1729,14 @@ def stage_deliver(run_arg: str) -> Dict[str, Any]:
         if not e_data.get("passed", False) or e_data.get("block_count", 0) > 0:
             rejections.append(f"内容质检门禁阻断 (BLOCK={e_data.get('block_count', 0)})")
         e_plan_h = e_data.get("validated_plan_hash")
-        if actual_plan_hash and e_plan_h and e_plan_h != actual_plan_hash:
-            rejections.append("内容质检报告绑定的计划哈希与当前批准的执行计划不一致，必须重新执行 qc 阶段")
+        if actual_plan_hash and (not e_plan_h or e_plan_h != actual_plan_hash):
+            rejections.append("内容质检报告未绑定当前批准的计划哈希或哈希不匹配，必须重新执行 qc 阶段")
+        e_rm_sha = e_data.get("render_manifest_sha256")
+        if actual_rm_sha256 and (not e_rm_sha or e_rm_sha != actual_rm_sha256):
+            rejections.append("内容质检报告绑定的渲染清单哈希与当前渲染清单不一致，重新渲染后必须重新执行 qc 阶段")
         e_target_sha = e_data.get("target_video_sha256") or e_data.get("video_sha256")
         if not e_target_sha or len(e_target_sha) != 64 or e_target_sha != current_video_sha256:
+            rejections.append(f"内容质检报告审核的目标视频哈希 ({e_target_sha}) 与当前成片哈希不匹配，重新渲染后必须重新执行 qc 阶段")
             rejections.append(f"内容质检报告审核的目标视频哈希 ({e_target_sha}) 与当前成片哈希不匹配，重新渲染后必须重新执行 qc 阶段")
 
     if rejections:

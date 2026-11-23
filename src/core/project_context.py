@@ -59,6 +59,9 @@ def normalize_project_path(path_str: str, target_platform: Optional[str] = None)
             drive = m.group(1).upper()
             rest = (m.group(2) or "").replace("/", "\\").strip("\\")
             return f"{drive}:\\{rest}" if rest else f"{drive}:\\"
+        m_win = re.match(r"^([a-zA-Z]):[\\/]?$", s)
+        if m_win:
+            return f"{m_win.group(1).upper()}:\\"
         return ntpath.normpath(s)
 
 
@@ -100,11 +103,12 @@ class ProjectPaths:
                 is_sub_run_dir = True
 
         if is_sub_run_dir:
+            is_abs = Path(norm_root).is_absolute()
             if sys.platform != "win32":
                 clean_parts = [part.strip("/\\") for part in p_parts[:-2] if part.strip("/\\")]
-                norm_root = "/" + "/".join(clean_parts)
+                norm_root = ("/" + "/".join(clean_parts)) if is_abs else ("/".join(clean_parts) or ".")
             else:
-                norm_root = str(Path(*p_parts[:-2]))
+                norm_root = str(Path(*p_parts[:-2])) if p_parts[:-2] else "."
         elif len(p_parts) >= 2 and p_parts[-1] in ("work", "output"):
             has_project_files = (
                 os.path.isfile(os.path.join(norm_root, "job_spec.json")) or
@@ -112,11 +116,12 @@ class ProjectPaths:
                 os.path.isdir(os.path.join(norm_root, "materials"))
             )
             if not has_project_files:
+                is_abs = Path(norm_root).is_absolute()
                 if sys.platform != "win32":
                     clean_parts = [part.strip("/\\") for part in p_parts[:-1] if part.strip("/\\")]
-                    norm_root = "/" + "/".join(clean_parts)
+                    norm_root = ("/" + "/".join(clean_parts)) if is_abs else ("/".join(clean_parts) or ".")
                 else:
-                    norm_root = str(Path(*p_parts[:-1]))
+                    norm_root = str(Path(*p_parts[:-1])) if p_parts[:-1] else "."
 
         if os.path.basename(norm_root) in ("素材", "materials", "input"):
             materials_dir = materials_dir or norm_root
@@ -242,12 +247,30 @@ def is_historical_output(file_path: str, project_id: str = "", project_root: Opt
     # 只有当 'work' 或 'output' 作为系统生成目录（位于 project_id 之后，且其后不含 '素材'/'materials'/'input'）时才生效
     for i, part in enumerate(parts[:-1]):
         if part in ("output", "work", "work_dir", "work_dirs"):
+            # 排除 CI runner 路径（如 /home/runner/work/...）
+            if i > 0 and parts[i-1] in ("runner", "actions-runner"):
+                continue
             sub_parts = parts[i+1:]
             # 检查此 'work' / 'output' 后面是否有素材目录标记
             if any(sp in ("素材", "materials", "input") for sp in sub_parts):
                 continue
             # 若给定了 project_id 且 project_id 在此 part 之后，说明也是宿主外层工作区目录
             if project_id and project_id in sub_parts:
+                continue
+
+            # 判定此 output/work 是否为真正的运行产物目录：
+            # 1. 紧随其后的子级为典型 run_id 结构（run_*, run-*, 8位日期等）或直接为产物文件
+            # 2. 或者该 output/work 位于已知 project_id 之后
+            child = sub_parts[0] if sub_parts else ""
+            is_run_like = (
+                len(sub_parts) == 1 or
+                child.startswith("run_") or
+                child.startswith("run-") or
+                re.match(r"^\d{8}", child) or
+                child in ("latest", "temp", "cache") or
+                (project_id and project_id in parts[:i])
+            )
+            if not is_run_like:
                 continue
             return True, "文件位于 output/work 系统产物目录"
 

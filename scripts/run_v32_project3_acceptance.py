@@ -127,6 +127,13 @@ def main():
     paths.ensure_runtime_dirs()
     work_dir = paths.work_dir
     output_dir = paths.output_dir
+
+    if args.run_id:
+        # 若显式指定复用现有 run_id 执行重验，重置交付门禁以允许全链路重跑
+        deliv_p = os.path.join(output_dir, "delivery_manifest.json")
+        if os.path.isfile(deliv_p):
+            os.remove(deliv_p)
+
     print(f"本次运行 run_id: {run_id}")
     print(f"工作目录: {work_dir}")
     print(f"产出目录: {output_dir}")
