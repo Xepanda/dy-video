@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "visual_evidence_decisions.schema.json",
+  "title": "visual_evidence_decisions",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "decisions"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": [
+        "3.0"
+      ]
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "visual_decision",
+        "title": "visual_decision",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "candidate_id",
+          "vision_available",
+          "sku_relation",
+          "action_type",
+          "motion_phase",
+          "visual_evidence_refs",
+          "confidence",
+          "uncertainties",
+          "why"
+        ],
+        "properties": {
+          "candidate_id": {
+            "type": "string"
+          },
+          "vision_available": {
+            "type": "boolean"
+          },
+          "sku_relation": {
+            "type": "string",
+            "enum": [
+              "SAME_SKU",
+              "SAME_SKU_VARIANT",
+              "ACCESSORY_OR_STYLING",
+              "OTHER_SKU",
+              "UNCERTAIN"
+            ]
+          },
+          "action_type": {
+            "type": "string",
+            "enum": [
+              "FRONT_SHOW",
+              "SIDE_SHOW",
+              "BACK_SHOW",
+              "FABRIC_STRETCH",
+              "DETAIL_POINT",
+              "WALK",
+              "CHANGEOVER",
+              "STATIC",
+              "OTHER"
+            ]
+          },
+          "motion_phase": {
+            "type": "string",
+            "enum": [
+              "START",
+              "CORE",
+              "END",
+              "INCOMPLETE",
+              "UNKNOWN"
+            ]
+          },
+          "visual_evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "uncertainties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "why": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

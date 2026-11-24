@@ -35,14 +35,15 @@ import argparse
 import subprocess
 
 if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8", line_buffering=True)
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
 from src.core.path_resolver import resolve_path
+from src.core.project_context import is_historical_output, ProjectPaths, InputManifest
 
 VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".avi", ".flv", ".m4v", ".ts")
 SPECS_DIR = os.path.join(PROJECT_ROOT, "specs")
@@ -78,28 +79,20 @@ def _ffprobe_ok(video_path: str) -> dict:
 
 
 def collect_source_videos(spec: dict, spec_dir: str) -> list:
-    """按契约优先级收集直播素材（返回绝对路径列表，顺序稳定）。
-
-    排除本任务自身的产物（2026-11-01）：交付物写入素材目录
-    （`{project_id}.mp4` / `.jpg`），与 raw_video_path 同目录。
-    重跑时若不排除，上一轮的**成片**会被当成第 N+1 段原始素材重新摄入
-    → 素材清单污染（实测 6 段变 7 段，多出的正是上轮成片）。
-    """
+    """按契约优先级收集直播素材（返回绝对路径列表，顺序稳定），严格排除历史成品。"""
     paths = []
     pid = str(spec.get("project_id") or "")
 
-    def _is_own_artifact(name: str) -> bool:
-        if not pid:
-            return False
-        stem = os.path.splitext(name)[0]
-        return stem in {pid, f"{pid}_final", f"{pid}_cover"}
+    def _is_invalid(path: str) -> bool:
+        is_hist, _ = is_historical_output(path, pid)
+        return is_hist
 
     # 1) 显式列表优先（强隔离：存在显式清单时立即返回，绝不穿透扫描目录；全部失效时显式报错）
     explicit_paths = spec.get("raw_video_paths")
     if explicit_paths:
         for p in explicit_paths:
             rp = resolve_path(p, spec_dir)
-            if rp and os.path.exists(rp) and os.path.isfile(rp) and not _is_own_artifact(os.path.basename(rp)):
+            if rp and os.path.exists(rp) and os.path.isfile(rp) and not _is_invalid(rp):
                 ap = os.path.abspath(rp)
                 if ap not in paths:
                     paths.append(ap)
@@ -114,12 +107,12 @@ def collect_source_videos(spec: dict, spec_dir: str) -> list:
         primary_abs = resolve_path(primary, spec_dir) or os.path.abspath(primary)
         if os.path.isdir(primary_abs):
             for name in sorted(os.listdir(primary_abs)):
-                if name.lower().endswith(VIDEO_EXTS) and not _is_own_artifact(name):
+                if name.lower().endswith(VIDEO_EXTS):
                     ap = os.path.abspath(os.path.join(primary_abs, name))
-                    if ap not in paths:
+                    if not _is_invalid(ap) and ap not in paths:
                         paths.append(ap)
         elif os.path.isfile(primary_abs):
-            if primary_abs not in paths:
+            if not _is_invalid(primary_abs) and primary_abs not in paths:
                 paths.insert(0, primary_abs)
         else:
             raise FileNotFoundError(
@@ -172,12 +165,15 @@ def build_resolved_spec(spec: dict, videos: list, texts: dict) -> dict:
 
 
 def main() -> int:
+    print("[DEPRECATED] generate_from_job_spec.py 为旧版一键执行入口。V3.2 已升级为 Agent-First 架构，推荐使用分阶段 CLI (python -m src.cli prepare --spec ...)", file=sys.stderr)
     parser = argparse.ArgumentParser(
         description="依据 job_spec.json 直播任务契约生成最终带货成片")
     parser.add_argument("--spec", default="job_spec.json",
                         help="任务契约文件路径（默认仓库根 job_spec.json）")
     parser.add_argument("--no-cache", action="store_true",
                         help="禁用阶段缓存（强制全量重算）")
+    parser.add_argument("--cache-key", default=None,
+                        help="指定阶段缓存键（便于精准命中前序媒体扫描缓存）")
     args = parser.parse_args()
 
     spec_path = os.path.abspath(args.spec)
@@ -215,8 +211,8 @@ def main() -> int:
               f"{meta['duration']:.1f}s")
     print(f"  合计 {total_dur:.1f}s 原始直播素材")
 
-    # —— 2. 校验商品图 ——
-    print(f"\n[2/5] 商品图校验:")
+    # —— 2. 校验商品图与构建商品档案 (V3 PR-02) ——
+    print(f"\n[2/5] 商品图校验与商品档案构建:")
     item_images = []
     for img in (product.get("item_images") or []):
         rp = resolve_path(img, spec_dir)
@@ -228,28 +224,51 @@ def main() -> int:
     if not item_images:
         print("  [WARN] 无可用商品图，封面商品位将走占位图路径")
 
-    # —— 3. 派生文案并落盘可执行 spec ——
+    from src.core.product_profile import build_product_profile, save_product_profile, ProductProfileError
+    product_profile = None
+    try:
+        product_profile = build_product_profile(spec, spec_dir=spec_dir)
+        print(f"  [OK] 商品身份档案生成成功 (SKU: {product_profile['sku_id']}, 品类: {product_profile['category']})")
+    except ProductProfileError as pe:
+        print(f"  [FATAL] 商品档案严格策略阻断: {pe}")
+        return 1
+    except Exception as pe:
+        print(f"  [WARN] 商品档案构建降级（不阻断）: {pe}")
+
+    # —— 3. 派生文案并落盘可执行 spec（项目目录隔离：work/<run_id>/）——
+    from src.core.project_context import ProjectPaths
+    run_id = f"run_{time.strftime('%Y%m%d_%H%M%S')}"
+    paths = ProjectPaths(project_root=spec_path, run_id=run_id)
+    proj_root = paths.project_root
+    paths.ensure_runtime_dirs()
+
     texts = derive_texts(spec)
     resolved_spec = build_resolved_spec(spec, videos, texts)
-    os.makedirs(SPECS_DIR, exist_ok=True)
+    if product_profile:
+        profile_path = os.path.join(paths.work_dir, f"product_profile_{project_id}.json")
+        save_product_profile(product_profile, profile_path)
+        resolved_spec["product_profile_path"] = profile_path
     resolved_path = os.path.join(
-        SPECS_DIR, f"job_spec_{project_id}.resolved.json")
+        paths.work_dir, f"job_spec_{project_id}.resolved.json")
     with open(resolved_path, "w", encoding="utf-8") as f:
         json.dump(resolved_spec, f, ensure_ascii=False, indent=2)
-    print(f"\n[3/5] 可执行 spec 已落盘: {resolved_path}")
+    print(f"\n[3/5] 可执行 spec 已隔离落盘至工作目录: {resolved_path}")
     print(f"  Hook 卡文案 : {texts['hook_card_text']}")
     print(f"  CTA 文案    : {texts['cta_text']}")
 
     # —— 4. 端到端流水线 ——
     print(f"\n[4/5] 启动 Agent 剪辑导演中枢（端到端）...")
     from src.agent.agent_director import AgentDirector
-    director = AgentDirector(resolved_path, use_cache=not args.no_cache)
+    director = AgentDirector(
+        resolved_path,
+        cache_key=args.cache_key,
+        use_cache=not args.no_cache,
+        project_paths=paths,
+    )
     manifest = director.run_director_workflow()
 
-    # —— 5. 交付汇总 ——
-    material_dir = director.get_material_dir()
-    os.makedirs(material_dir, exist_ok=True)
-    print(f"\n[5/5] 交付物汇总（已直接保存至素材目录: {material_dir}）:")
+    # —— 5. 交付汇总（严格隔离至 output/<run_id>/）——
+    print(f"\n[5/5] 交付物汇总（已隔离保存至输出目录: {director.output_dir}）:")
     deliverables = manifest.get("final_deliverables", {})
     gen_manifest = {
         "project_id": project_id,
@@ -266,9 +285,6 @@ def main() -> int:
     gen_path = os.path.join(director.output_dir, "generation_manifest.json")
     with open(gen_path, "w", encoding="utf-8") as f:
         json.dump(gen_manifest, f, ensure_ascii=False, indent=2)
-    material_manifest = os.path.join(material_dir, f"{project_id}_generation_manifest.json")
-    if os.path.abspath(gen_path) != os.path.abspath(material_manifest):
-        shutil.copy2(gen_path, material_manifest)
 
     # —— 5.1 人工复核清单（统一开关 manual_review 的消费点）——
     # 34 项自检里 13 项机器判不了（情绪、话术与画面匹配、搭配完整性等），
@@ -312,15 +328,12 @@ def main() -> int:
             _lines += ["", f"审核人：____　日期：____", ""]
             with open(mr_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(_lines))
-            material_mr = os.path.join(material_dir, f"{project_id}_manual_review.md")
-            if os.path.abspath(mr_path) != os.path.abspath(material_mr):
-                shutil.copy2(mr_path, material_mr)
-            gen_manifest["manual_review"] = material_mr
+            gen_manifest["manual_review"] = mr_path
             if isinstance(deliverables, dict):
-                deliverables["manual_review"] = material_mr
+                deliverables["manual_review"] = mr_path
             with open(gen_path, "w", encoding="utf-8") as f:
                 json.dump(gen_manifest, f, ensure_ascii=False, indent=2)
-            print(f"  [✓] manual_review: {material_mr}（13 项预填，勾异常即可）")
+            print(f"  [✓] manual_review: {mr_path}（13 项预填，勾异常即可）")
     except Exception as e:
         print(f"  [WARN] 生成人工复核清单失败（不阻断交付）: {e}")
 

@@ -75,16 +75,18 @@ RULES: List[Tuple[str, "re.Pattern[str]"]] = [
 # 白名单单位（R1 数字串后跟这些单位 → 合法，如 165码 / 1080P / 3M）
 # 注意：不含"秒/分钟/小时"——避免"299秒杀"被误豁免（秒杀是强价格信号）
 WHITELIST_UNITS = [
-    "码", "号", "厘米", "cm", "CM", "斤", "kg", "KG", "岁", "年", "月", "日",
-    "点", "层", "楼", "度", "%", "％", "p", "P", "M", "m", "L", "l", "XL", "xl",
-    "色", "件", "条", "版", "期", "集", "页", "个", "身高", "体重", "年纪", "年龄", "公分", "寸",
+    "码", "号", "號", "厘米", "cm", "CM", "斤", "kg", "KG", "岁", "歲", "年", "月", "日",
+    "点", "點", "层", "層", "楼", "度", "%", "％", "p", "P", "M", "m", "L", "l", "XL", "xl",
+    "色", "件", "条", "條", "版", "期", "集", "页", "頁", "个", "個", "身高", "体重", "年纪", "年龄", "公分", "寸",
+    # 面料材质、纱支规格与成分比例
+    "支", "支纱", "克", "g", "G", "针", "针织", "针", "棉", "羊毛", "绵羊毛", "綿羊毛", "羊绒", "羊絨",
 ]
 # 注意：件/条/色 等是库存语境而非价格语境，R1 命中后跟这些单位时豁免（库存由黑名单另行处理）
 
 _WHITELIST_TAIL = "|".join(map(re.escape, WHITELIST_UNITS))
 _WHITELIST_PATTERNS = [
-    # 数字 + 白名单单位（允许"的"间隔，如 165的身高 / 160码）
-    re.compile(rf"\d+(?:\.\d+)?\s*的?\s*(?:{_WHITELIST_TAIL})(?![块米元钱毛])"),
+    # 数字 + 白名单单位（允许"的/个/的一个"间隔，如 165的身高 / 160码 / 31的一个绵羊毛）
+    re.compile(rf"\d+(?:\.\d+)?\s*(?:的|个|的一个)?\s*(?:{_WHITELIST_TAIL})(?![块米元钱毛])"),
     # 中文数字 + "码"（三码 / 拍小码）
     re.compile(rf"{CN_NUM_RE}?\s*码"),
     # 常见非价格技术数字（版本号/型号/分辨率）
@@ -108,12 +110,13 @@ DETECTOR_VERSION = "chinese_numeral_v1"
 
 def _whitelisted(text: str, start: int, end: int) -> bool:
     """判断 [start, end) 的价格命中是否落在白名单语境内。"""
-    # 向前看 2 字符、向后看 4 字符构造上下文
-    ctx = text[max(0, start - 2): min(len(text), end + 4)]
+    # 向前看 4 字符、向后看 8 字符构造上下文（覆盖"的一个绵羊毛"等成分语境）
+    offset = max(0, start - 4)
+    ctx = text[offset: min(len(text), end + 8)]
     for pat in _WHITELIST_PATTERNS:
         for m in pat.finditer(ctx):
             # 白名单匹配需要覆盖住价格命中的核心区域
-            if m.start() <= (start - max(0, start - 2)) + 1 and m.end() >= (end - max(0, start - 2)) - 1:
+            if m.start() <= (start - offset) + 1 and m.end() >= (end - offset) - 1:
                 return True
     return False
 

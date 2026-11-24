@@ -1,162 +1,134 @@
-# dy-live-ecommerce-editor (抖音带货直播切片自动化剪辑系统)
+# dy-live-ecommerce-editor (抖音带货直播切片 AI 视觉导演剪辑系统 V3.3)
 
-一套高确定性、工业级、零口型漂移、零外部 API 费用的**抖音带货短视频 AI Agent 剪辑工具链与高定封面系统**。
-专为女装带货短视频打造，提炼数小时直播素材为 **45~65 秒** 黄金高转化带货成片，并提供自动化质量门禁与高精度排版封面。
-
----
-
-## 🤖 核心架构设计：Agent 参与决策与操作，脚本作为确定性原子工具 (Agent-in-the-Loop Architecture)
-
-传统全自动剪辑方案往往试图用一段死板、黑盒的单体脚本（如 bat/单一 Python 脚本）走到底，极易引发分镜突兀截断、价格与换装杂质外泄、封面模特神态尴尬或姿态歪斜等致命缺陷。
-
-本仓库坚决摒弃死板单一脚本执行模式，采用 **Agent-in-the-Loop（智能体总导演中枢 + 确定性原子工具链）** 体系：
-- **底层工具层（Tools as Deterministic Primitives）**：提供纯粹、高确定性、可独立调用的原子 CLI 工具，执行繁重且确定性的音视频计算（CV 骨骼提取、ASR 毫秒级打点、FFmpeg 物理音画锁合、ASS 动态渲染、量化指标质检），并输出结构化 JSON 候选清单；
-- **Agent 决策层（Agent as Creative Director）**：由 Agent（或人工运营操作）担任剪辑总导演，对中间候选池行使**主观审美与内容裁决权**：
-  1. **封面优选决策**：Agent 审视提取出的候选正身帧，评估模特神态是否自然挺拔，裁决最优封面底图；
-  2. **分镜编排决策**：Agent 审阅已消除同音错词的台词候选池，决策讲款节奏与逻辑线，剔除价格/库存/换衣杂质，编排生成 `plan.json`；
-  3. **质量验收签署**：Agent 审核 ASR 纠错记录与 QC 审计报告，签字交付或针对未达标项动态重试。
+一套高确定性、工业级、零口型漂移、零外部视觉 API 费用的**抖音带货短视频 AI Agent 视觉导演剪辑系统与高定封面工具链**。
+聚焦女装直播切片带货，将多段数小时直播素材提炼为 **45~65 秒** 黄金高转化成片，配套完整防篡改哈希链、视觉联系表审片、成片接缝回看 Critic Loop 与双层质量硬门禁。
 
 ---
 
-## 🛠️ 确定性原子工具链 (Deterministic Toolset)
+## 核心架构：Agent-First 视觉导演总控 + 确定性媒体工具链（ADR-001 & ADR-002）
 
-| 工具模块 | 命令行入口 | 核心职责 | Agent 决策与操作点 |
-| :--- | :--- | :--- | :--- |
-| **封面候选提取** | `python src/tools/extract_cover_candidates.py` | 严格正面（双肩深度差 ≤0.055 + **人脸偏航角 ≤12°**）+ 人脸表情门禁（EAR/MAR/清晰度）+ **水平 1:6:1 构图**（人像宽占画布 75% 居中，身高 ≤88% 保全完整人体）+ 衣着一致性检测；输出 `cover_candidates.json`（含全部 metrics） | **Agent 审美裁决**：评估多张候选帧中模特的正面表情与精神风貌，挑选最佳底图（如 `cand_01`） |
-| **叙事分镜分析** | `python src/tools/analyze_story_segments.py` | Faster-Whisper 转录 + ASR 语境智能体质检（自动纠正行业错词），按电商漏斗打标分类（Hook、面料、版型、穿搭、黑名单），输出 `story_candidates.json` | **Agent 内容编排**：决定黄金 3 秒开场钩子、产品核心做工与穿搭推荐的组合，剔除价格库存信息 |
-| **泛化分镜编译** | `python src/tools/build_plan.py` | **零硬编码**分镜编译：漏斗配额（Hook/面料/版型/穿搭）+ 时长约束 [45,65] + 中文数字价格检测 + 库存/换款黑名单，编译生成 `plan.json` | **替代旧 plan_compiler 的硬编码方案**，可泛化到任意新素材 |
-| **镜头边界检测** | `python src/tools/detect_scenes.py` | OpenCV 帧间差分自适应阈值，输出 shot 边界与区间 | 替代旧版硬编码时间窗黑名单 |
-| **价格检测器** | `python src/tools/detect_price.py` | 中文数字价格检测（chinese_numeral_v1）：数字串/货币符号/中文数字+块米元/到手价等；码数尺码白名单 | **决策 3 三级防护**第一级：选段排除 + 字幕过滤 + QC 断言 |
-| **人脸质量检测** | `python src/tools/detect_face.py` | MediaPipe FaceLandmarker + 姿态引导 ROI：偏航角（solvePnP）/EAR/MAR/人脸清晰度/面积占比 | 补齐封面"主播表情正常"量化门禁 |
-| **衣着一致性检测** | `python src/tools/detect_garment_match.py` | 封面人像躯干 ROI vs 商品图：CLIP（可选）/ HSV 直方图（降级） | 纪要"模特身着衣服和商品图片一致" |
-| **品牌封面渲染** | `python src/tools/render_cover_tool.py` | MIXCITY 高定 3D 金色浮雕主标 + **金色渐变商品名（决策 2）** + 自动换行 + 居中圆角卡片（左右可配）+ 渲染几何 meta 输出 | **Agent 视觉确认**：验证商品文案、品牌标识与排版效果 |
-| **音画强锁组装** | `python src/tools/assemble_video_tool.py` | 依据 `plan.json` 原子化执行物理切片、双轨 PTS 归零、小黄车安全区避让、发光字幕烧录与 Sub-Bass Boom 合成；支持 zoom 推镜 / hflip 镜像 / split 分屏算子 | **Agent 执行调度**：下发组装指令，获取导出视频物理时长与元数据 |
-| **自动化质检门禁** | `python src/qc/qc_auditor.py` | constraints.yaml 驱动全项量化断言：时长/分辨率/帧率 30/**响度 −14 LUFS**/**黑帧**/**字幕零价格**/MarginV/封面几何与金色色相/宽占比复测；BLOCK/WARN 分级 | **Agent 验收审计**：检查质检门禁各项指标，全绿则签署交付 |
-| **任务契约创建** | `python src/tools/spec_creator.py` | 免安装 GUI 填表小工具，点选原始视频与商品图，配置品类与关键词，输出 `job_spec.json` | **Agent/人工初始化**：装配剪辑任务的基准上下文数据 |
-| **封面 OCR 纯净度** | `python src/tools/detect_ocr.py` | rapidocr-onnxruntime（PP-OCR ONNX 轻量版）检测封面背景文字（店招/背景板）面积占比 ≤2%；模板自有元素（品牌/商品名/贴图）豁免 | **V7 封面纯净**：候选淘汰 + QC 双源复测 |
-| **决策约束网关** | `python src/agent/decision_gateway.py --demo` | Agent 每次选择（封面/分镜/Hook 卡）先过 constraints BLOCK 校验，不合格拒绝重选；全部决策携带 metrics 快照落册 | **B12**：外部干预同样校验，构造不合格候选 100% 拦截 |
-| **阶段缓存原语** | `src/tools/stage_cache.py` | sha256(视频+spec+constraints+核心代码指纹) 阶段产物缓存；6 阶段断点续跑 | **B13**：中断重跑不重算；代码变更自动失效缓存 |
-| **批量运行器** | `python src/batch_runner.py --specs-dir specs` | 多素材批量执行 + 已完成素材跳过 + 汇总报告 `logs/batch_report.json` | **B13**：批量 10 条/晚 |
-| **LLM 字幕审核** | `src/core/asr_agent_verifier.py`（LLM 分支） | OpenAI 兼容 LLM 上层复核：严格 JSON 契约 + 时间戳绝对守恒 + 零价格护栏 + 两引擎 diff 全量审计 + 不可用自动降级 | **B15**：环境变量 LLM_BASE_URL/LLM_API_KEY/LLM_MODEL 配置 |
-| **OpenChatCut 桥接** | `python src/tools/chatcut_bridge.py` | plan.json ↔ OpenChatCut 风格多轨时间线双向转换；人工精修（trim/删除/重排）回注后可重新组装 | **B14**：`--plan x.json --out timeline.json` 导出；`--timeline t.json --plan-out p.json` 回注 |
-| **回归测试体系** | `python scripts/run_regression.py` | 三层回归：单元测试（5 套）→ 素材端到端（fixtures 5 条）→ 指标区间锁定比对；`--update-baselines` 显式更新基线 | **B16**：CI 全绿才允许合入；阈值变更必须附回归结果 |
-| **违规词检测** | `python src/tools/detect_violation.py --ass subtitles.ass` | 抖音极限词库（`contracts/violation_words.yaml`，飞书《违规整合》镜像）全量检测：ASR 台词 / 成片字幕 / 画面 OCR 三类输入 | **反馈 2026-10-27**：词库数据驱动，增删词条不改代码 |
-| **违规词三通道处理** | `python src/tools/apply_violation_handling.py --plan plan.json --segments ... ` | 命中词三通道彻底处理：字幕屏蔽（`***`）+ 语音消音（区间 volume 表达式）+ 视频打码（OCR 定位像素化）；产出 `violation_handling.json` | **反馈 2026-10-27**：QC 对成片字幕零残留 BLOCK 断言 |
-| **完整对话脚本** | `python src/tools/build_dialogue_script.py --spec job_spec.json --segments ...` | ASR 段合并为完整语句（utterance），标注句末完整标记/漏斗类目/违规命中，作为剪辑唯一剧本 | **反馈 2026-10-27**：句子边界吸附 + acrossfade 转场配套 |
-| **一致性预检** | `python src/tools/check_spec_material_consistency.py --spec job_spec.json --segments ...` | 素材-契约一致性：关键词覆盖率/商品名词覆盖率/衣着一致性/违规词扫描，防"挂羊头卖狗肉" | **反馈 2026-10-27**：2026-10-26 马甲/针织衫错配教训的产物 |
-| **叠加层人脸安全** | `python src/tools/check_overlay_face_safety.py --video final.mp4 --overlay-meta ...` | 贴纸/Hook 卡/字幕带/放大镜等叠加元素与模特面部的几何交叠审核（压脸 BLOCK） | **反馈 2026-10-27**：特效不得影响模特主体（尤其是面部） |
-| **成片 ASR 复检** | `python src/tools/verify_final_video_asr.py --video final.mp4 --ass subtitles.ass --work-dir ...` | 对拼接后完整视频重新转录，五项检查：V1 字幕-原声一致性 / V2 语音违规词零残留 / V3 语音价格零残留 / V4 识别密度健全性 / V5 消音执行核查（核心区实测静音） | **2026-10-27 闭环**：素材 ASR 三重校验 + 成片 ASR 复检，双向闭环"物理咬合原声"承诺 |
-| **商品图封面适配** | `python src/tools/adapt_product_cover.py --image product.png --out cover.jpg --mode extend` | 商品图直接作封面的自然过渡：背景延展（镜像/replicate）/ 边缘羽化（距离变换）/ 渐变融合（去晕）/ 阴影 / 圆角，四模式（card/blend/extend/collage）× 任意尺寸背景 × 强度可配 | **2026-10-28**：`verify_cover_adaptation.py` 六项量化验证（羽化剖面/无硬边界/防 halo/阴影/留白）；`remove_white_background` 白底去除（flood fill 连通域保护主体）已集成为封面右侧贴图默认样式（`sticker.sticker_style: cutout`） |
-| **切片规则引擎** | `python -m src.tools.slicing_rules --spec job_spec.json` | 把参考成品实测的切片规律变成**可判定**规则（R1 切点落 ASR 句末 / R2 片段时长区间 / R3 全身景别 / R4 展示角度多样性 / R5 语音密度 / R6 漏斗顺序可按品类覆写），阈值唯一事实源 = `contracts/constraints.yaml` 的 `slicing_rules` 段 | **2026-11-01**：证据见 `docs/reference_cut_analysis_SSY410163.md`；配套 `detect_speech_pauses.py`（语音气口，**相对凹陷**判据——直播底噪 −42~−53dB，绝对阈值命中 0 处）+ `extract_shot_features.py`（画面特征 span/肩宽/人脸/织物）；规则细节见 `workflows/standard_pipeline_v2.md` §13，检查项见 `docs/slicing_rules_checklist.md` |
-| **剪辑风格校验** | `python -u scripts/verify_cut_style.py --video 成片.mp4 --cuts 1.0,2.0 --segments asr.json` | 对成片做**转场/音频/调色/节奏**四项风格的同口径实测与判定（R7 硬切 vs 叠化 / R8 Boom·BGM·响度·LRA / R9 段间调色变异 / R10 钩子密度·句长·语速·收紧比），可与参考成片直接对照 | **2026-11-02**：证据见 `docs/reference_cut_style_analysis.md`；实测参考片 **9/9 全硬切**（单帧 Δα 0.41~0.90、零叠化）、**零音效零 BGM**（低中频比 −21.2dB）、段间调色变异 0.8%~7.8%、节奏为「钩子快→中段慢→尾段再起」；规则细节见 `workflows/standard_pipeline_v2.md` §14，检查项见 `docs/slicing_rules_checklist.md` |
+* **Windows EXE（无 Agent 依赖配置器）**：只负责点选素材、配置商品事实与保存 `job_spec.json` + `AGENT_TASK.md`，不隐式启动任何 Agent 或渲染进程。
+* **外部多模态 Agent（AGY / Codex / Claude Code = 剪辑总导演）**：阅读压缩后的 `director_brief.md`，直接看 **4×4 分镜联系表（Contact Sheets）** 与 **封面对比拼板（`cover_sheet.jpg`）** 用“眼睛”选片、微调切点/特效/贴纸、审阅灰区片段，并在渲染后通过 `inspect-render` 视觉回看接缝拼图（`seams_review.jpg`）进行局部自修复。
+* **通用确定性 CLI（`python -m src.cli` = 媒体计算与防篡改硬门禁）**：执行 64 位源素材 SHA-256 白名单登记、ASR 与相对凹陷气口检测、顺序 3 点（25%/50%/75%）抽帧、Pose 躯干 ROI + 轻量 ONNX（自动降级 ROI HSV）混合视觉打分、FFmpeg 60FPS 物理音画锁合与双层 QC 门禁签署。
+
+> 架构决策与升级文档：
+> - [ADR-001: Agent-First 控制权架构](docs/superpowers/plans/2026-11-21-adr-001-agent-first-architecture.md)
+> - [ADR-002: V3.3/V3.4 视觉导演、混合视觉感知与灰区放权](docs/superpowers/plans/2026-11-24-adr-002-visual-director-and-hybrid-perception.md)
+> - [V3.3/V3.4 架构升级总方案](docs/dy-video-v3.3-v3.4-architecture-upgrade-plan.md) · [可执行任务卡](docs/dy-video-v3.3-v3.4-task-cards.md)
 
 ---
 
-## 📁 目录结构
+## V3.3 视觉导演全流程（Universal CLI Pipeline）
+
+### 0. 素材配置与任务交接（Windows EXE 向导）
+1. 运行根目录 `启动任务配置器.exe`（或 `SpecCreator.exe`）；
+2. 点选项目目录、勾选原始直播视频与商品参考图，点击 **「生成任务并交给 Agent」**；
+3. 将生成的任务指令粘贴给任意本地多模态 Agent（AGY / Codex / Claude Code）。
+
+### 1. 初始化环境与资产白名单（`prepare`）
+```bash
+python -m src.cli prepare --spec "<path_to_job_spec.json>"
+```
+- 登记显式确认的源视频与 64 位完整 SHA-256 到 `input_manifest.json`，自动隔离历史成片；
+- 加载品类档案（默认 `contracts/profiles/womenswear.yaml`），冻结 `spec_snapshot.json` 与 `spec_fingerprint`。
+
+### 2. 多模态分析、顺序 3 点抽帧与视觉导演简报（`analyze`）
+```bash
+python -m src.cli analyze --run "<work_dir>"
+```
+- 执行镜头边界检测、相对凹陷语音气口检测、ASR 分句对齐、单次打开源视频顺序 3 点（25%/50%/75%）批抽；
+- 运行混合视觉引擎（Pose 躯干 ROI + 参考图去白底 + 轻量 ONNX 语义向量，无权重时显式降级为 ROI HSV + 3 点段内漂移检测）；
+- 冻结全量 `analysis/candidates.json`（`candidate_pool_hash`）并自动生成：
+  - `analysis/director_brief.md`（去重压缩为 Top 40–60 精选 + 最多 12 条灰区待复核候选）；
+  - `analysis/storyboards/sheet_01.jpg ...`（4×4 高清分镜联系表）；
+  - `analysis/storyboards/cover_sheet.jpg`（全部封面候选同屏对比板）。
+
+### 3. 外部多模态 Agent 视觉审片与编排提案（v3.3）
+- 阅读 `director_brief.md`，用多模态看图查看 `cover_sheet.jpg` 与 `sheet_*.jpg`；
+- 按需钻取单条候选前后句上下文与 3 点原帧：
+  ```bash
+  python -m src.cli inspect-candidate --run "<work_dir>" --ids "c_src_01_001,c_src_01_009"
+  ```
+- 编写并保存 `<work_dir>/decisions/sequence_proposal.json`（支持 `clip_overrides` 微调 `cut_adjust_start_ms/end_ms`、`zoom`、`effect`、`sticker_text`，支持 `hook_card_override`/`cta_override`，以及针对灰区 `UNCERTAIN` 带真实帧引用的 `visual_overrides`；`OTHER_SKU` 永不放权）。
+
+### 4. 提案审计与计划冻结（`validate-plan`）
+```bash
+python -m src.cli validate-plan --run "<work_dir>" --proposal "<work_dir>/decisions/sequence_proposal.json"
+```
+- 校验候选池/打分/证据哈希防篡改、源白名单、同源防重叠、硬时长上限、切点微调边界（±500ms 且禁止倒切吞字）、贴纸防造假、以及 `visual_overrides` 证据路径与留痕；
+- 可选启用 `violation_mitigation_mode: "auto_three_channel"` 自动生成 `violation_handling.json`；
+- 编译冻结 `validated_plan.json` 与 `plan_audit.json`（含 `validated_plan_hash`）。
+
+### 5. 物理音画锁合渲染（`render`）
+```bash
+python -m src.cli render --run "<work_dir>"
+```
+- 核验计划哈希与磁盘源视频完整 SHA-256，原子输出 1080×1920 60FPS `output/<run_id>/final.mp4`、`cover.jpg`、`copywriting.md` 与 `render_manifest.json`。
+
+### 6. 成片接缝视觉回看 Critic Loop（`inspect-render`）
+```bash
+python -m src.cli inspect-render --run "<work_dir>"
+```
+- 抽取成片全部 N-1 个接缝 `[t-0.25s, t, t+0.25s]` 三帧对照拼图 `output/<run_id>/seams_review.jpg`，并运行 `ContinuityAuditor` + `CutOptimizer` 输出局部微调建议（只读不改文件）。
+
+### 7. 双层质量门禁审计（`qc`）
+```bash
+python -m src.cli qc --run "<work_dir>"
+```
+- 工程技术 QC（`technical_qc.json`：时长/分辨率/60FPS/−14 LUFS 响度/黑帧/零价格/压脸安全/成片 ASR 复检）+ 接缝连续性审计（`continuity_review.json`）+ 内容 Editorial QC（`editorial_qc.json`，含 `SeamContinuityGate`）。
+
+### 8. 正式不可变交付签署（`deliver`）
+```bash
+python -m src.cli deliver --run "<work_dir>"
+```
+- 强制校验 `proposal_hash -> validated_plan_hash -> render_manifest -> video_sha256 -> dual_qc (AND) -> delivery_manifest` 完整哈希链与 `agent_visual_overrides` 溯源，签发不可变 `delivery_manifest.json` 并更新 `output/latest.json`。
+
+---
+
+## 目录结构
 
 ```text
 dy-live-ecommerce-editor/
-├── contracts/                  # 量化约束契约（constraints.yaml + 4 份 JSON Schema + 纪要映射表）
-├── config/                      # 品牌样式预设与抖音安全视域配置
-├── data/
-│   ├── raw_samples/             # 真实素材测试样例
-│   └── work_dirs/               # 运行时切片与过程缓存（自动忽略）
-├── output/                      # 交付成品（成片、高定封面、QC报告、Agent决策清单）
-├── scripts/                     # 辅助测试工具与探索脚本
+├── .agents/skills/live-ecommerce-video-editor/SKILL.md  # 外部 Agent V3.3 视觉导演技能规范
+├── contracts/
+│   ├── constraints.yaml               # 量化约束唯一事实源（含 vision_v33 阈值）
+│   ├── profiles/womenswear.yaml       # 女装品类档案（数据驱动词表/ROI策略/配额）
+│   └── schemas/                       # job_spec / sequence_proposals_v33 等 JSON Schema
+├── docs/                              # ADR-001/002、V3.3/V3.4 架构总方案与任务卡
 ├── src/
-│   ├── agent/                   # Agent 决策中枢与协同调度层
-│   │   └── agent_director.py    # 剪辑总导演中枢 (审视候选池并仲裁决策)
-│   ├── core/                    # ASR、漏斗编排、视频组装核心算法
-│   │   ├── asr_engine.py        # Faster-Whisper 转录打点
-│   │   ├── asr_agent_verifier.py# 语境感知 ASR 字幕智能校验体
-│   │   ├── plan_compiler.py     # 兼容壳（已委托 tools/build_plan.py 泛化实现）
-│   │   └── video_assembler.py   # FFmpeg 物理音画强锁混流引擎（zoom/hflip/split 算子）
-│   ├── graphics/                # MIXCITY 封面排版与重音合成
-│   │   ├── cover_renderer.py    # 品牌封面渲染器（金色渐变商品名+自动换行+渲染 meta）
-│   │   ├── ass_subtitles.py     # 荧光变色发光字幕生成
-│   │   └── sfx_generator.py     # 45~90Hz Sub-Bass Boom 合成
-│   ├── tools/                   # 面向 Agent 与 CLI 的原子化确定性工具集
-│   │   ├── spec_creator.py      # 免安装 GUI 任务契约填表工具
-│   │   ├── detect_price.py      # 中文数字价格检测器（决策 3）
-│   │   ├── detect_face.py       # 人脸偏航角/表情/清晰度检测（姿态引导 ROI）
-│   │   ├── detect_scenes.py     # 镜头边界检测
-│   │   ├── detect_garment_match.py # 衣着一致性检测（CLIP/直方图）
-│   │   ├── extract_cover_candidates.py # 严格正面候选帧提取与水平 1:6:1 构图
-│   │   ├── analyze_story_segments.py   # 叙事分镜语义分类打标工具
-│   │   ├── build_plan.py        # 泛化分镜编译器（零硬编码）
-│   │   ├── render_cover_tool.py        # MIXCITY 高定封面参数化渲染工具（含 meta）
-│   │   └── assemble_video_tool.py      # 视频物理强锁混流总装工具
-│   ├── qc/
-│   │   └── qc_auditor.py        # constraints 驱动全量自动化量化质检门禁
-│   ├── main_pipeline.py         # Agent 总导演端到端调度入口
-│   └── pipeline.py              # 兼容性导入重定向入口
-├── tests/                       # 自动化单元测试套件
-│   └── test_pipeline_units.py   # 覆盖 ASR 校验、语义分类、Agent 决策、构图算法
-├── job_spec.json                # 当前任务契约配置
-启动任务配置器.exe  # 或 SpecCreator.exe
-├── requirements.txt             # 依赖清单
-└── .gitignore                   # 严格排除大体积素材与运行期缓存
+│   ├── cli.py                         # V3.3 统一阶段 CLI 入口
+│   ├── runtime/
+│   │   ├── stages/                    # prepare / analyze / inspect / validate_plan / render / qc_deliver / status / security
+│   │   └── stage_services.py          # 向后兼容门面
+│   ├── core/
+│   │   ├── vision/                    # Pose 躯干 ROI + ONNX 视觉编码器 + ROI HSV 降级
+│   │   ├── director_digest.py         # Director Brief + 4×4 Contact Sheets + Cover Sheet
+│   │   ├── category_profile.py        # 品类档案插件加载器
+│   │   ├── frame_provider.py          # 顺序 3 点批抽 + 500ms 桶去重
+│   │   ├── sku_tracker.py / candidate_ranker.py / plan_compiler.py / video_assembler.py
+│   ├── graphics/                      # 品牌封面渲染 / ASS 字幕 / 动态贴片
+│   ├── qc/                            # qc_auditor / editorial_qc / continuity_qc
+│   └── tools/                         # 底层确定性原子工具集（价格/违规/人脸/OCR/气口/切片规则/OpenChatCut桥接）
+└── tests/                             # 40 套自动化回归测试（python -u scripts/run_regression.py --quick）
 ```
 
 ---
 
-## 🚀 Agent 协同剪辑操作流程 (Workflow)
+## 回归测试
 
-> **2026-10-27 工作流重构**（反馈驱动）：封面全幅底图、ASR 驱动完整对话剪辑、
-> 转场/放大镜特效集成、违规词三通道处理、全阶段审核机制。
-> 完整阶段宪法见 [`workflows/standard_pipeline_v2.md`](workflows/standard_pipeline_v2.md)。
-
-### 0. 准备素材与商品信息 (生成任务契约)
-剪辑前，用户需提供原始直播录像与商品信息以建立契约上下文。
-双击运行根目录的：
 ```bash
-启动任务配置器.exe  # 或 SpecCreator.exe
+python -u scripts/run_regression.py --quick
 ```
-*(或在终端执行 `python src/tools/spec_creator.py`)*
-系统将在浏览器自动打开可视化表单页面，点选视频素材、商品平铺图、填写品牌名与核心面料/版型卖点，点击“导出任务文件”即可生成标准 `job_spec.json`。
-**Agent 将以此文件为依据，读取素材路径与商品领域指纹，启动后续的检测、判断与决策执行。**
-
-### 1. 环境准备
-确保 Python 3.10+ 及 FFmpeg（已加入系统环境变量 PATH）：
-```bash
-pip install -r requirements.txt
-```
-
-### 2. 运行模式
-
-#### 模式一：Agent 自主协同调度 (Autonomous Agent Mode)
-Agent 直接调用调度层，依据内置电商决策模型自主完成候选审阅、分镜规划与组装：
-```bash
-python src/main_pipeline.py --spec job_spec.json
-```
-
-#### 模式二：Agent 细粒度干预执行 (Interactive / Override Mode)
-Agent 亦可显式介入每一处决策：
-1. **生成并审视封面候选**：
-   ```bash
-   python src/tools/extract_cover_candidates.py --video data/raw_samples/sample.mp4 --out-dir data/candidates/cover_candidates
-   ```
-   *Agent 查看 `cover_candidates.json` 并选定如 `cand_01`。*
-
-2. **生成并审视台词叙事池**：
-   ```bash
-   python src/tools/analyze_story_segments.py --video data/raw_samples/sample.mp4 --spec job_spec.json --out-json data/candidates/story_candidates.json
-   ```
-   *Agent 审阅分镜池，剔除价格信息，调整分镜编排生成 `my_plan.json`。*
-
-3. **指定 Agent 决策执行总装**：
-   ```bash
-   python src/main_pipeline.py --spec job_spec.json --cover-id cand_01 --plan my_plan.json
-   ```
 
 ---
 
-## 🎯 交付成果说明
+## 附录：底层确定性原子工具速查
 
-流程执行完成后，系统会在 `output/<project_id>/` 目录下生成：
-- `*_final.mp4`：1080×1920 高清竖屏成片（45~65s，纯产品介绍，100% 物理咬合原声，−14 LUFS 响度归一）；
-- `*_cover.jpg`：MIXCITY 风格高点击率品牌封面（水平 1:6:1 构图 + 金色渐变商品名）；
-- `*_cover_render_meta.json`：封面渲染几何 meta（QC 像素级复测依据）；
-- `qc_report.json`：constraints 驱动的全项量化质检报告（BLOCK/WARN 分级）；
-- `asr_verification_report.json`：ASR 语境同音字校正详细审计报告；
-- `agent_decision_manifest.json`：Agent 总导演全程决策记录清单（含选段审计与质检警告）。
+| 能力 | 模块入口 | 核心职责 |
+| :--- | :--- | :--- |
+| **封面候选与构图** | `src/tools/extract_cover_candidates.py` | 人脸偏航角 ≤12° / EAR / MAR / 清晰度 / 构图比例 / OCR 背景纯净度 |
+| **衣着躯干匹配** | `src/tools/detect_garment_match.py` | MediaPipe Pose 躯干 ROI 裁切 + 商品图去白底前景掩码 |
+| **价格与违规三通道** | `src/tools/detect_price.py` · `detect_violation.py` · `apply_violation_handling.py` | 中文数字价格拦截、抖音极限词检测与字幕/语音/OCR 三通道处置 |
+| **气口与切片风格** | `src/tools/detect_speech_pauses.py` · `extract_shot_features.py` · `slicing_rules.py` · `cut_style_rules.py` | 相对凹陷气口、全身景别/视角多样性、R1–R10 剪辑风格量化 |
+| **成片 ASR 与压脸安全** | `src/tools/verify_final_video_asr.py` · `check_overlay_face_safety.py` | 成片原声二次转写复核、贴纸/Hook 卡防压脸几何检查 |
+| **时间线双向桥接** | `src/tools/chatcut_bridge.py` | `plan.json` ↔ OpenChatCut 多轨时间线双向导出/回注 |

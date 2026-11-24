@@ -136,7 +136,8 @@ def compute_pipeline_key(
 
 
 def _stage_path(work_dir: str, stage: str, key: str, ext: str = "json") -> str:
-    return os.path.join(work_dir, f"{stage}_{key[:16]}.{ext}")
+    key_tag = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16] if "|" in key else key[:16]
+    return os.path.join(work_dir, f"{stage}_{key_tag}.{ext}")
 
 
 def load_stage(work_dir: str, stage: str, key: str) -> Optional[Dict[str, Any]]:

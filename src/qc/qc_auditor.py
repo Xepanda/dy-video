@@ -1070,12 +1070,14 @@ class QcAuditor:
             meta = json.load(f)
         elements = meta.get("elements", {})
 
-        # 品牌区在顶部（y < 400）
+        # 品牌区在顶部（y < 400，允许无品牌包装）
         brand = elements.get("brand_en", {})
-        ok_brand = bool(brand) and brand.get("top_y", 9999) < 400 and brand.get("center_x") == 540
+        is_plain = brand.get("plain") is True or not brand.get("lines")
+        ok_brand = is_plain or (bool(brand) and brand.get("top_y", 9999) < 400 and brand.get("center_x") == 540)
         self._assert(ok_brand, "封面品牌区几何",
-                     f"品牌标 top_y={brand.get('top_y')}, center_x={brand.get('center_x')}"
-                     if brand else "缺少品牌区 meta",
+                     "无品牌包装模式豁免" if is_plain else (
+                         f"品牌标 top_y={brand.get('top_y')}, center_x={brand.get('center_x')}"
+                         if brand else "缺少品牌区 meta"),
                      metric_key="text.brand_bbox")
 
         # 商品名在下方（y >= 1536 即 80% 画幅）且底部留白 >= 80px（避让小黄车）

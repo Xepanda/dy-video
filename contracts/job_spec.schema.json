@@ -1,26 +1,42 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "job_spec.schema.json",
-  "title": "抖音带货直播剪辑任务契约 job_spec.json",
+  "title": "抖音带货直播剪辑任务契约 job_spec.json v3.2",
   "type": "object",
-  "required": ["project_id", "raw_video_path"],
+  "required": ["project_id"],
+  "anyOf": [
+    { "required": ["raw_video_path"] },
+    { "required": ["raw_video_paths"] }
+  ],
   "additionalProperties": true,
   "properties": {
     "project_id": { "type": "string", "minLength": 1, "description": "任务代号，用于输出目录命名" },
-    "raw_video_path": { "type": "string", "minLength": 1, "description": "原始直播视频绝对路径" },
+    "raw_video_path": { "type": "string", "description": "原始直播视频绝对路径（兼容单源配置）" },
+    "raw_video_paths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "多源原始直播视频路径列表（优先于 raw_video_path）"
+    },
     "brand": {
       "type": "object",
-      "description": "品牌信息（有则做，无则默认 MIXCITY）",
+      "description": "品牌信息（选填，留空表示无品牌包装）",
       "properties": {
-        "title_en": { "type": "string", "default": "MIXCITY" },
-        "subtitle_cn": { "type": "string", "default": "深圳高端女装" }
+        "title_en": { "type": "string", "default": "" },
+        "subtitle_cn": { "type": "string", "default": "" }
       }
     },
     "product": {
       "type": "object",
       "properties": {
+        "sku_id": { "type": "string", "description": "商品唯一 SKU 编码（V3）" },
+        "name": { "type": "string", "description": "商品标准全称（V3）" },
+        "category": { "type": "string", "description": "品类名称（V3）" },
         "title_line1": { "type": "string", "description": "商品名第1行（材质/卖点）" },
         "title_line2": { "type": "string", "description": "商品名第2行（品类）" },
+        "attributes": { "type": "object", "description": "商品属性字典（领型/材质/版型等）" },
+        "allowed_variants": { "type": "array", "items": { "type": "string" }, "description": "允许展示的颜色/尺码变体" },
+        "selling_points": { "type": "array", "items": { "type": "string" }, "description": "核心卖点列表" },
+        "reference_images": { "type": "array", "items": { "type": "string" }, "description": "商品参考平铺图/白底图" },
         "item_images": {
           "type": "array",
           "maxItems": 2,
@@ -54,6 +70,18 @@
           "enum": ["auto", "force_off"],
           "default": "force_off",
           "description": "双色对比分屏策略（规划中，当前版本不生效）"
+        },
+        "automation": {
+          "type": "object",
+          "description": "V3 全自动剪辑配置",
+          "properties": {
+            "pipeline_version": { "type": ["integer", "string"], "default": 3.2 },
+            "auto_edit": { "type": "boolean", "default": true },
+            "agent_provider": { "type": "string", "description": "外部执行 Agent 标识（可选审计字段，不绑定执行环境）" },
+            "quality_policy": { "enum": ["strict", "standard", "limited"], "default": "standard" },
+            "visual_verification": { "enum": ["required", "optional", "disabled"], "default": "optional" },
+            "max_replan_rounds": { "type": "integer", "default": 2 }
+          }
         }
       }
     }

@@ -17,3 +17,4 @@ opencc-python-reimplemented>=0.1.7
 
 pywebview>=6.0.0
 pyinstaller>=6.0.0
+pytest>=7.0.0

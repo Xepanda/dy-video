@@ -1,0 +1,411 @@
+# -*- coding: utf-8 -*-
+"""
+test_project_context.py - 统一项目上下文与防旧成片污染单元测试 (V3 PR-16)
+"""
+
+import os
+import sys
+import json
+import tempfile
+import pytest
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from src.core.project_context import (
+    ProjectPaths,
+    InputManifest,
+    is_historical_output,
+    sanitize_id,
+    compute_job_fingerprint,
+    compute_file_sha256,
+    compute_full_file_sha256,
+    compute_file_fast_fingerprint,
+    normalize_project_path,
+)
+
+
+def test_sanitize_id():
+    assert sanitize_id("C:\\Users\\test/video.mp4") == "C_Users_test_video_mp4"
+    assert sanitize_id("src-01_clean") == "src-01_clean"
+    assert sanitize_id("") == "src"
+
+
+def test_project_paths_structure():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        proj_root = os.path.join(tmpdir, "my_project")
+        os.makedirs(os.path.join(proj_root, "素材"), exist_ok=True)
+
+        paths = ProjectPaths(proj_root, run_id="run_20261120_test")
+        assert paths.project_id == "my_project"
+        assert paths.materials_dir == os.path.join(proj_root, "素材")
+        assert paths.work_dir == os.path.join(proj_root, "work", "run_20261120_test")
+        assert paths.output_dir == os.path.join(proj_root, "output", "run_20261120_test")
+        assert paths.latest_pointer == os.path.join(proj_root, "output", "latest.json")
+
+        paths.ensure_runtime_dirs()
+        assert os.path.isdir(paths.work_dir)
+        assert os.path.isdir(paths.output_dir)
+        # 绝不在素材目录下创建 work 或 output
+        assert not os.path.exists(os.path.join(paths.materials_dir, "work"))
+        assert not os.path.exists(os.path.join(paths.materials_dir, "output"))
+
+
+def test_historical_output_detection():
+    pid = "project-3"
+
+    # 1. 同名成片
+    is_hist, reason = is_historical_output(f"/some/dir/{pid}.mp4", pid)
+    assert is_hist is True
+    assert "成片" in reason
+
+    # 2. 带 final 后缀
+    is_hist, _ = is_historical_output(f"/some/dir/{pid}_final.mp4", pid)
+    assert is_hist is True
+
+    is_hist, _ = is_historical_output("/some/dir/final.mp4", pid)
+    assert is_hist is True
+
+    # 3. 位于 output 目录
+    is_hist, reason = is_historical_output(f"/root/output/run_01/clip_01.mp4", pid)
+    assert is_hist is True
+    assert "output" in reason
+
+    # 4. 真实原始素材
+    is_hist, _ = is_historical_output("/some/dir/20261018_live_stream_01.mp4", pid)
+    assert is_hist is False
+
+
+def test_input_manifest_scans_and_excludes_old_outputs():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        proj_root = os.path.join(tmpdir, "project-3")
+        mat_dir = os.path.join(proj_root, "素材")
+        os.makedirs(mat_dir, exist_ok=True)
+
+        # 真实原始视频
+        raw1 = os.path.join(mat_dir, "20261018_live_part1.mp4")
+        raw2 = os.path.join(mat_dir, "20261018_live_part2.mp4")
+        with open(raw1, "wb") as f: f.write(b"video1_data")
+        with open(raw2, "wb") as f: f.write(b"video2_data")
+
+        # 历史旧成片
+        old_out = os.path.join(mat_dir, "project-3.mp4")
+        old_final = os.path.join(mat_dir, "final.mp4")
+        with open(old_out, "wb") as f: f.write(b"old_rendered_video")
+        with open(old_final, "wb") as f: f.write(b"old_final_video")
+
+        # 商品图
+        img = os.path.join(mat_dir, "product_front.jpg")
+        with open(img, "wb") as f: f.write(b"image_data")
+
+        paths = ProjectPaths(proj_root, run_id="test_run_01")
+        manifest_mgr = InputManifest(paths)
+        manifest = manifest_mgr.scan_and_resolve()
+
+        # 验证提取的有效源视频只有 2 个真实直播片段，历史成片被排除
+        src_files = [s["filename"] for s in manifest["source_videos"]]
+        assert "20261018_live_part1.mp4" in src_files
+        assert "20261018_live_part2.mp4" in src_files
+        assert "project-3.mp4" not in src_files
+        assert "final.mp4" not in src_files
+
+        # 验证 source_id 为规范且不含路径字符的标识符
+        for s in manifest["source_videos"]:
+            assert ":" not in s["source_id"]
+            assert "/" not in s["source_id"]
+            assert "\\" not in s["source_id"]
+            assert s["source_id"].startswith("src_")
+
+        # 验证排除列表中记录了被排除的旧成片
+        excl_paths = [e["path"] for e in manifest["excluded_files"]]
+        assert old_out in excl_paths
+        assert old_final in excl_paths
+
+        # 验证保存到 work/<run_id>，绝不写素材目录
+        saved_p = manifest_mgr.save_manifest()
+        assert os.path.isfile(saved_p)
+        assert paths.work_dir in saved_p
+        assert not os.path.exists(os.path.join(mat_dir, "input_manifest.json"))
+
+
+def test_input_manifest_explicit_list_rejects_historical_output():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        proj_root = os.path.join(tmpdir, "project-3")
+        os.makedirs(proj_root, exist_ok=True)
+        raw_vid = os.path.join(proj_root, "raw_live.mp4")
+        with open(raw_vid, "wb") as f: f.write(b"raw")
+        fake_old = os.path.join(proj_root, "project-3.mp4")
+        with open(fake_old, "wb") as f: f.write(b"old")
+
+        paths = ProjectPaths(proj_root, run_id="run_exp")
+        manifest_mgr = InputManifest(paths)
+        # 即使显式传入旧成片，也必须被拦截拦截排除
+        res = manifest_mgr.scan_and_resolve(explicit_video_paths=[raw_vid, fake_old])
+        src_paths = [s["path"] for s in res["source_videos"]]
+        assert raw_vid in src_paths
+        assert fake_old not in src_paths
+        assert any("project-3.mp4" in e["path"] for e in res["excluded_files"])
+
+
+def test_input_manifest_product_images_discovery():
+    """验证商品图片发现与历史封面隔离。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        proj_root = os.path.join(tmpdir, "project-test")
+        mat_dir = os.path.join(proj_root, "素材")
+        os.makedirs(mat_dir, exist_ok=True)
+
+        # 真实商品图
+        img_front = os.path.join(mat_dir, "封面图.png")
+        with open(img_front, "wb") as f: f.write(b"img_data_front")
+
+        # 历史项目封面（应被隔离）
+        old_cover = os.path.join(mat_dir, "project-test.jpg")
+        with open(old_cover, "wb") as f: f.write(b"old_rendered_cover")
+
+        paths = ProjectPaths(proj_root, run_id="run_img_01")
+        manifest_mgr = InputManifest(paths)
+        res = manifest_mgr.scan_and_resolve()
+
+        img_names = [im["filename"] for im in res["product_images"]]
+        assert "封面图.png" in img_names
+        assert "project-test.jpg" not in img_names
+
+        excl_names = [os.path.basename(e["path"]) for e in res["excluded_files"]]
+        assert "project-test.jpg" in excl_names
+
+
+def test_compute_job_fingerprint_sensitivity():
+    """验证任务指纹对商品变体、风格、高亮词、属性与图片变动的敏感性（防止配置变更复用旧成片）。"""
+    base_spec = {
+        "project_id": "test_proj",
+        "product": {
+            "name": "高领羊绒衫",
+            "category": "女装/针织",
+            "allowed_variants": ["米白"],
+            "selling_points": ["亲肤保暖"],
+            "attributes": {"面料": "羊绒"},
+            "item_images": ["img1.png"],
+        },
+        "options": {
+            "duration_range": "45-65",
+            "style_preset": "balanced",
+            "split_strategy": "force_off",
+            "highlight_keywords": ["闭眼入"],
+            "cover_strategy": "smart_frontal",
+        }
+    }
+    fp_base = compute_job_fingerprint(base_spec)
+
+    # 1. 修改颜色变体
+    spec_variant = json.loads(json.dumps(base_spec))
+    spec_variant["product"]["allowed_variants"] = ["黑色"]
+    assert compute_job_fingerprint(spec_variant) != fp_base, "修改颜色变体必须改变任务指纹"
+
+    # 2. 修改剪辑风格
+    spec_style = json.loads(json.dumps(base_spec))
+    spec_style["options"]["style_preset"] = "fast"
+    assert compute_job_fingerprint(spec_style) != fp_base, "修改剪辑风格预设必须改变任务指纹"
+
+    # 3. 修改分屏策略
+    spec_split = json.loads(json.dumps(base_spec))
+    spec_split["options"]["split_strategy"] = "auto"
+    assert compute_job_fingerprint(spec_split) != fp_base, "修改分屏策略必须改变任务指纹"
+
+    # 4. 修改高亮词
+    spec_kw = json.loads(json.dumps(base_spec))
+    spec_kw["options"]["highlight_keywords"] = ["爆款推荐"]
+    assert compute_job_fingerprint(spec_kw) != fp_base, "修改字幕高亮词必须改变任务指纹"
+
+    # 5. 修改封面策略
+    spec_cov = json.loads(json.dumps(base_spec))
+    spec_cov["options"]["cover_strategy"] = "product_image"
+    assert compute_job_fingerprint(spec_cov) != fp_base, "修改封面策略必须改变任务指纹"
+
+    # 6. 修改商品贴图
+    spec_img = json.loads(json.dumps(base_spec))
+    spec_img["product"]["item_images"] = ["img2.png"]
+    assert compute_job_fingerprint(spec_img) != fp_base, "修改商品图片必须改变任务指纹"
+
+    # 7. 添加或修改品牌信息必须改变任务指纹
+    spec_brand = json.loads(json.dumps(base_spec))
+    spec_brand["brand"] = {"title_en": "NEW_BRAND", "subtitle_cn": "高端女装"}
+    assert compute_job_fingerprint(spec_brand) != fp_base, "添加或修改品牌信息必须改变任务指纹"
+
+    spec_brand2 = json.loads(json.dumps(base_spec))
+    spec_brand2["brand"] = {"title_en": "OTHER_BRAND"}
+    assert compute_job_fingerprint(spec_brand2) != compute_job_fingerprint(spec_brand), "不同品牌必须生成不同指纹"
+
+    # 8. 相同配置指纹保持完全一致
+    assert compute_job_fingerprint(base_spec) == fp_base, "相同配置任务指纹必须保持确定性幂等"
+
+
+def test_same_stem_different_extension_source_ids():
+    """验证同 stem 不同扩展名的文件具有完全不冲突的 source_id 与 candidate_id。"""
+    from src.core.candidate_generator import CandidateGenerator
+    with tempfile.TemporaryDirectory() as tmpdir:
+        proj_root = os.path.join(tmpdir, "proj_same_stem")
+        mat_dir = os.path.join(proj_root, "素材")
+        os.makedirs(mat_dir, exist_ok=True)
+        v_mp4 = os.path.join(mat_dir, "live01.mp4")
+        v_mov = os.path.join(mat_dir, "live01.mov")
+        with open(v_mp4, "wb") as f: f.write(b"mp4_data")
+        with open(v_mov, "wb") as f: f.write(b"mov_data")
+
+        paths = ProjectPaths(proj_root)
+        manifest_mgr = InputManifest(paths)
+        manifest = manifest_mgr.scan_and_resolve(explicit_video_paths=[v_mp4, v_mov])
+        src_ids = [s["source_id"] for s in manifest["source_videos"]]
+        assert len(src_ids) == 2
+        assert src_ids[0] != src_ids[1], f"同 stem 不同扩展名 source_id 严禁冲突: {src_ids}"
+
+        # 验证 CandidateGenerator 生成的 candidate_id 也继承且不冲突
+        cg = CandidateGenerator()
+        utts = [{"utterance_id": "u1", "start_ms": 0, "end_ms": 2500, "text": "面料非常舒服", "ends_sentence": True}]
+        c1 = cg.generate_candidates(utts, {"name": "卫衣"}, source_id=v_mp4, source_file=v_mp4)
+        c2 = cg.generate_candidates(utts, {"name": "卫衣"}, source_id=v_mov, source_file=v_mov)
+        assert c1[0]["candidate_id"] != c2[0]["candidate_id"], "同 stem 不同扩展名的 candidate_id 严禁冲突"
+        assert c1[0]["frame_ids"][0] != c2[0]["frame_ids"][0], "同 stem 不同扩展名的 frame_id 严禁冲突"
+
+
+def test_project_paths_workspace_substring_safety():
+    """验证含 workspace / artwork 等包含 'work' 子串的路径不会被错误截断。"""
+    if sys.platform == "win32":
+        fake_path = os.path.normpath(r"D:/dev/workspace/my_video_project")
+        work_proj_path = os.path.normpath(r"D:/work/projects/my_video_project")
+        work_run_path = os.path.normpath(r"D:/dev/workspace/my_video_project/work/run_123")
+    else:
+        fake_path = "/opt/dev/workspace/my_video_project"
+        work_proj_path = "/var/work/projects/my_video_project"
+        work_run_path = "/opt/dev/workspace/my_video_project/work/run_123"
+
+    p = ProjectPaths(fake_path)
+    assert p.project_root == fake_path, f"路径截断防护异常: 期望 {fake_path}, 实际 {p.project_root}"
+
+    # 验证含 /work/ 的实际目录结构（如 D:\work\projects\my-video 或 /home/runner/work/dy-video/dy-video）绝不被误截断
+    p3 = ProjectPaths(work_proj_path)
+    assert p3.project_root == work_proj_path, f"含有 work 父路径被错误截断: 期望 {work_proj_path}, 实际 {p3.project_root}"
+
+    ci_path = os.path.abspath("/home/runner/work/dy-video/dy-video")
+    p4 = ProjectPaths(ci_path)
+    assert p4.project_root == ci_path, f"CI runner 路径被错误截断: 期望 {ci_path}, 实际 {p4.project_root}"
+
+    # 验证真实 work/run 子目录能正确回溯
+    p2 = ProjectPaths(work_run_path)
+    assert p2.project_root == fake_path, f"work 运行时目录未正确回溯到项目根: 期望 {fake_path}, 实际 {p2.project_root}"
+
+    # 验证非法 run_id 注入拦截
+    for bad_id in ("../素材", "run/01", "run\\01", "..", "run..id", "run@123", " "):
+        with pytest.raises(ValueError, match="非法 run_id"):
+            ProjectPaths(fake_path, run_id=bad_id)
+
+
+def test_cross_platform_and_wsl_path_mapping():
+    """测试跨平台路径解析与 WSL 路径映射契约 (使用 ntpath / PureWindowsPath 明确解耦)。"""
+    import ntpath
+    from pathlib import PureWindowsPath, PurePosixPath
+
+    # 1. POSIX / Linux / WSL 目标平台路径映射验证
+    win_path = r"D:/dev/workspace/my_video_project"
+    assert normalize_project_path(win_path, target_platform="linux") == "/mnt/d/dev/workspace/my_video_project"
+    assert normalize_project_path(r"D:\dev\workspace\my_video_project", target_platform="linux") == "/mnt/d/dev/workspace/my_video_project"
+    assert normalize_project_path("D:", target_platform="linux") == "/mnt/d"
+    assert normalize_project_path("D:/", target_platform="linux") == "/mnt/d"
+    assert normalize_project_path("D:\\", target_platform="linux") == "/mnt/d"
+
+    posix_pure = PurePosixPath(normalize_project_path(win_path, target_platform="linux"))
+    assert str(posix_pure) == "/mnt/d/dev/workspace/my_video_project"
+    assert posix_pure.parts == ("/", "mnt", "d", "dev", "workspace", "my_video_project")
+
+    # 2. Windows 目标平台路径映射验证 (使用 ntpath / PureWindowsPath 语义解耦)
+    wsl_path = "/mnt/d/dev/workspace/my_video_project"
+    assert normalize_project_path(wsl_path, target_platform="win32") == r"D:\dev\workspace\my_video_project"
+    assert normalize_project_path("/mnt/d", target_platform="win32") == "D:\\"
+    assert normalize_project_path("/mnt/d/", target_platform="win32") == "D:\\"
+    assert normalize_project_path("D:", target_platform="win32") == "D:\\"
+    assert normalize_project_path("D:/", target_platform="win32") == "D:\\"
+    assert normalize_project_path("D:/dev/workspace/my_video_project", target_platform="win32") == r"D:\dev\workspace\my_video_project"
+
+    win_pure = PureWindowsPath(normalize_project_path(wsl_path, target_platform="win32"))
+    assert str(win_pure) == r"D:\dev\workspace\my_video_project"
+    assert win_pure.drive == "D:"
+    assert win_pure.parts == ("D:\\", "dev", "workspace", "my_video_project")
+
+    # 3. 宿主物理 ProjectPaths 验证 (跨平台路径统一映射与子目录截断)
+    if sys.platform == "win32":
+        p = ProjectPaths(wsl_path)
+        assert p.project_root == ntpath.normpath(r"D:\dev\workspace\my_video_project")
+        win_work_run = r"D:/dev/workspace/my_video_project/work/run_123"
+        p_sub = ProjectPaths(win_work_run)
+        assert p_sub.project_root == ntpath.normpath(r"D:\dev\workspace\my_video_project")
+    else:
+        p = ProjectPaths(win_path)
+        expected = "/mnt/d/dev/workspace/my_video_project"
+        assert p.project_root == expected
+        p_wsl = ProjectPaths(wsl_path)
+        assert p_wsl.project_root == expected
+        posix_work_run = "/mnt/d/dev/workspace/my_video_project/work/run_123"
+        p_sub = ProjectPaths(posix_work_run)
+        assert p_sub.project_root == expected
+        win_work_run = r"D:/dev/workspace/my_video_project/work/run_123"
+        p_win_sub = ProjectPaths(win_work_run)
+        assert p_win_sub.project_root == expected
+
+
+def test_full_file_sha256_detects_middle_byte_changes():
+    """验证完整 SHA-256 可检测大文件中间字节修改，而仅采样的快速指纹无法察觉。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_file = os.path.join(tmpdir, "big_video.mp4")
+        # 创建大于 2MB 的文件 (block_size 64KB * 16 blocks = 1MB 头部, 1MB 尾部)
+        total_size = 3 * 1024 * 1024  # 3 MB
+        with open(test_file, "wb") as f:
+            f.write(b"A" * total_size)
+
+        initial_fast = compute_file_fast_fingerprint(test_file)
+        initial_full = compute_full_file_sha256(test_file)
+
+        # 仅修改文件正中间位置的字节 (1.5 MB 处)
+        with open(test_file, "r+b") as f:
+            f.seek(1572864)  # 1.5 MB
+            f.write(b"MODIFIED_MIDDLE_PAYLOAD")
+
+        new_fast = compute_file_fast_fingerprint(test_file)
+        new_full = compute_full_file_sha256(test_file)
+
+        # 验证快速指纹因采样首尾未变而保持相同，但完整 SHA-256 成功检测到篡改！
+        assert initial_fast == new_fast, "首尾采样指纹不应对中间字节修改敏感"
+        assert initial_full != new_full, "完整 SHA-256 必须成功检测出大视频中间字节篡改"
+
+
+def test_compute_job_fingerprint_string_and_none_brand():
+    """验证 brand 为纯字符串、None、空字典时均能安全稳定计算指纹。"""
+    base_spec = {"project_id": "test", "product": {"name": "针织衫"}}
+
+    fp_none = compute_job_fingerprint(dict(base_spec, brand=None))
+    fp_empty = compute_job_fingerprint(dict(base_spec, brand={}))
+    fp_str = compute_job_fingerprint(dict(base_spec, brand="MIXCITY"))
+    fp_dict = compute_job_fingerprint(dict(base_spec, brand={"title_en": "MIXCITY", "subtitle_cn": ""}))
+
+    assert fp_none == fp_empty, "None 品牌与空字典品牌指纹应等价"
+    assert fp_str == fp_dict, "字符串品牌与等价字典品牌指纹应一致"
+    assert fp_str != fp_none, "有品牌与无品牌指纹应严格隔离"
+
+
+def main():
+    test_sanitize_id()
+    test_project_paths_structure()
+    test_project_paths_workspace_substring_safety()
+    test_cross_platform_and_wsl_path_mapping()
+    test_full_file_sha256_detects_middle_byte_changes()
+    test_historical_output_detection()
+    test_input_manifest_scans_and_excludes_old_outputs()
+    test_input_manifest_explicit_list_rejects_historical_output()
+    test_input_manifest_product_images_discovery()
+    test_compute_job_fingerprint_sensitivity()
+    test_compute_job_fingerprint_string_and_none_brand()
+    test_same_stem_different_extension_source_ids()
+    print("[PASS] All project_context tests passed!")
+
+
+if __name__ == "__main__":
+    main()

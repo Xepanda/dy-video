@@ -164,11 +164,22 @@ def verify_final_video_asr(
     # ---- 1. 复检转录（带缓存：同目录 final_asr_segments.json）----
     segs = None
     cache_path = os.path.join(work_dir, "final_asr_segments.json") if work_dir else None
+    stat = os.stat(video_path)
+    video_size = stat.st_size
+    video_mtime = int(stat.st_mtime)
+
     if use_cache and cache_path and os.path.exists(cache_path):
         try:
             with open(cache_path, "r", encoding="utf-8") as f:
                 cached = json.load(f)
-            if abs(float(cached.get("duration", 0)) - total_dur) < 1.0:
+            cached_size = cached.get("video_size")
+            cached_mtime = cached.get("video_mtime")
+            cached_dur = float(cached.get("duration", 0))
+            if (
+                cached_size == video_size
+                and (cached_mtime is None or abs(cached_mtime - video_mtime) <= 1)
+                and abs(cached_dur - total_dur) < 0.5
+            ):
                 segs = cached.get("segments")
                 print(f"[FINAL-ASR] 命中复检转录缓存（{len(segs or [])} 句）")
         except Exception:
@@ -180,14 +191,28 @@ def verify_final_video_asr(
             segs = engine.transcribe_video(video_path)
             if cache_path:
                 with open(cache_path, "w", encoding="utf-8") as f:
-                    json.dump({"duration": total_dur, "segments": segs},
-                              f, ensure_ascii=False, indent=2)
+                    json.dump({
+                        "duration": total_dur,
+                        "video_size": video_size,
+                        "video_mtime": video_mtime,
+                        "segments": segs
+                    }, f, ensure_ascii=False, indent=2)
             print(f"[FINAL-ASR] 成片复检转录完成: {len(segs)} 句 / {total_dur:.1f}s")
         except Exception as e:
             _add("V0", "成片 ASR 复检（转录）", "WARN",
                  f"复检转录失败（环境问题，不拦截交付）: {str(e)[:120]}")
             return {"passed": True, "checks": checks, "warnings": warnings,
                     "skipped": True}
+
+    # 简繁统一归一化（防止 Faster-Whisper 偶发繁体字影响与简体字幕的一致性计算）
+    try:
+        import opencc
+        _cc = opencc.OpenCC("t2s")
+        for s in (segs or []):
+            if "text" in s:
+                s["text"] = _cc.convert(s["text"])
+    except Exception:
+        pass
 
     # ---- V4 识别密度健全性 ----
     density_min = float(cfg.get("density_min", 0.06) or 0.06)

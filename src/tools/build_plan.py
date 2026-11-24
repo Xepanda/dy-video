@@ -25,7 +25,7 @@ import json
 import re
 import statistics
 import argparse
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Union
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
@@ -210,6 +210,15 @@ def is_blacklisted(text: str, use_price: bool = True,
     for pat in chg_patterns:
         if re.search(pat, probe):
             return True, f"命中换款/离场 ({pat})"
+    # 违规极限词排查（如 '扣1' 等平台禁止互动/诱导话术，统一防范）
+    try:
+        from src.tools.detect_violation import find_violation_matches
+        v_matches = find_violation_matches(probe, constraints=constraints)
+        block_hits = [m for m in v_matches if m.get("severity") == "BLOCK"]
+        if block_hits:
+            return True, f"命中违规极限词: {[m['word'] for m in block_hits]}"
+    except Exception:
+        pass
     return False, ""
 
 
@@ -265,6 +274,15 @@ def _segment_score(seg: Dict[str, Any], category: str, prod_ctx: Dict[str, Any] 
                     score -= 50.0
                 else:
                     score -= 15.0
+
+        # 跨品类他品负向词强惩罚（与 verify_clip_product_alignment 对齐，防止错选导致门禁拦截）
+        from src.tools.verify_clip_product_alignment import CATEGORY_NEGATIVE_TERMS
+        cat = "top" if (prod_ctx.get("is_top") and not prod_ctx.get("is_bottom")) else ("bottom" if prod_ctx.get("is_bottom") else "other")
+        title = f"{prod_ctx.get('title_line1', '')} {prod_ctx.get('title_line2', '')}"
+        neg_terms = [t for t in CATEGORY_NEGATIVE_TERMS.get(cat, []) if t not in title]
+        for t in neg_terms:
+            if t in text:
+                score -= 100.0
     return max(0.0, score)
 
 
@@ -277,6 +295,13 @@ def build_blocks(segments: List[Dict[str, Any]],
     绝不跨文件合并（不同视频的时间轴不相通，合并会产生无效拼接）。
     无 source_file 的单源 segments 走原有逻辑，行为完全不变。
     """
+    neg_terms = []
+    if prod_ctx:
+        from src.tools.verify_clip_product_alignment import CATEGORY_NEGATIVE_TERMS
+        cat = "top" if (prod_ctx.get("is_top") and not prod_ctx.get("is_bottom")) else ("bottom" if prod_ctx.get("is_bottom") else "other")
+        title = f"{prod_ctx.get('title_line1', '')} {prod_ctx.get('title_line2', '')}"
+        neg_terms = [t for t in CATEGORY_NEGATIVE_TERMS.get(cat, []) if t not in title]
+
     clean, rejected = [], []
     for s in segments:
         text = _clean_oral_fillers(s.get("text", "").strip())
@@ -289,8 +314,14 @@ def build_blocks(segments: List[Dict[str, Any]],
         bad, reason = is_blacklisted(text, constraints=constraints)
         if bad:
             rejected.append({**s, "reason": reason})
-        else:
-            clean.append(dict(s, text=text))
+            continue
+
+        hit_neg = next((t for t in neg_terms if t in text), None)
+        if hit_neg:
+            rejected.append({**s, "reason": f"命中非本品品类词 ({hit_neg})"})
+            continue
+
+        clean.append(dict(s, text=text))
 
     blocks: List[Dict[str, Any]] = []
     multi = any(s.get("source_file") for s in clean)
@@ -455,7 +486,8 @@ def _resolve_candidate_wrist_motion(b: Dict[str, Any], raw_video_path: Optional[
 
 def _snap_end_to_sentence(segs: List[Dict[str, Any]], hard_end: float,
                           tolerance: float = SNAP_TOLERANCE_SEC,
-                          pauses: List[Tuple[float, float]] = None) -> float:
+                          pauses: List[Tuple[float, float]] = None,
+                          scene_cuts: List[float] = None) -> float:
     """把硬裁剪结束点吸附到最近的句子边界（段末标点），解决"对话从半句砍断"。
 
     只在 [hard_end - tolerance, hard_end + 0.2] 窗口内寻找候选（宁短勿长，
@@ -470,6 +502,8 @@ def _snap_end_to_sentence(segs: List[Dict[str, Any]], hard_end: float,
       · ⚠️ 实测修正：参考成片切点处的 −120dB 是**拼接产物**（剪辑软件切音轨留下的缝），
         不是选段信号——源侧凹陷在切点处与随机点无富集。故气口只作精调，
         不承担"选段"职责（承担它的是 ASR 句末）。
+      · **镜头边界共振（V3 PR-01）**：若在吸附窗口内句末与 scene_cut 邻近（<=0.25s），
+        吸附到镜头切换时刻，达成视听切点同步。
     """
     best = None
     for s in segs:
@@ -480,6 +514,14 @@ def _snap_end_to_sentence(segs: List[Dict[str, Any]], hard_end: float,
             if best is None or t > best:
                 best = t
     punct_end = best if best is not None else hard_end
+
+    # 若附近有镜头切换点且在句末之后的停顿微区间内（0 <= cut - punct_end <= 0.25），或极小时间抖动内（abs <= 0.05），
+    # 吸附到镜头切换时刻，达成视听切点同步，且绝不向后倒切吞字
+    if scene_cuts:
+        safe_cuts = [c for c in scene_cuts if (0 <= (c - punct_end) <= 0.25) or (abs(c - punct_end) <= 0.05)]
+        if safe_cuts:
+            closest_cut = min(safe_cuts, key=lambda c: abs(c - punct_end))
+            punct_end = closest_cut
 
     if pauses:
         try:
@@ -494,12 +536,14 @@ def _snap_end_to_sentence(segs: List[Dict[str, Any]], hard_end: float,
 
 
 def _split_long_block(block: Dict[str, Any], max_sec: float,
-                        min_sec: float = 1.7) -> List[Dict[str, Any]]:
+                      min_sec: float = 1.7,
+                      scene_cuts: List[float] = None) -> List[Dict[str, Any]]:
     """把超长块按 ASR 句末边界拆成多段（R2）。
 
     参考成品 SSY410163 实测：最长段 12.97s，主体 5~10s——
     人工剪辑不会让一个镜头/一个话题连续占 30s。
     本函数按句末标点切分（保证不从半句断开），切点优先落在句末。
+    V3 PR-01：若存在 scene_cuts 且与句末共振，支持在镜头转换处切出自然 shot。
     """
     segs = sorted(block.get("segments", []) or [],
                  key=lambda s: s.get("start", 0.0))
@@ -519,6 +563,10 @@ def _split_long_block(block: Dict[str, Any], max_sec: float,
         if grp_dur >= max_sec and _ends_with_sentence_punct(s.get("text", "")):
             groups.append(cur)
             cur = []
+        elif scene_cuts and grp_dur >= min_sec * 1.5 and _ends_with_sentence_punct(s.get("text", "")):
+            if any(abs(c - s.get("end", 0.0)) <= 0.25 for c in scene_cuts):
+                groups.append(cur)
+                cur = []
     if cur:
         groups.append(cur)
 
@@ -568,7 +616,8 @@ def _split_long_block(block: Dict[str, Any], max_sec: float,
 
 def _trim_block_to_duration(block: Dict[str, Any], target: float,
                             prefer_keywords: List[str] = None,
-                            pauses: List[Tuple[float, float]] = None) -> Dict[str, Any]:
+                            pauses: List[Tuple[float, float]] = None,
+                            scene_cuts: List[float] = None) -> Dict[str, Any]:
     """将 block 修剪到 target 时长。优先段边界对齐；无法对齐时硬时间裁剪兜底。
 
     prefer_keywords: 给定时不取块首，而是滑动窗口选取"关键词命中最多"的连续段
@@ -605,12 +654,12 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
             kept = segs[i:j]
             rest = segs[j:]
             # 目标时长硬约束：窗口可能因单段过长而超出 target（如 32s 长句）→ 硬裁剪
-            # （2026-10-27：裁剪点吸附句末标点，避免从半句砍断）
+            # （2026-10-27：裁剪点吸附句末标点，避免从半句砍断；V3 结合 scene_cuts 视听同步）
             win_st = kept[0].get("start", block["start"])
             win_en = kept[-1].get("end", win_st + target)
             is_hc = False
             if win_en - win_st > target + 0.05:
-                win_en = _snap_end_to_sentence(kept, win_st + target, pauses=pauses)
+                win_en = _snap_end_to_sentence(kept, win_st + target, pauses=pauses, scene_cuts=scene_cuts)
                 cut_segs = [s for s in kept if s.get("start", 0) < win_en < s.get("end", 0)]
                 kept = [s for s in kept if s.get("start", 0) < win_en]
                 if cut_segs:
@@ -662,9 +711,9 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
         rest = segs[len(kept):]
     else:
         # 策略 2：段边界无法满足（单段超长）→ 硬时间裁剪到 target
-        # （2026-10-27：裁剪点吸附句末标点，保持对话完整）
+        # （2026-10-27：裁剪点吸附句末标点，保持对话完整；V3 结合 scene_cuts）
         use_hard_cut = True
-        hard_end = _snap_end_to_sentence(segs, block["start"] + target, pauses=pauses)
+        hard_end = _snap_end_to_sentence(segs, block["start"] + target, pauses=pauses, scene_cuts=scene_cuts)
         kept = [s for s in segs if s.get("start", 0) < hard_end]
         cut_segs = [s for s in segs if s.get("start", 0) < hard_end < s.get("end", 0)]
         if cut_segs:
@@ -695,9 +744,9 @@ def _trim_block_to_duration(block: Dict[str, Any], target: float,
         trimmed = _mk(kept)
         # 兜底（2026-10-21）：单段略超目标时（如 12.5s 段裁到 12.02s）段对齐无法
         # 缩短，会导致"修剪无进展→整块被丢弃→总时长跌破下限"。此处改用硬时间裁剪。
-        # （2026-10-27：同样吸附句末标点）
+        # （2026-10-27：同样吸附句末标点；V3 结合 scene_cuts）
         if trimmed["dur"] - target > 0.05:
-            hard_end = _snap_end_to_sentence(segs, block["start"] + target, pauses=pauses)
+            hard_end = _snap_end_to_sentence(segs, block["start"] + target, pauses=pauses, scene_cuts=scene_cuts)
             kept = [s for s in segs if s.get("start", 0) < hard_end]
             cut_segs = [s for s in segs if s.get("start", 0) < hard_end < s.get("end", 0)]
             if cut_segs:
@@ -852,10 +901,11 @@ def build_plan(
     segments: List[Dict[str, Any]],
     spec_data: Dict[str, Any],
     constraints: Dict[str, Any] = None,
-    scene_cuts: Optional[List[float]] = None,
+    scene_cuts: Optional[Union[List[float], Dict[str, List[float]]]] = None,
     cache_key: str = None,
     work_dir: str = None,
     pauses_by_source: Dict[str, List[Tuple[float, float]]] = None,
+    scene_cuts_by_source: Optional[Dict[str, List[float]]] = None,
 ) -> Dict[str, Any]:
     """生成 plan.json（结构符合 contracts/plan.schema.json）。
 
@@ -863,6 +913,9 @@ def build_plan(
 
     pauses_by_source（2026-11-01 R1）：{源文件绝对路径: [(气口时刻, dB), ...]}，
     用于把裁剪点吸附到语音气口（实测参考成片 78% 的切点落在近数字静音处）。
+
+    scene_cuts / scene_cuts_by_source（V3 PR-01）：多源镜头切换边界字典或列表，
+    严格按源区分，参与候选切点吸附与长块拆分，避免跨源时间轴串扰。
     """
     if cache_key and work_dir:
         from src.tools.stage_cache import load_stage
@@ -881,6 +934,42 @@ def build_plan(
     funnel_c = (constraints.get("video", {}) or {}).get("funnel", {})
     dur_range = ((constraints.get("video", {}) or {}).get("duration_range")) or [45, 65]
     dur_min, dur_max = float(dur_range[0]), float(dur_range[1])
+
+    # 镜头边界多源归一化（PR-01）
+    norm_scene_cuts: Dict[str, List[float]] = {}
+    if scene_cuts_by_source:
+        norm_scene_cuts.update(scene_cuts_by_source)
+    if isinstance(scene_cuts, dict):
+        norm_scene_cuts.update(scene_cuts)
+    elif isinstance(scene_cuts, list) and raw_video_path and raw_video_path not in norm_scene_cuts:
+        norm_scene_cuts[raw_video_path] = scene_cuts
+
+    # V2 兼容开关：若显式设置 enable_scene_cuts: false 则不启用
+    _slicing_c = (constraints.get("slicing_rules") or {}) if constraints else {}
+    _enable_cuts = _slicing_c.get("enable_scene_cuts", True)
+    if not _enable_cuts:
+        norm_scene_cuts = {}
+
+    def _cuts_for(block: Dict[str, Any]) -> Optional[List[float]]:
+        if not _enable_cuts:
+            return None
+        if not norm_scene_cuts:
+            if isinstance(scene_cuts, list):
+                return scene_cuts
+            return None
+        sf = block.get("source_file") or ""
+        if not sf:
+            if len(norm_scene_cuts) == 1:
+                return next(iter(norm_scene_cuts.values()))
+            return None
+        got = norm_scene_cuts.get(sf)
+        if not got:
+            key = os.path.normcase(os.path.abspath(sf))
+            for k, v in norm_scene_cuts.items():
+                if os.path.normcase(os.path.abspath(k)) == key:
+                    got = v
+                    break
+        return got or None
 
     # spec 的 duration_range 可收窄（如 "48-55"），但不允许超出 [45,65]
     spec_range = (spec_data.get("options", {}) or {}).get("duration_range", "45-55")
@@ -941,6 +1030,9 @@ def build_plan(
 
     meta = {"funnel": {}, "rejected_count": len(rejected),
             "candidate_blocks": len(blocks), "notes": []}
+    if norm_scene_cuts:
+        meta["scene_cuts"] = {os.path.basename(k): len(v) for k, v in norm_scene_cuts.items()}
+        meta["scene_cuts_count"] = sum(len(v) for v in norm_scene_cuts.values())
     if anchor:
         meta["notes"].append(
             f"商品锚点白名单 {len(blocks)} 窗 / "
@@ -1071,7 +1163,8 @@ def build_plan(
                     _pk = HOOK_KEYWORDS if len(picked) == 0 else None
                     tb = _trim_block_to_duration(
                         _cur, _want, prefer_keywords=_pk,
-                        pauses=_pauses_for(_cur))
+                        pauses=_pauses_for(_cur),
+                        scene_cuts=_cuts_for(_cur))
                     if tb["dur"] < 1.0 or acc + tb["dur"] > q_max:
                         break
                     tb["_quota_cat"] = cat
@@ -1099,7 +1192,8 @@ def build_plan(
                 tb = _trim_block_to_duration(
                     b, q_max - acc,
                     prefer_keywords=(HOOK_KEYWORDS if cat == "hook" else None),
-                    pauses=_pauses_for(b))
+                    pauses=_pauses_for(b),
+                    scene_cuts=_cuts_for(b))
                 if tb["dur"] >= 1.0:
                     tb["_quota_cat"] = cat
                     picked.append(tb)
@@ -1142,7 +1236,8 @@ def build_plan(
                 break
             need = dur_min - total
             tb = _trim_block_to_duration(b, min(b["dur"], need + 2.0),
-                                        pauses=_pauses_for(b))
+                                        pauses=_pauses_for(b),
+                                        scene_cuts=_cuts_for(b))
             if tb["dur"] >= 1.0:
                 # 保持 decision_closing 在尾端
                 closing_indices = [idx for idx, blk in enumerate(ordered)
@@ -1180,7 +1275,8 @@ def build_plan(
         target_block = ordered_blocks[target_idx]
         if target_block["dur"] - excess >= 1.0:
             tb = _trim_block_to_duration(target_block, target_block["dur"] - excess,
-                                        pauses=_pauses_for(target_block))
+                                        pauses=_pauses_for(target_block),
+                                        scene_cuts=_cuts_for(target_block))
             new_total = round(total - target_block["dur"] + tb["dur"], 2)
             if new_total < total - 0.05:  # 有实质进展才接受
                 ordered_blocks[target_idx] = tb
@@ -1217,7 +1313,7 @@ def build_plan(
     if _cd_max < 1e9:
         _split_blocks: List[Dict[str, Any]] = []
         for _b in ordered_blocks:
-            _split_blocks.extend(_split_long_block(_b, _cd_max, _cd_min))
+            _split_blocks.extend(_split_long_block(_b, _cd_max, _cd_min, scene_cuts=_cuts_for(_b)))
         if len(_split_blocks) != len(ordered_blocks):
             meta["notes"].append(
                 f"R2 超长块拆分：{len(ordered_blocks)} → {len(_split_blocks)} 段"
@@ -1427,6 +1523,7 @@ def build_plan(
         "subtitles": {"keywords": options.get("highlight_keywords", [])},
         "slicing_rules": _slicing_report,
         "selection_meta": meta,
+        "meta": meta,
         "product_anchor": {
             "enabled": bool(anchor),
             "anchor_path": anchor_meta.get("anchor_path", ""),

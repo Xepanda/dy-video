@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sequence_proposals_v33.schema.json",
+  "title": "dy-video V3.3 视觉导演编排提案契约 (向下兼容 V3.2)",
+  "type": "object",
+  "required": [
+    "ordered_candidate_ids",
+    "candidate_pool_hash"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": ["3.2", "3.3"],
+      "default": "3.3"
+    },
+    "run_id": { "type": "string" },
+    "candidate_pool_hash": { "type": "string", "minLength": 8 },
+    "proposal_id": { "type": "string" },
+    "agent_name": { "type": "string" },
+    "style": {
+      "type": "string",
+      "enum": ["balanced", "fast_paced", "showcase", "fast", "detailed"],
+      "default": "balanced"
+    },
+    "ordered_candidate_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" }
+    },
+    "chosen_cover_id": { "type": ["string", "null"] },
+    "hook_card_override": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string", "minLength": 2, "maxLength": 40 },
+        "dur": { "type": "number", "minimum": 1.0, "maximum": 5.0 },
+        "y": { "type": "integer", "minimum": 150, "maximum": 430 }
+      }
+    },
+    "cta_override": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string", "minLength": 2, "maxLength": 40 },
+        "dur": { "type": "number", "minimum": 1.0, "maximum": 5.0 }
+      }
+    },
+    "clip_overrides": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "cut_adjust_start_ms": { "type": "integer", "minimum": -500, "maximum": 500 },
+          "cut_adjust_end_ms": { "type": "integer", "minimum": -500, "maximum": 500 },
+          "zoom": { "type": "number", "minimum": 1.0, "maximum": 1.5 },
+          "y_anchor": { "type": "number", "minimum": 0.2, "maximum": 0.8 },
+          "effect": { "type": "string", "enum": ["none", "hflip"] },
+          "sticker_text": { "type": "string", "maxLength": 24 },
+          "category": { "type": "string", "enum": ["hook", "fabric", "fit", "styling", "decision_closing"] }
+        }
+      }
+    },
+    "visual_overrides": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "candidate_id",
+          "override_relation",
+          "inspected_frame_refs",
+          "visual_evidence_note"
+        ],
+        "properties": {
+          "candidate_id": { "type": "string" },
+          "original_relation": { "type": "string" },
+          "override_relation": {
+            "type": "string",
+            "enum": ["SAME_SKU", "SAME_SKU_VARIANT", "ACCESSORY_OR_STYLING"]
+          },
+          "inspected_frame_refs": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "visual_evidence_note": { "type": "string", "minLength": 10 },
+          "agent_name": { "type": "string" }
+        }
+      }
+    },
+    "violation_mitigation_mode": {
+      "type": "string",
+      "enum": ["strict_block", "auto_three_channel"],
+      "default": "strict_block"
+    },
+    "decision_reasons": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "uncertainties": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "variants": {
+      "type": "array",
+      "description": "V3.4 预留：多前3秒 Hook 矩阵变体列表",
+      "items": { "type": "object" }
+    }
+  }
+}

@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "candidate_v3.schema.json",
+  "title": "V3 Candidate Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "source_id",
+    "source_start_ms",
+    "source_end_ms",
+    "product_relation",
+    "utterance_ids",
+    "frame_ids",
+    "selling_point_evidence_refs",
+    "eligible",
+    "risks"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "3.0"
+    },
+    "candidate_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_start_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "source_end_ms": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "product_relation": {
+      "enum": [
+        "SAME_SKU",
+        "SAME_SKU_VARIANT",
+        "ACCESSORY_OR_STYLING",
+        "OTHER_SKU",
+        "UNCERTAIN"
+      ]
+    },
+    "utterance_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "frame_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "selling_point_evidence_refs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "text": {
+      "type": "string"
+    },
+    "shot_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "action_type": {
+      "type": "string"
+    },
+    "motion_phase": {
+      "type": "string"
+    },
+    "eligible": {
+      "type": "boolean"
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rejection_reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "source_file_sha256": {
+      "type": "string"
+    },
+    "narrative_role": {
+      "type": "string"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  }
+}
