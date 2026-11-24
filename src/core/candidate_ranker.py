@@ -117,15 +117,10 @@ class CandidateRanker:
             except Exception:
                 pass
 
-            # 库存叫卖、迫切催单与换款离场硬过滤
-            inventory_changeover_patterns = [
-                r".*库存.*", r".*只剩.*", r".*单了.*", r".*快下了.*", r".*上链接.*", r".*一号链接.*",
-                r".*抢购.*", r".*秒杀.*", r".*现货.*", r".*发货.*", r".*不能再讲.*", r".*上对头.*",
-                r".*换下一款.*", r".*下楼.*", r".*过款.*", r".*拿走.*", r".*去换衣服.*", r".*换款式.*",
-                r".*不用讲.*", r".*随便对比.*", r".*凑单去拍.*",
-                r".*抠衣.*", r".*扣[1一小].*", r".*加[鲜现]货.*", r".*一号[令练界链].*",
-                r".*手批.*", r".*抢[毛大]衣.*", r".*先去抢.*", r".*不等了.*", r".*要.*的大宝.*",
-            ]
+            # 库存叫卖、迫切催单与换款离场硬过滤（由品类档案数据驱动）
+            from src.core.category_profile import load_category_profile
+            cat_profile = load_category_profile(product_profile)
+            inventory_changeover_patterns = cat_profile.get("inventory_changeover_regexes") or []
             for pat in inventory_changeover_patterns:
                 if re.search(pat, text):
                     eligible = False
@@ -137,7 +132,6 @@ class CandidateRanker:
             try:
                 from src.tools.verify_clip_product_alignment import CATEGORY_NEGATIVE_TERMS, infer_product_category
                 inferred_cat = infer_product_category(cat_name)
-                # 排除本品自身标题中包含的词（如本品就是羽绒服时，"羽绒"不是负向词）
                 neg_terms = [
                     t for t in CATEGORY_NEGATIVE_TERMS.get(inferred_cat, [])
                     if t not in cat_name
@@ -145,14 +139,9 @@ class CandidateRanker:
             except Exception:
                 neg_terms = []
 
-            # 搭配识别：如果是真正搭配语境（如"上衣搭西裤"），不作为负向冲突误杀，而是认定为合规搭配 (ACCESSORY_OR_STYLING)
-            styling_patterns = (
-                r"搭(配)?.*?(裤|裙|鞋|包|开衫|马甲|西裤|打底)",
-                r"配.*?(裤|裙|鞋|包|开衫|马甲|西裤|打底)",
-                r"脚上(穿|搭)", r"下半身.*?(搭|配)", r"里面(搭|穿)",
-            )
-            # 但若台词核心是在主推下装/换款（如"主推的裤子"、"裤子给大家安排"、"这条裤"），绝非合规搭配
-            promotes_other_item = bool(re.search(r"(主推|拍|买|这款|这条|这件裤|给大家|安排|换下).*(裤|裙)", text))
+            styling_patterns = tuple(cat_profile.get("styling_context_patterns") or ())
+            promotes_pat = str(cat_profile.get("promotes_other_item_pattern") or r"(主推|拍|买|这款|这条|这件裤|给大家|安排|换下).*(裤|裙)")
+            promotes_other_item = bool(re.search(promotes_pat, text))
 
             hits = [nt for nt in neg_terms if nt in text]
             has_styling_pattern = any(re.search(p, text) for p in styling_patterns)
@@ -268,20 +257,14 @@ class CandidateRanker:
             cand["rejection_reasons"] = rejection_reasons
             cand["missing_evidence"] = missing_evidence
 
-            # 3. 叙事角色推断
+            # 3. 叙事角色推断（由品类档案数据驱动）
+            role_kw_map = cat_profile.get("narrative_role_keywords") or {}
             narrative_role = "PROOF"
-            if any(w in text for w in ("你看", "姐妹们", "闭眼入", "第一件", "今天这件", "必须抢")):
-                narrative_role = "HOOK"
-            elif any(w in text for w in ("面料", "手感", "羊毛", "羊绒", "真丝", "棉", "材质", "羽绒")):
-                narrative_role = "FABRIC"
-            elif any(w in text for w in ("版型", "显瘦", "不挑人", "遮肉", "挺括", "落肩")):
-                narrative_role = "FIT"
-            elif any(w in text for w in ("搭配", "穿法", "配裤子", "配裙子", "下半身")):
-                narrative_role = "STYLING"
-            elif any(w in text for w in ("颜色", "色系", "黑色", "白色", "米色", "咖色")):
-                narrative_role = "COLOR"
-            elif any(w in text for w in ("小黄车", "拍一发", "库存", "带回家", "下单", "手慢无")):
-                narrative_role = "CLOSING"
+            for r_name in ("HOOK", "FABRIC", "FIT", "STYLING", "COLOR", "CLOSING"):
+                kws = role_kw_map.get(r_name) or []
+                if any(w in text for w in kws):
+                    narrative_role = r_name
+                    break
 
             scores_list.append({
                 "candidate_id": cid,

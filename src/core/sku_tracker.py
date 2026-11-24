@@ -25,20 +25,12 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from src.core.vision_backend import VisionBackend, LocalCVVisionBackend
+from src.core.category_profile import load_category_profile, resolve_subcategory
 
-# 换款与离场关键词
-CHANGEOVER_PATTERNS = [
-    "换下一款", "看下一件", "下一套", "下一号", "换掉", "拿走", "去换衣服",
-    "下一款衣服", "换件衣服", "过款", "换款式", "走开一下", "我们换", "下一件",
-    "换下一个", "不能再讲这个了", "我们要开始上对头了", "下楼"
-]
-
-# 搭配词模式（修饰性指代，不应篡改主推品类）
-STYLING_PATTERNS = [
-    r"搭(配)?.*?(裤|裙|鞋|包|开衫|马甲|西裤|打底)",
-    r"配.*?(裤|裙|鞋|包|开衫|马甲|西裤|打底)",
-    r"脚上(穿|搭)", r"下半身.*?(搭|配)", r"里面(搭|穿)",
-]
+# 默认女装档案作为模块级向后兼容常量，运行时优先按 product_profile.domain_profile 动态加载
+_DEFAULT_PROFILE = load_category_profile()
+CHANGEOVER_PATTERNS = list(_DEFAULT_PROFILE.get("changeover_patterns") or [])
+STYLING_PATTERNS = list(_DEFAULT_PROFILE.get("styling_context_patterns") or [])
 
 
 class SkuTracker:
@@ -64,15 +56,19 @@ class SkuTracker:
         reasons = []
         evidence_gap = []
 
+        cat_profile = load_category_profile(product_profile)
+        changeover_pats = cat_profile.get("changeover_patterns") or CHANGEOVER_PATTERNS
+        styling_pats = cat_profile.get("styling_context_patterns") or STYLING_PATTERNS
+
         # 1. 换款硬排除检测
-        for cp in CHANGEOVER_PATTERNS:
+        for cp in changeover_pats:
             if cp in text:
                 reasons.append(f"命中换款关键词: '{cp}'")
                 return "OTHER_SKU", 0.95, reasons, evidence_gap
 
         # 2. 搭配物识别
         is_styling = False
-        for pat in STYLING_PATTERNS:
+        for pat in styling_pats:
             if re.search(pat, text):
                 is_styling = True
                 reasons.append(f"命中搭配话术模式: '{pat}'")
@@ -103,14 +99,9 @@ class SkuTracker:
                         for i in range(len(part) - n + 1):
                             primary_tokens.add(part[i:i+n])
 
-        # 品类与行业核心词扩展（直播带货自然口播指代）
-        cat_lower = (category or "").lower()
-        if any(k in cat_lower for k in ("针织", "毛衣", "衫", "上衣")):
-            primary_tokens.update(["毛衣", "针织", "大毛衫", "线衫", "羊毛衫", "开衫", "打底", "上衣", "纱线", "面料", "手感", "版型", "领形", "领口", "正肩", "落肩"])
-        elif any(k in cat_lower for k in ("裤", "阔腿", "西裤")):
-            primary_tokens.update(["裤子", "西裤", "裤腿", "阔腿裤", "垂坠", "腰头"])
-        elif any(k in cat_lower for k in ("裙", "连衣裙")):
-            primary_tokens.update(["裙子", "连衣裙", "裙摆", "下摆", "腰线"])
+        # 品类与行业核心词扩展（由 contracts/profiles/<domain>.yaml 数据驱动）
+        sub_info = resolve_subcategory(f"{category} {sku_name}", profile=cat_profile)
+        primary_tokens.update(sub_info.get("synonym_tokens") or [])
 
         primary_tokens.discard("这个")
         primary_tokens.discard("一个")

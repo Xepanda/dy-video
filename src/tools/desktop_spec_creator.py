@@ -695,10 +695,10 @@ class DesktopSpecApi:
         win_target = normalize_project_path(target_path, target_platform="win32")
         wsl_target = normalize_project_path(target_path, target_platform="linux")
 
-        agent_task_content = f"""# dy-video V3.2 带货视频剪辑任务指令
+        agent_task_content = f"""# dy-video V3.3 视觉导演带货视频剪辑任务指令
 
 > 本任务由 Windows EXE 配置向导生成。EXE 仅作为配置器与交接器，不启动任何 Agent 进程。
-> 请外部 Agent（AGY / Codex / Claude Code）作为总导演，调用统一 CLI 执行带货视频制作流水线。
+> 请外部多模态 Agent（AGY / Codex / Claude Code）作为总导演，调用统一 CLI 执行带货视频制作流水线。
 
 ## 1. 任务元信息与环境要求
 - **任务代号**: `{project_id}`
@@ -711,8 +711,8 @@ class DesktopSpecApi:
 - **选定源素材清单**:
 {vids_str}
 
-## 2. 外部 Agent 标准工作流规范 (ADR-001)
-所有媒体处理、候选提取、时间线编译、音画渲染与双层质检门禁均由仓库统一 CLI 承载。
+## 2. 外部 Agent 标准工作流规范 (ADR-001 & ADR-002)
+所有媒体处理、顺序3点抽帧、视觉联系表生成、时间线编译、音画渲染、接缝回看与双层质检门禁均由仓库统一 CLI 承载。
 
 ### 终端环境准备与执行指令
 **若使用 Windows 原生终端 (PowerShell / CMD)**:
@@ -735,23 +735,27 @@ python -m src.cli prepare --spec "{target_path}"
 ```
 *记录标准输出 JSON 中的 `work_dir`（如 `work/<run_id>`）和 `spec_fingerprint`。*
 
-### 阶段 2: 提取 ASR、镜头切点与分镜候选池
+### 阶段 2: 提取 ASR、顺序3点抽帧、混合视觉打分与导演简报
 ```bash
 python -m src.cli analyze --run "<work_dir>"
 ```
-*该阶段完成后流程停靠，生成 `<work_dir>/analysis/candidates.json` 与冻结的 `candidate_pool_hash`。*
+*该阶段产出 `<work_dir>/analysis/director_brief.md`（Top 40-60 精选）、`storyboards/sheet_*.jpg`（4×4 分镜联系表）与 `storyboards/cover_sheet.jpg`（封面对比板），并锁定 `candidate_pool_hash`。*
 
-### 阶段 3: 审查候选并编写分镜提案
-外部 Agent 依据商品卖点、口播完整度与视觉证据，编写并保存 `<work_dir>/decisions/sequence_proposal.json`：
+### 阶段 3: 视觉审片并编写 V3.3 导演提案
+1. 阅读 `<work_dir>/analysis/director_brief.md`，并用多模态看图工具审阅 `cover_sheet.jpg` 与 `sheet_*.jpg`；
+2. 需要查看某条候选前后句上下文或 3 点原帧时可按需调用：
+   `python -m src.cli inspect-candidate --run "<work_dir>" --ids "c_..."`
+3. 编写并保存 `<work_dir>/decisions/sequence_proposal.json`（支持 `clip_overrides` 微调切点/推镜/贴纸，以及对灰区 `UNCERTAIN` 片段带帧证据的 `visual_overrides`，严禁覆盖 `OTHER_SKU`）：
 ```json
 {{
-  "schema_version": "3.2",
+  "schema_version": "3.3",
   "run_id": "<run_id>",
   "candidate_pool_hash": "<candidate_pool_hash>",
-  "proposal_id": "agent_proposal_01",
+  "proposal_id": "director_cut_v1",
   "ordered_candidate_ids": ["c_..."],
+  "chosen_cover_id": "cand_...",
   "style": "balanced",
-  "decision_reasons": ["开场语义完整", "主品卖点展示证据充足"]
+  "decision_reasons": ["开场语义完整且表情自然", "主品卖点展示与景别节奏清晰"]
 }}
 ```
 
@@ -765,12 +769,18 @@ python -m src.cli validate-plan --run "<work_dir>" --proposal "<work_dir>/decisi
 python -m src.cli render --run "<work_dir>"
 ```
 
-### 阶段 6: 执行双层质量门禁审计
+### 阶段 6: 视觉接缝回看 Critic Loop
+```bash
+python -m src.cli inspect-render --run "<work_dir>"
+```
+*审阅 `output/<run_id>/cover.jpg` 与 `output/<run_id>/seams_review.jpg`；若发现接缝突兀或动作截断，调整 `clip_overrides` 后重跑 `validate-plan -> render`。*
+
+### 阶段 7: 执行双层质量门禁审计（含接缝连续性）
 ```bash
 python -m src.cli qc --run "<work_dir>"
 ```
 
-### 阶段 7: 正式交付签署
+### 阶段 8: 正式交付签署
 ```bash
 python -m src.cli deliver --run "<work_dir>"
 ```

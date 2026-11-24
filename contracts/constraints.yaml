@@ -685,3 +685,14 @@ product_image_adapter:
     subject_ratio: 0.88
     feather_px: 90
     rotate_deg: 0.0
+
+
+# ============ V3.3 混合视觉感知与导演微调门禁（ADR-002）============
+vision_v33:
+  onnx_high_threshold: 0.76       # ONNX 视觉编码器高置信同款阈值
+  onnx_low_threshold: 0.45        # ONNX 灰区下限（低于此值且有异款信号判 OTHER_SKU）
+  hsv_high_threshold: 0.45        # 躯干 ROI HSV 降级高置信阈值
+  hsv_low_threshold: 0.22         # 躯干 ROI HSV 灰区下限
+  drift_threshold: 0.30           # 3 点帧内相似度最大落差阈值（超限标 MID_CLIP_SKU_DRIFT）
+  max_cut_adjust_ms: 500          # Proposal v3.3 单段切点微调绝对上限 (ms)
+

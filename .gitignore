@@ -73,6 +73,7 @@ local_project3_*_report.json
 local_project3_*_summary.json
 data/placeholders/test_*
 .v3.2_handoff/
+tmp_out/
 
 *.spec
 *.exe

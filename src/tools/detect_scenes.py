@@ -102,17 +102,20 @@ def detect_scene_cuts(
         t = idx / fps
         if t >= duration:
             break
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         ret, frame = cap.read()
         if not ret or frame is None:
-            idx += step
-            continue
+            break
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         hist = cv2.calcHist([gray], [0], None, [64], [0, 256])
         cv2.normalize(hist, hist)
         if prev_gray is not None:
             diffs.append((t, _frame_diff(prev_gray, gray, prev_hist, hist)))
         prev_gray, prev_hist = gray, hist
+        # 顺序 grab 跳过中间帧，避免 H.264 长视频反复随机 GOP seek 导致 20x 解码开销
+        for _ in range(step - 1):
+            if not cap.grab():
+                idx = int(duration * fps) + step
+                break
         idx += step
     cap.release()
 
