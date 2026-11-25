@@ -35,6 +35,7 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 from src.runtime.stage_services import (
+    stage_fetch_product,
     stage_prepare,
     stage_analyze,
     stage_inspect_candidate,
@@ -61,6 +62,14 @@ def main() -> int:
         description="dy-video V3.3 Agent-First 视觉导演媒体处理与质量门禁 CLI",
     )
     subparsers = parser.add_subparsers(dest="subcommand", help="子命令列表")
+
+    # 0. fetch-product (V3.4)
+    p_fetch = subparsers.add_parser("fetch-product", help="从抖音商品链接抓取商品名称、属性、卖点与主图，并可选写入 job_spec.json")
+    p_fetch.add_argument("--url", required=True, help="抖音/抖店商品详情链接（支持粘贴含链接的分享文本）")
+    p_fetch.add_argument("--project", default=None, help="项目根目录或素材目录（可选，用于下载参考图到 product_ref/ 并扫描源视频）")
+    p_fetch.add_argument("--spec-out", default=None, help="将抓取结果合并输出到指定的 job_spec.json 路径（可选）")
+    p_fetch.add_argument("--max-images", type=int, default=4, help="最多下载商品参考图数量（默认 4）")
+    p_fetch.add_argument("--timeout-ms", type=int, default=30000, help="页面加载超时毫秒数（默认 30000）")
 
     # 1. prepare
     p_prepare = subparsers.add_parser("prepare", help="初始化任务运行环境、素材白名单与快照")
@@ -119,7 +128,17 @@ def main() -> int:
         res = None
         exit_code = 0
 
-        if args.subcommand == "prepare":
+        if args.subcommand == "fetch-product":
+            res = stage_fetch_product(
+                url=args.url,
+                project_arg=args.project,
+                spec_out=args.spec_out,
+                max_images=int(args.max_images),
+                timeout_ms=int(args.timeout_ms),
+            )
+            exit_code = 0 if res.get("status") == "FETCHED" else 1
+
+        elif args.subcommand == "prepare":
             res = stage_prepare(spec_path=args.spec, run_id=args.run_id, resume=args.resume)
             exit_code = 0 if res.get("status") in ("PREPARED", "RESUMED") else 1
 

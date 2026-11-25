@@ -20,10 +20,17 @@
 
 ## V3.3 视觉导演全流程（Universal CLI Pipeline）
 
-### 0. 素材配置与任务交接（Windows EXE 向导）
-1. 运行根目录 `启动任务配置器.exe`（或 `SpecCreator.exe`）；
-2. 点选项目目录、勾选原始直播视频与商品参考图，点击 **「生成任务并交给 Agent」**；
-3. 将生成的任务指令粘贴给任意本地多模态 Agent（AGY / Codex / Claude Code）。
+### 0. 素材配置与商品链接一键抓取（精简 4 步 Windows EXE 向导 / CLI）
+1. 运行根目录 `启动任务配置器.exe`（或 `SpecCreator.exe`）：
+   - **① 项目工作区**：选择已有项目（支持 `raw/`、`素材/`、`materials/`、`input/`）或新建项目；
+   - **② 素材与商品链接**：直接粘贴抖音/抖店商品链接，点击 **「⚡ 一键解析商品」** 自动抓取商品名称、品牌、款号、品类、事实卖点与高清主图（下载至 `<project_root>/product_ref/`，彻底省去手动填写“商品与标签”步骤；需要微调时可展开折叠区）；勾选原始直播视频；
+   - **③ 剪辑与风格**：确认时长、节奏、字幕与封面策略卡片；
+   - **④ 生成任务与交付**：点击 **「📋 生成任务并交给 Agent」**，一键复制任务指令交给本地多模态 Agent（AGY / Codex / Claude Code）。
+2. 或直接通过 CLI 一键从链接生成 `job_spec.json`：
+```bash
+python -m src.cli fetch-product --url "<抖音商品链接>" --project "<项目目录>" --spec-out "<job_spec.json输出路径>"
+```
+> 仅读取公开商品基础信息与主图，绝不绕过登录墙或验证码；遇到风控拦截会明确上报 `BLOCKED`。
 
 ### 1. 初始化环境与资产白名单（`prepare`）
 ```bash
@@ -109,7 +116,7 @@ dy-live-ecommerce-editor/
 │   ├── graphics/                      # 品牌封面渲染 / ASS 字幕 / 动态贴片
 │   ├── qc/                            # qc_auditor / editorial_qc / continuity_qc
 │   └── tools/                         # 底层确定性原子工具集（价格/违规/人脸/OCR/气口/切片规则/OpenChatCut桥接）
-└── tests/                             # 40 套自动化回归测试（python -u scripts/run_regression.py --quick）
+└── tests/                             # 41 套自动化回归测试（python -u scripts/run_regression.py --quick）
 ```
 
 ---

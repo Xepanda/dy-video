@@ -42,6 +42,7 @@ from src.runtime.stages import (  # noqa: F401
     compute_candidate_pool_hash,
     resolve_trusted_paths,
     resolve_and_verify_work_ref,
+    stage_fetch_product,
     stage_prepare,
     stage_analyze,
     stage_inspect_candidate,

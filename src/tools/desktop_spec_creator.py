@@ -167,8 +167,9 @@ class SpecManager:
         p_l1 = str(payload.get("product_title_l1") or prod.get("title_line1") or "").strip()
         p_l2 = str(payload.get("product_title_l2") or prod.get("title_line2") or "").strip()
         p_name = str(payload.get("product_name") or payload.get("name") or prod.get("name") or "").strip()
-        if not p_l1 and not p_l2 and not p_name:
-            errors.append("商品名称至少填写一行")
+        p_url = str(payload.get("product_url") or prod.get("product_url") or "").strip()
+        if not p_l1 and not p_l2 and not p_name and not p_url:
+            errors.append("商品名称至少填写一行（或粘贴抖音商品链接自动解析）")
 
         try:
             from src.tools.feature_flags import validate as _fv
@@ -193,6 +194,7 @@ class SpecManager:
         p_l1 = str(payload.get("product_title_l1") or "").strip()
         p_l2 = str(payload.get("product_title_l2") or "").strip()
         p_name = str(payload.get("product_name") or payload.get("name") or "").strip()
+        p_url = str(payload.get("product_url") or "").strip()
         if not p_l1 and p_name:
             p_l1 = p_name
 
@@ -206,6 +208,17 @@ class SpecManager:
                 s = str(img).strip()
                 if s and s not in item_images:
                     item_images.append(s)
+
+        ref_images = []
+        raw_refs = payload.get("reference_images")
+        if isinstance(raw_refs, list):
+            for img in raw_refs:
+                s = str(img).strip()
+                if s and s not in ref_images:
+                    ref_images.append(s)
+        for img in item_images:
+            if img not in ref_images:
+                ref_images.append(img)
 
         duration_range = str(payload.get("duration_range") or "45-65").strip()
         split_strategy = str(payload.get("split_strategy") or "force_off").strip()
@@ -221,7 +234,13 @@ class SpecManager:
 
         sku_id = str(payload.get("sku_id") or payload.get("sku") or "").strip()
         category = str(payload.get("category") or "").strip()
-        attributes = dict(payload.get("attributes") or {})
+        raw_attrs = payload.get("attributes") or {}
+        if isinstance(raw_attrs, str) and raw_attrs.strip():
+            try:
+                raw_attrs = json.loads(raw_attrs)
+            except Exception:
+                raw_attrs = {}
+        attributes = dict(raw_attrs) if isinstance(raw_attrs, dict) else {}
         allowed_variants = list(payload.get("allowed_variants") or [])
         selling_points = list(payload.get("selling_points") or [])
 
@@ -233,6 +252,8 @@ class SpecManager:
             "title_line2": p_l2,
             "item_images": item_images
         }
+        if p_url:
+            prod_dict["product_url"] = p_url
         if sku_id:
             prod_dict["sku_id"] = sku_id
         if category:
@@ -245,6 +266,8 @@ class SpecManager:
             prod_dict["allowed_variants"] = allowed_variants
         if selling_points:
             prod_dict["selling_points"] = selling_points
+        if ref_images and ref_images != item_images:
+            prod_dict["reference_images"] = ref_images
 
         feat_dict = dict(payload.get("features") or {})
         sub_strat = str(payload.get("subtitle_strategy") or "").strip()
@@ -539,9 +562,11 @@ class DesktopSpecApi:
                 })
 
             images = []
+            seen_img_paths = set()
             raw_imgs = manifest.get("product_images") or manifest.get("images") or []
             for img in raw_imgs:
                 p = img["path"]
+                seen_img_paths.add(os.path.normcase(os.path.abspath(p)))
                 thumb_b64 = generate_image_thumbnail_b64(p, max_dim=120)
                 images.append({
                     "path": p,
@@ -549,6 +574,24 @@ class DesktopSpecApi:
                     "size_kb": round(img.get("size", 0) / 1024, 1),
                     "thumbnail": thumb_b64,
                 })
+
+            # V3.4: 同步展示由商品链接下载至 <project_root>/product_ref/ 的商品主图（不改动 raw/素材 目录）
+            ref_dir = os.path.join(paths.project_root, "product_ref")
+            if os.path.isdir(ref_dir):
+                for fname in sorted(os.listdir(ref_dir)):
+                    if not fname.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".bmp")):
+                        continue
+                    fp = os.path.abspath(os.path.join(ref_dir, fname))
+                    if not os.path.isfile(fp) or os.path.normcase(fp) in seen_img_paths:
+                        continue
+                    seen_img_paths.add(os.path.normcase(fp))
+                    images.append({
+                        "path": fp,
+                        "filename": fname,
+                        "size_kb": round(os.path.getsize(fp) / 1024, 1),
+                        "thumbnail": generate_image_thumbnail_b64(fp, max_dim=120),
+                        "source": "product_link",
+                    })
 
             existing_spec = None
             if os.path.isfile(paths.spec_path):
@@ -570,6 +613,114 @@ class DesktopSpecApi:
             }
         except Exception as e:
             return {"success": False, "message": f"扫描项目失败: {str(e)}"}
+
+    def fetch_product_link(self, url_or_text: str, project_root: Optional[str] = None) -> Dict[str, Any]:
+        """从抖音商品链接一键解析商品名称、品牌、卖点与主图（仅读公开商品数据，绝不绕过登录或验证码）。"""
+        raw = str(url_or_text or "").strip()
+        if not raw:
+            return {"success": False, "message": "请先粘贴抖音商品链接"}
+
+        download_dir: Optional[str] = None
+        resolved_root: Optional[str] = None
+        if project_root and os.path.isdir(project_root):
+            from src.core.project_context import ProjectPaths
+            paths = ProjectPaths(project_root=project_root)
+            resolved_root = paths.project_root
+            download_dir = os.path.join(paths.project_root, "product_ref")
+
+        parsed: Optional[Dict[str, Any]] = None
+        try:
+            # 优先进程内直调；若处于打包 EXE 且未内置 Playwright，自动降级调用本地 Python 解释器执行 src.cli fetch-product
+            use_subprocess = bool(getattr(sys, "frozen", False))
+            if not use_subprocess:
+                try:
+                    from src.tools.fetch_product_link import fetch_product_from_url
+                    parsed = fetch_product_from_url(raw, download_dir=download_dir, max_images=4)
+                except ImportError:
+                    use_subprocess = True
+
+            if use_subprocess:
+                py_bin = find_python_interpreter()
+                cmd = [py_bin, "-m", "src.cli", "fetch-product", "--url", raw, "--max-images", "4"]
+                if resolved_root:
+                    cmd.extend(["--project", resolved_root])
+                proc = subprocess.run(
+                    cmd,
+                    cwd=PROJECT_ROOT,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=60,
+                )
+                raw_out = (proc.stdout or "").strip()
+                json_start = raw_out.find("{")
+                if json_start == -1:
+                    return {
+                        "success": False,
+                        "message": f"商品链接解析进程未返回结构化数据: {(proc.stderr or raw_out)[:240]}",
+                    }
+                cli_res = json.loads(raw_out[json_start:])
+                if cli_res.get("status") != "FETCHED":
+                    return {
+                        "success": False,
+                        "message": cli_res.get("error_message") or "商品链接解析失败",
+                    }
+                p_info = cli_res.get("product") or {}
+                parsed = {
+                    "product_url": cli_res.get("product_url") or raw,
+                    "product_id": cli_res.get("product_id") or "",
+                    "sku_id": cli_res.get("sku_id") or p_info.get("sku_id") or "",
+                    "name": p_info.get("name") or "",
+                    "raw_title": p_info.get("raw_title") or "",
+                    "title_line1": p_info.get("title_line1") or "",
+                    "title_line2": p_info.get("title_line2") or "",
+                    "category": p_info.get("category") or "",
+                    "brand": cli_res.get("brand") or {},
+                    "attributes": p_info.get("attributes") or {},
+                    "allowed_variants": p_info.get("allowed_variants") or [],
+                    "selling_points": p_info.get("selling_points") or [],
+                    "highlight_keywords": cli_res.get("highlight_keywords") or [],
+                    "downloaded_images": cli_res.get("downloaded_images") or [],
+                    "item_images": p_info.get("item_images") or [],
+                    "reference_images": p_info.get("reference_images") or [],
+                }
+
+            images = []
+            for img_p in (parsed or {}).get("downloaded_images") or []:
+                if os.path.isfile(img_p):
+                    images.append({
+                        "path": img_p,
+                        "filename": os.path.basename(img_p),
+                        "size_kb": round(os.path.getsize(img_p) / 1024, 1),
+                        "thumbnail": generate_image_thumbnail_b64(img_p, max_dim=120),
+                        "source": "product_link",
+                    })
+
+            return {
+                "success": True,
+                "message": f"已成功解析商品：{(parsed or {}).get('name') or '商品'}（下载参考图 {len(images)} 张）",
+                "product": {
+                    "product_url": (parsed or {}).get("product_url", ""),
+                    "product_id": (parsed or {}).get("product_id", ""),
+                    "sku_id": (parsed or {}).get("sku_id", ""),
+                    "name": (parsed or {}).get("name", ""),
+                    "raw_title": (parsed or {}).get("raw_title", ""),
+                    "title_line1": (parsed or {}).get("title_line1", ""),
+                    "title_line2": (parsed or {}).get("title_line2", ""),
+                    "category": (parsed or {}).get("category", ""),
+                    "attributes": (parsed or {}).get("attributes", {}),
+                    "allowed_variants": (parsed or {}).get("allowed_variants", []),
+                    "selling_points": (parsed or {}).get("selling_points", []),
+                    "item_images": (parsed or {}).get("item_images", []),
+                    "reference_images": (parsed or {}).get("reference_images", []),
+                },
+                "brand": (parsed or {}).get("brand", {"title_en": "", "subtitle_cn": ""}),
+                "highlight_keywords": (parsed or {}).get("highlight_keywords", []),
+                "images": images,
+            }
+        except Exception as e:
+            return {"success": False, "message": f"解析商品链接失败: {str(e)}"}
 
     def save_spec(self, payload: Dict[str, Any], create_named_copy: bool = True) -> Dict[str, Any]:
         """校验并保存配置至用户素材目录，绝不修改仓库，并打开系统文件资源管理器。"""
@@ -670,7 +821,9 @@ class DesktopSpecApi:
         vids = spec.get("raw_video_paths") or ([spec.get("raw_video_path")] if spec.get("raw_video_path") else [])
         vids_str = "\n".join(f"- `{os.path.basename(str(v))}`" for v in vids) or "- 无显式列表"
 
-        prod_name = (spec.get("product") or {}).get("name") or (spec.get("product") or {}).get("title_line1") or "带货商品"
+        prod_cfg = spec.get("product") or {}
+        prod_name = prod_cfg.get("name") or prod_cfg.get("title_line1") or "带货商品"
+        prod_url = str(prod_cfg.get("product_url") or "").strip()
         project_id = spec.get("project_id", "project")
 
         # 寻找并核验 Python 工具仓库根目录 (必须包含 src/cli.py)
@@ -703,6 +856,7 @@ class DesktopSpecApi:
 ## 1. 任务元信息与环境要求
 - **任务代号**: `{project_id}`
 - **推荐商品**: {prod_name}
+{f'- **商品详情链接**: {prod_url}' if prod_url else '- **商品来源**: 本地手动配置'}
 - **工具仓库路径 (Windows)**: `{win_repo}`
 - **工具仓库路径 (WSL / Linux)**: `{wsl_repo}`
 - **CLI 可用状态**: {"[PASS] src.cli 验证就绪" if cli_available else "[WARN] 未在仓库根目录下直接检测到 src/cli.py，请确保切换至 dy-video 代码仓库"}
@@ -1536,16 +1690,15 @@ def get_html_content() -> str:
     <div class="container">
         <div class="header">
             <h1>🎬 抖音带货直播剪辑 · 智能桌面向导</h1>
-            <p>项目化工作区 · 原生素材隔离 · 点击式策略卡片 · 实时端到端交付</p>
+            <p>项目化工作区 · 粘贴商品链接自动抓取 · 原始素材隔离 · 一键交接 Agent 总导演</p>
         </div>
 
-        <!-- 顶部向导步进条 -->
+        <!-- 顶部向导步进条（精简 4 步：省略独立手动“商品与标签”步骤） -->
         <div class="step-nav">
             <div class="step-tab active" onclick="goToStep(1)">① 项目工作区</div>
-            <div class="step-tab" onclick="goToStep(2)">② 素材与隔离</div>
-            <div class="step-tab" onclick="goToStep(3)">③ 商品与标签</div>
-            <div class="step-tab" onclick="goToStep(4)">④ 剪辑与风格</div>
-            <div class="step-tab" onclick="goToStep(5)">⑤ 智能出片</div>
+            <div class="step-tab" onclick="goToStep(2)">② 素材与商品链接</div>
+            <div class="step-tab" onclick="goToStep(3)">③ 剪辑与风格</div>
+            <div class="step-tab" onclick="goToStep(4)">④ 生成任务与交付</div>
         </div>
 
         <form id="wizardForm" onsubmit="return false;">
@@ -1554,32 +1707,57 @@ def get_html_content() -> str:
                 <div class="card">
                     <div class="card-title">📁 1. 选择项目工作目录</div>
                     <div class="form-group">
-                        <label>项目根目录 (包含 素材/ 与规格配置)</label>
+                        <label>项目根目录 (包含 raw/ 或 素材/ 与规格配置)</label>
                         <div class="input-row">
-                            <input type="text" id="project_root" placeholder="请选择或输入项目文件夹路径 (如 Desktop/project-3)">
+                            <input type="text" id="project_root" placeholder="请选择或输入项目文件夹路径 (如 Desktop/project-1)">
                             <button type="button" class="btn-browse" onclick="browseProjectFolder()">选择已有项目</button>
                             <button type="button" class="btn-browse" style="background:#059669;border-color:#10b981;" onclick="createNewProjectDialog()">➕ 新建项目</button>
                         </div>
-                        <div class="hint">系统将自动识别素材、历史成片，并将中间文件写入 work/，成片交付至 output/。</div>
+                        <div class="hint">系统将自动识别 raw/素材 目录、隔离历史成片，并将中间文件写入 work/，成片交付至 output/。</div>
                     </div>
                     <div class="form-group">
                         <label>任务代号 (Project ID)</label>
-                        <input type="text" id="project_id" placeholder="由目录名自动生成，如 project-3" required>
+                        <input type="text" id="project_id" placeholder="由目录名自动生成，如 project-1" required>
                         <div class="hint">用于本次出片标识与任务指纹绑定。</div>
                     </div>
                 </div>
 
                 <div class="step-actions">
                     <div></div>
-                    <button type="button" class="btn-next" onclick="nextFromStep1()">下一步：素材核对 ➔</button>
+                    <button type="button" class="btn-next" onclick="nextFromStep1()">下一步：素材与商品链接 ➔</button>
                 </div>
             </div>
 
-            <!-- ================= STEP 2: 素材核对与隔离 ================= -->
+            <!-- ================= STEP 2: 素材核对 + 商品链接一键解析 ================= -->
             <div class="step-panel" id="step2">
+                <!-- 商品链接一键解析卡片 -->
+                <div class="card" style="border-color:rgba(245,158,11,0.45);">
+                    <div class="card-title">
+                        <span>🔗 2A. 粘贴抖音商品链接（自动抓取商品名、品牌、卖点与主图，省去手动填表）</span>
+                        <span class="badge badge-warn" id="productFetchBadge">推荐</span>
+                    </div>
+                    <div class="form-group">
+                        <div class="input-row">
+                            <input type="text" id="product_url" placeholder="直接粘贴抖音/抖店商品详情链接或分享口令（如 https://haohuo.jinritemai.com/...）">
+                            <button type="button" class="btn-browse" id="btnFetchProduct" style="background:linear-gradient(135deg,#f59e0b,#d97706);border-color:#f59e0b;font-weight:600;" onclick="fetchProductLinkAction()">⚡ 一键解析商品</button>
+                        </div>
+                        <div class="hint" id="productFetchStatus">仅读取公开商品基础信息与主图，参考图自动保存至项目 <code>product_ref/</code> 目录，绝不改动原始素材。</div>
+                    </div>
+
+                    <!-- 解析结果概览 -->
+                    <div id="productPreviewBox" style="display:none;margin-top:12px;padding:12px 14px;background:var(--card-sub);border:1px solid #10b981;border-radius:10px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                            <span style="font-weight:700;color:#34d399;font-size:13px;" id="previewTitle">已解析商品</span>
+                            <span class="badge badge-info" id="previewCategory">品类</span>
+                        </div>
+                        <div id="previewMeta" style="font-size:12px;color:#cbd5e1;line-height:1.6;"></div>
+                    </div>
+                </div>
+
+                <!-- 原始素材清单核对 -->
                 <div class="card">
                     <div class="card-title">
-                        <span>🎬 2. 原始素材清单核对 (已排除历史成片)</span>
+                        <span>🎬 2B. 原始直播素材核对 (已自动排除历史成片)</span>
                         <button type="button" class="btn-browse" style="padding:4px 10px;font-size:12px;" onclick="rescanMaterials()">重新扫描</button>
                     </div>
 
@@ -1608,118 +1786,111 @@ def get_html_content() -> str:
                     </table>
 
                     <div style="margin-top:16px;">
-                        <label>商品展示图/贴图 (自动扫描素材目录下的图片)：</label>
+                        <label>商品展示图 / 链接抓取主图（点击可设为主图/副图）：</label>
                         <div id="imageListContainer" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;"></div>
                     </div>
-                </div>
 
-                <div class="step-actions">
-                    <button type="button" class="btn-prev" onclick="goToStep(1)">⬅ 返回上一步</button>
-                    <button type="button" class="btn-next" onclick="goToStep(3)">下一步：商品信息 ➔</button>
-                </div>
-            </div>
+                    <!-- 折叠区：手动补充或微调商品信息（无链接时或需手动微调时展开） -->
+                    <details id="manualProductDetails" style="margin-top:18px;border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--card-sub);">
+                        <summary style="font-size:13px;font-weight:600;color:#cbd5e1;cursor:pointer;">
+                            ✏️ 手动补充或微调商品信息（已通过链接抓取时通常无需展开）
+                        </summary>
+                        <div style="margin-top:14px;">
+                            <div class="grid-2">
+                                <div class="form-group">
+                                    <label>商品核心名称（链接解析后自动填充，无链接时必填）</label>
+                                    <input type="text" id="product_name" placeholder="例如：100%羊羔毛外套绵羊毛大衣" oninput="syncProductTitles()">
+                                </div>
+                                <div class="form-group">
+                                    <label>核心品类</label>
+                                    <select id="category" onchange="onCategoryChange(this.value)">
+                                        <option value="" selected>-- 请选择商品品类（或基于名称智能推断）--</option>
+                                        <option value="女装/毛针织">女装 / 毛针织衫</option>
+                                        <option value="女装/大衣外套">女装 / 大衣外套</option>
+                                        <option value="女装/连衣裙">女装 / 连衣裙</option>
+                                        <option value="女装/衬衫T恤">女装 / 衬衫T恤</option>
+                                        <option value="女装/裤装裙装">女装 / 裤装裙装</option>
+                                        <option value="箱包配饰">箱包 / 配饰</option>
+                                        <option value="美妆护肤">美妆 / 护肤</option>
+                                        <option value="通用电商">通用电商其他</option>
+                                    </select>
+                                </div>
+                            </div>
 
-            <!-- ================= STEP 3: 商品信息点选 ================= -->
-            <div class="step-panel" id="step3">
-                <div class="card">
-                    <div class="card-title">👗 3. 商品基础信息与标签点选</div>
-                    
-                    <div class="grid-2">
-                        <div class="form-group">
-                            <label>商品核心名称 (必填)</label>
-                            <input type="text" id="product_name" placeholder="例如：圆领羊绒打底衫 / 宽松显瘦针织开衫" required oninput="syncProductTitles()">
-                            <div class="hint">用于商品身份判定与字幕排片核心识别。</div>
-                        </div>
-                        <div class="form-group">
-                            <label>核心品类 (选择或输入)</label>
-                            <select id="category" onchange="onCategoryChange(this.value)">
-                                <option value="" selected>-- 请选择商品品类（或基于名称智能推断）--</option>
-                                <option value="女装/毛针织">女装 / 毛针织衫</option>
-                                <option value="女装/大衣外套">女装 / 大衣外套</option>
-                                <option value="女装/连衣裙">女装 / 连衣裙</option>
-                                <option value="女装/衬衫T恤">女装 / 衬衫T恤</option>
-                                <option value="女装/裤装裙装">女装 / 裤装裙装</option>
-                                <option value="箱包配饰">箱包 / 配饰</option>
-                                <option value="美妆护肤">美妆 / 护肤</option>
-                                <option value="通用电商">通用电商其他</option>
-                            </select>
-                        </div>
-                    </div>
+                            <div class="grid-2">
+                                <div class="form-group">
+                                    <label>品牌英文主标 (Brand EN，留空为无品牌包装)</label>
+                                    <input type="text" id="brand_en" value="" placeholder="选填，例如: CONCISETXM">
+                                </div>
+                                <div class="form-group">
+                                    <label>品牌/店铺中文副标 (Brand CN)</label>
+                                    <input type="text" id="brand_cn" value="" placeholder="选填，例如: 唐小木">
+                                </div>
+                            </div>
 
-                    <div class="grid-2">
-                        <div class="form-group">
-                            <label>品牌英文主标 (Brand EN，留空为无品牌包装)</label>
-                            <input type="text" id="brand_en" value="" placeholder="选填，例如: MIXCITY (留空为无品牌包装)">
+                            <div class="form-group" style="margin-top:10px;">
+                                <label>主推颜色与款式变体 (可选多选)：</label>
+                                <div class="tag-cloud" id="variantTags">
+                                    <span class="tag-item" onclick="toggleTag(this, 'variant')">米白色</span>
+                                    <span class="tag-item" onclick="toggleTag(this, 'variant')">黑色</span>
+                                    <span class="tag-item" onclick="toggleTag(this, 'variant')">燕麦色</span>
+                                    <span class="tag-item" onclick="toggleTag(this, 'variant')">驼色</span>
+                                    <span class="tag-item" onclick="toggleTag(this, 'variant')">花灰色</span>
+                                    <span class="tag-item" onclick="toggleTag(this, 'variant')">藏青色</span>
+                                    <span class="tag-item" onclick="toggleTag(this, 'variant')">酒红色</span>
+                                    <span class="tag-item" onclick="toggleTag(this, 'variant')">焦糖色</span>
+                                </div>
+                            </div>
+
+                            <div class="form-group" style="margin-top:12px;">
+                                <label>可信商品卖点（可选补充）：</label>
+                                <div class="tag-cloud" id="sellingPointTags">
+                                    <span class="tag-item" onclick="toggleTag(this, 'sp')">显瘦版型</span>
+                                    <span class="tag-item" onclick="toggleTag(this, 'sp')">细腻亲肤</span>
+                                    <span class="tag-item" onclick="toggleTag(this, 'sp')">垂顺抗皱</span>
+                                    <span class="tag-item" onclick="toggleTag(this, 'sp')">保暖舒适</span>
+                                    <span class="tag-item" onclick="toggleTag(this, 'sp')">立体剪裁</span>
+                                    <span class="tag-item" onclick="toggleTag(this, 'sp')">透气不闷</span>
+                                    <span class="tag-item" onclick="toggleTag(this, 'sp')">不易起球</span>
+                                </div>
+                                <input type="text" id="selling_points_input" placeholder="可输入其他核实卖点，以逗号分隔" style="margin-top:8px;" onchange="syncSellingPoints()">
+                            </div>
+
+                            <div class="form-group" style="margin-top:12px;">
+                                <label>字幕亮黄高亮词：</label>
+                                <div class="tag-cloud" id="keywordTags">
+                                    <span class="tag-item active" onclick="toggleTag(this, 'kw')">闭眼入</span>
+                                    <span class="tag-item active" onclick="toggleTag(this, 'kw')">爆款推荐</span>
+                                    <span class="tag-item" onclick="toggleTag(this, 'kw')">现货秒发</span>
+                                    <span class="tag-item" onclick="toggleTag(this, 'kw')">实物实拍</span>
+                                    <span class="tag-item" onclick="toggleTag(this, 'kw')">降温必备</span>
+                                    <span class="tag-item" onclick="toggleTag(this, 'kw')">专柜同款</span>
+                                </div>
+                                <input type="text" id="keywords" value="闭眼入，爆款推荐" style="margin-top:8px;">
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <label>品牌中文副标 (Brand CN)</label>
-                            <input type="text" id="brand_cn" value="" placeholder="选填，例如: 高端女装">
-                        </div>
-                    </div>
+                    </details>
 
                     <!-- 隐藏兼容字段 -->
+                    <input type="hidden" id="sku_id" value="">
                     <input type="hidden" id="product_title_l1" value="">
                     <input type="hidden" id="product_title_l2" value="">
                     <input type="hidden" id="product_img_1" value="">
                     <input type="hidden" id="product_img_2" value="">
-
-                    <!-- 变体/颜色点击选择 -->
-                    <div class="form-group" style="margin-top:10px;">
-                        <label>主推颜色与款式变体 (点击选择，支持多选)：</label>
-                        <div class="tag-cloud" id="variantTags">
-                            <span class="tag-item" onclick="toggleTag(this, 'variant')">米白色</span>
-                            <span class="tag-item" onclick="toggleTag(this, 'variant')">黑色</span>
-                            <span class="tag-item" onclick="toggleTag(this, 'variant')">燕麦色</span>
-                            <span class="tag-item" onclick="toggleTag(this, 'variant')">驼色</span>
-                            <span class="tag-item" onclick="toggleTag(this, 'variant')">花灰色</span>
-                            <span class="tag-item" onclick="toggleTag(this, 'variant')">藏青色</span>
-                            <span class="tag-item" onclick="toggleTag(this, 'variant')">酒红色</span>
-                            <span class="tag-item" onclick="toggleTag(this, 'variant')">焦糖色</span>
-                        </div>
-                        <div class="hint">选中的颜色将被严格用于变体身份追踪校验。</div>
-                    </div>
-
-                    <!-- 真实商品卖点点击选择 -->
-                    <div class="form-group" style="margin-top:14px;">
-                        <label>可信商品卖点 (点击选择或下方补充输入)：</label>
-                        <div class="tag-cloud" id="sellingPointTags">
-                            <span class="tag-item" onclick="toggleTag(this, 'sp')">显瘦版型</span>
-                            <span class="tag-item" onclick="toggleTag(this, 'sp')">细腻亲肤</span>
-                            <span class="tag-item" onclick="toggleTag(this, 'sp')">垂顺抗皱</span>
-                            <span class="tag-item" onclick="toggleTag(this, 'sp')">保暖舒适</span>
-                            <span class="tag-item" onclick="toggleTag(this, 'sp')">立体剪裁</span>
-                            <span class="tag-item" onclick="toggleTag(this, 'sp')">透气不闷</span>
-                            <span class="tag-item" onclick="toggleTag(this, 'sp')">不易起球</span>
-                        </div>
-                        <input type="text" id="selling_points_input" placeholder="可输入其他自定义卖点，以逗号分隔" style="margin-top:8px;" onchange="syncSellingPoints()">
-                        <div class="hint">严禁填入虚假未核实材质；仅作为事实描述提取。</div>
-                    </div>
-
-                    <!-- 字幕高亮词 -->
-                    <div class="form-group" style="margin-top:14px;">
-                        <label>字幕亮黄高亮营销词 (点击选择，与商品事实分离)：</label>
-                        <div class="tag-cloud" id="keywordTags">
-                            <span class="tag-item active" onclick="toggleTag(this, 'kw')">闭眼入</span>
-                            <span class="tag-item active" onclick="toggleTag(this, 'kw')">爆款推荐</span>
-                            <span class="tag-item" onclick="toggleTag(this, 'kw')">现货秒发</span>
-                            <span class="tag-item" onclick="toggleTag(this, 'kw')">实物实拍</span>
-                            <span class="tag-item" onclick="toggleTag(this, 'kw')">降温必备</span>
-                            <span class="tag-item" onclick="toggleTag(this, 'kw')">专柜同款</span>
-                        </div>
-                        <input type="text" id="keywords" value="闭眼入，爆款推荐" style="margin-top:8px;">
-                    </div>
+                    <input type="hidden" id="product_attributes_json" value="{}">
+                    <input type="hidden" id="product_ref_images_json" value="[]">
                 </div>
 
                 <div class="step-actions">
-                    <button type="button" class="btn-prev" onclick="goToStep(2)">⬅ 返回上一步</button>
-                    <button type="button" class="btn-next" onclick="goToStep(4)">下一步：剪辑策略 ➔</button>
+                    <button type="button" class="btn-prev" onclick="goToStep(1)">⬅ 返回上一步</button>
+                    <button type="button" class="btn-next" onclick="goToStep(3)">下一步：剪辑与风格 ➔</button>
                 </div>
             </div>
 
-            <!-- ================= STEP 4: 剪辑与风格策略卡片 ================= -->
-            <div class="step-panel" id="step4">
+            <!-- ================= STEP 3: 剪辑与风格策略卡片 ================= -->
+            <div class="step-panel" id="step3">
                 <div class="card">
-                    <div class="card-title">⚙️ 4. 剪辑偏好与风格策略卡片</div>
+                    <div class="card-title">⚙️ 3. 剪辑偏好与风格策略卡片</div>
 
                     <label>成片目标时长区间：</label>
                     <div class="card-grid" id="durationCards">
@@ -1814,15 +1985,15 @@ def get_html_content() -> str:
                 </div>
 
                 <div class="step-actions">
-                    <button type="button" class="btn-prev" onclick="goToStep(3)">⬅ 返回上一步</button>
-                    <button type="button" class="btn-next" onclick="goToStep(5)">下一步：生成任务 ➔</button>
+                    <button type="button" class="btn-prev" onclick="goToStep(2)">⬅ 返回上一步</button>
+                    <button type="button" class="btn-next" onclick="goToStep(4)">下一步：生成任务 ➔</button>
                 </div>
             </div>
 
-            <!-- ================= STEP 5: 执行与交付监控 ================= -->
-            <div class="step-panel" id="step5">
+            <!-- ================= STEP 4: 执行与交付监控 ================= -->
+            <div class="step-panel" id="step4">
                 <div class="card">
-                    <div class="card-title">🚀 5. 任务交接与工作流执行</div>
+                    <div class="card-title">🚀 4. 任务交接与工作流执行</div>
                     
                     <div style="display:flex;gap:12px;margin-bottom:14px;">
                         <button type="button" class="btn-run-primary" id="btnRunMain" style="flex:2;" onclick="generateAgentTaskAction()">
@@ -1890,7 +2061,7 @@ def get_html_content() -> str:
                 </div>
 
                 <div class="step-actions">
-                    <button type="button" class="btn-prev" onclick="goToStep(4)">⬅ 返回上一步调整参数</button>
+                    <button type="button" class="btn-prev" onclick="goToStep(3)">⬅ 返回上一步调整参数</button>
                     <div></div>
                 </div>
 
@@ -2108,29 +2279,129 @@ def get_html_content() -> str:
             }
 
             // 渲染图片（含缩略图、尺寸与设为主图操作）
+            renderImageCards(res.images || []);
+
+            // 回填已有的 job_spec.json
+            if (res.existing_spec) {
+                applyExistingSpec(res.existing_spec);
+            }
+        }
+
+        function renderImageCards(images) {
             const imgBox = document.getElementById('imageListContainer');
-            if (res.images && res.images.length > 0) {
-                imgBox.innerHTML = res.images.map((img, i) => `
+            if (!imgBox) return;
+            if (!projectScannedData) projectScannedData = { images: [] };
+            projectScannedData.images = images || [];
+            if (images && images.length > 0) {
+                imgBox.innerHTML = images.map((img, i) => `
                     <div style="border:1px solid #334155;border-radius:8px;padding:8px 12px;background:var(--input-bg);display:flex;align-items:center;gap:12px;">
                         ${img.thumbnail ? `<img src="${img.thumbnail}" style="width:54px;height:54px;object-fit:cover;border-radius:6px;border:1px solid #475569;">` : '🖼️'}
                         <div style="flex:1;">
-                            <div style="font-weight:600;font-size:13px;">${img.filename}</div>
-                            <div style="font-size:11px;color:var(--muted);">${img.size_kb} KB</div>
+                            <div style="font-weight:600;font-size:13px;">${esc(img.filename)}</div>
+                            <div style="font-size:11px;color:var(--muted);">${img.size_kb} KB${img.source === 'product_link' ? ' · 链接抓取' : ''}</div>
                         </div>
                         <button type="button" class="btn-browse" style="padding:4px 10px;font-size:12px;" onclick="setProductImageByIndex(${i}, 1)">设为主图</button>
                         <button type="button" class="btn-browse" style="padding:4px 10px;font-size:12px;" onclick="setProductImageByIndex(${i}, 2)">设为副图</button>
                     </div>
                 `).join('');
-                if (!document.getElementById('product_img_1').value && res.images.length > 0) {
-                    document.getElementById('product_img_1').value = res.images[0].path;
+                if (!document.getElementById('product_img_1').value && images.length > 0) {
+                    document.getElementById('product_img_1').value = images[0].path;
+                }
+                if (!document.getElementById('product_img_2').value && images.length > 1) {
+                    document.getElementById('product_img_2').value = images[1].path;
                 }
             } else {
-                imgBox.innerHTML = '<div style="color:var(--muted);font-size:12px;">素材目录下无商品图片，将使用默认封面占位</div>';
+                imgBox.innerHTML = '<div style="color:var(--muted);font-size:12px;">暂无商品图片，可在上方粘贴抖音商品链接一键自动下载主图</div>';
             }
+        }
 
-            // 回填已有的 job_spec.json
-            if (res.existing_spec) {
-                applyExistingSpec(res.existing_spec);
+        async function fetchProductLinkAction() {
+            const urlInput = document.getElementById('product_url');
+            const rawUrl = urlInput ? urlInput.value.trim() : '';
+            if (!rawUrl) {
+                showAlert(false, "请先粘贴抖音商品链接！");
+                return;
+            }
+            if (!window.pywebview || !window.pywebview.api) return;
+
+            const btn = document.getElementById('btnFetchProduct');
+            const statusEl = document.getElementById('productFetchStatus');
+            const badgeEl = document.getElementById('productFetchBadge');
+            const pRoot = document.getElementById('project_root').value.trim();
+
+            btn.disabled = true;
+            btn.innerText = "⏳ 正在解析...";
+            if (statusEl) statusEl.innerText = "正在访问公开商品页面并下载高清主图，约需 8~15 秒...";
+
+            try {
+                const res = await window.pywebview.api.fetch_product_link(rawUrl, pRoot || null);
+                if (!res || !res.success) {
+                    const msg = (res && res.message) ? res.message : "商品链接解析失败";
+                    if (statusEl) statusEl.innerText = "解析失败：" + msg;
+                    showAlert(false, msg);
+                    return;
+                }
+
+                const prod = res.product || {};
+                const brand = res.brand || {};
+
+                if (prod.product_url) urlInput.value = prod.product_url;
+                if (prod.sku_id) document.getElementById('sku_id').value = prod.sku_id;
+                if (prod.name) document.getElementById('product_name').value = prod.name;
+                if (prod.title_line1) document.getElementById('product_title_l1').value = prod.title_line1;
+                if (prod.title_line2) document.getElementById('product_title_l2').value = prod.title_line2;
+                if (prod.category) document.getElementById('category').value = prod.category;
+                if (brand.title_en) document.getElementById('brand_en').value = brand.title_en;
+                if (brand.subtitle_cn) document.getElementById('brand_cn').value = brand.subtitle_cn;
+                if (prod.attributes) document.getElementById('product_attributes_json').value = JSON.stringify(prod.attributes);
+                if (prod.selling_points && prod.selling_points.length) {
+                    document.getElementById('selling_points_input').value = prod.selling_points.join('，');
+                }
+                if (res.highlight_keywords && res.highlight_keywords.length) {
+                    document.getElementById('keywords').value = res.highlight_keywords.join('，');
+                }
+                if (prod.reference_images && prod.reference_images.length) {
+                    document.getElementById('product_ref_images_json').value = JSON.stringify(prod.reference_images);
+                }
+
+                if (res.images && res.images.length) {
+                    const existing = (projectScannedData && projectScannedData.images) ? projectScannedData.images : [];
+                    const merged = [...res.images];
+                    const seen = new Set(merged.map(x => x.path));
+                    existing.forEach(x => { if (!seen.has(x.path)) merged.push(x); });
+                    document.getElementById('product_img_1').value = res.images[0].path;
+                    if (res.images.length > 1) {
+                        document.getElementById('product_img_2').value = res.images[1].path;
+                    }
+                    renderImageCards(merged);
+                }
+
+                // 渲染解析概览卡片
+                const previewBox = document.getElementById('productPreviewBox');
+                if (previewBox) {
+                    previewBox.style.display = 'block';
+                    document.getElementById('previewTitle').innerText = "✅ " + (prod.name || "商品已解析");
+                    document.getElementById('previewCategory').innerText = prod.category || "自动识别";
+                    const metaLines = [];
+                    if (brand.title_en || brand.subtitle_cn) metaLines.push(`品牌/店铺：${esc(brand.title_en || '')} ${esc(brand.subtitle_cn || '')}`);
+                    if (prod.sku_id) metaLines.push(`款号/SKU：${esc(prod.sku_id)}`);
+                    if (prod.title_line1 || prod.title_line2) metaLines.push(`封面双行标题：${esc(prod.title_line1 || '')} / ${esc(prod.title_line2 || '')}`);
+                    if (prod.selling_points && prod.selling_points.length) metaLines.push(`核实卖点：${esc(prod.selling_points.join(' · '))}`);
+                    metaLines.push(`已下载主图：${(res.images || []).length} 张`);
+                    document.getElementById('previewMeta').innerHTML = metaLines.join('<br>');
+                }
+                if (badgeEl) {
+                    badgeEl.className = "badge badge-success";
+                    badgeEl.innerText = "已自动填充";
+                }
+                if (statusEl) statusEl.innerText = res.message || "商品信息与主图已自动填充，可直接进入下一步！";
+                showAlert(true, res.message || "商品链接解析成功！");
+            } catch (e) {
+                if (statusEl) statusEl.innerText = "解析异常：" + e;
+                showAlert(false, "解析商品链接异常: " + e);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "⚡ 一键解析商品";
             }
         }
 
@@ -2156,11 +2427,29 @@ def get_html_content() -> str:
             if (spec.project_id) document.getElementById('project_id').value = spec.project_id;
             if (brand.title_en) document.getElementById('brand_en').value = brand.title_en;
             if (brand.subtitle_cn) document.getElementById('brand_cn').value = brand.subtitle_cn;
+            if (prod.product_url && document.getElementById('product_url')) {
+                document.getElementById('product_url').value = prod.product_url;
+            }
+            if (prod.sku_id && document.getElementById('sku_id')) {
+                document.getElementById('sku_id').value = prod.sku_id;
+            }
             if (prod.name || prod.title_line1) {
                 document.getElementById('product_name').value = prod.name || prod.title_line1;
                 syncProductTitles();
+                if (prod.title_line1) document.getElementById('product_title_l1').value = prod.title_line1;
+                if (prod.title_line2) document.getElementById('product_title_l2').value = prod.title_line2;
             }
             if (prod.category) document.getElementById('category').value = prod.category;
+            if (prod.attributes && document.getElementById('product_attributes_json')) {
+                document.getElementById('product_attributes_json').value = JSON.stringify(prod.attributes);
+            }
+            if (prod.reference_images && document.getElementById('product_ref_images_json')) {
+                document.getElementById('product_ref_images_json').value = JSON.stringify(prod.reference_images);
+            }
+            if (prod.item_images && prod.item_images.length) {
+                document.getElementById('product_img_1').value = prod.item_images[0] || "";
+                document.getElementById('product_img_2').value = prod.item_images[1] || "";
+            }
             if (opt.duration_range) {
                 const el = document.querySelector(`#durationCards .choice-card[onclick*="'${opt.duration_range}'"]`);
                 if (el) selectCard(el, 'duration_range', opt.duration_range);
@@ -2189,12 +2478,24 @@ def get_html_content() -> str:
             const pRoot = document.getElementById('project_root').value.trim();
             const sps = syncSellingPoints();
             const vars = getSelectedVariants();
+            let parsedAttrs = {};
+            let parsedRefs = [];
+            try {
+                const rawA = document.getElementById('product_attributes_json');
+                if (rawA && rawA.value) parsedAttrs = JSON.parse(rawA.value);
+            } catch (e) { parsedAttrs = {}; }
+            try {
+                const rawR = document.getElementById('product_ref_images_json');
+                if (rawR && rawR.value) parsedRefs = JSON.parse(rawR.value);
+            } catch (e) { parsedRefs = []; }
 
             return {
                 project_id: document.getElementById('project_id').value.trim(),
                 project_root: pRoot,
                 raw_video_path: vList.length > 0 ? vList[0] : "",
                 raw_video_paths: vList,
+                product_url: document.getElementById('product_url') ? document.getElementById('product_url').value.trim() : "",
+                sku_id: document.getElementById('sku_id') ? document.getElementById('sku_id').value.trim() : "",
                 brand_en: document.getElementById('brand_en').value.trim(),
                 brand_cn: document.getElementById('brand_cn').value.trim(),
                 product_name: document.getElementById('product_name').value.trim(),
@@ -2202,6 +2503,8 @@ def get_html_content() -> str:
                 product_title_l2: document.getElementById('product_title_l2').value.trim(),
                 product_img_1: document.getElementById('product_img_1').value.trim(),
                 product_img_2: document.getElementById('product_img_2').value.trim(),
+                reference_images: parsedRefs,
+                attributes: parsedAttrs,
                 category: document.getElementById('category').value,
                 allowed_variants: vars,
                 selling_points: sps,
@@ -2296,9 +2599,9 @@ def get_html_content() -> str:
                 goToStep(2);
                 return;
             }
-            if (!payload.product_name) {
-                showAlert(false, "请填写商品核心名称！");
-                goToStep(3);
+            if (!payload.product_name && !payload.product_url) {
+                showAlert(false, "请粘贴抖音商品链接，或展开手动区填写商品名称！");
+                goToStep(2);
                 return;
             }
 
@@ -2447,9 +2750,9 @@ def get_html_content() -> str:
                 goToStep(2);
                 return;
             }
-            if (!payload.product_name) {
-                showAlert(false, "请填写商品核心名称！");
-                goToStep(3);
+            if (!payload.product_name && !payload.product_url) {
+                showAlert(false, "请粘贴抖音商品链接，或展开手动区填写商品名称！");
+                goToStep(2);
                 return;
             }
 

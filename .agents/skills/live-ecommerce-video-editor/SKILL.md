@@ -11,15 +11,23 @@ You are the **external multimodal video directing Agent** (AGY / Codex / Claude 
 
 You execute the deterministic CLI (`python -m src.cli`), **visually inspect generated Contact Sheets and Cover Comparison Sheets via `read_file`**, review the compressed `director_brief.md`, author a `sequence_proposal.json` (v3.3), supervise rendering, **visually inspect `seams_review.jpg` via `inspect-render`**, and enforce dual QC gates before signing off on deliverables.
 
-## Universal V3.3 CLI Execution Pipeline
+## Universal V3.3/V3.4 CLI Execution Pipeline
 
 Always execute the pipeline in sequential phases:
+
+### 0. Phase `fetch-product` (Optional Link-First Intake)
+```bash
+python -m src.cli fetch-product --url "<douyin_product_url>" --project "<project_root_or_raw_dir>" --spec-out "<path_to_job_spec.json>"
+```
+- Fetches public product metadata (title, brand/shop, SKU, category, factual attributes, selling points) and downloads up to 4 high-res reference images into `<project_root>/product_ref/` (never touching `raw/` or `素材/`).
+- Automatically merges into `job_spec.json` (`product.product_url`, `item_images`, `reference_images`) so manual "商品与标签" entry can be omitted. Never bypasses login walls or CAPTCHAs; reports `BLOCKED` explicitly if gated.
 
 ### 1. Phase `prepare`: Workspace, Asset Allowlist & Category Profile
 ```bash
 python -m src.cli prepare --spec "<path_to_job_spec.json>"
 ```
-- Registers explicit user-confirmed source videos into `input_manifest.json` with full 64-char SHA-256 hashes.
+- Registers explicit user-confirmed source videos into `input_manifest.json` with full 64-char SHA-256 hashes (supports `素材/`, `materials/`, `input/`, and `raw/` subdirectories).
+- If `job_spec.json` only provides `product.product_url`, `prepare` automatically fetches product metadata & images into `<project_root>/product_ref/`.
 - Computes immutable `spec_fingerprint`, loads category profile (default: `womenswear`), and generates isolated `work/<run_id>/`.
 
 ### 2. Phase `analyze`: Deterministic Extraction, Hybrid Vision & Visual Digest

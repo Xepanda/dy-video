@@ -32,6 +32,22 @@ def stage_prepare(spec_path: str, run_id: Optional[str] = None, resume: bool = F
         raise ValueError("job_spec.json 校验未通过:\n" + "\n".join(f"- {e}" for e in errors))
 
     paths = ProjectPaths(project_root=spec_abs, run_id=run_id)
+
+    # V3.4: 若仅提供了 product_url 且尚未填充商品名称或参考图，自动抓取并合并元数据（不改写用户原始目录）
+    prod_cfg = spec.get("product") if isinstance(spec.get("product"), dict) else {}
+    prod_url = str(prod_cfg.get("product_url") or spec.get("product_url") or "").strip()
+    has_prod_title = bool(
+        str(prod_cfg.get("name") or "").strip()
+        or str(prod_cfg.get("title_line1") or "").strip()
+        or str(prod_cfg.get("title_line2") or "").strip()
+    )
+    has_prod_imgs = bool(prod_cfg.get("item_images") or prod_cfg.get("reference_images"))
+    if prod_url and (not has_prod_title or not has_prod_imgs):
+        from src.tools.fetch_product_link import fetch_product_from_url, merge_product_into_spec
+        ref_dir = os.path.join(paths.project_root, "product_ref")
+        fetched = fetch_product_from_url(prod_url, download_dir=ref_dir)
+        spec = merge_product_into_spec(spec, fetched, overwrite=False)
+
     fp_fn = resolve_dep("compute_job_fingerprint", compute_job_fingerprint)
 
     has_existing_work = os.path.isdir(paths.work_dir) and os.path.isfile(os.path.join(paths.work_dir, "run_context.json"))

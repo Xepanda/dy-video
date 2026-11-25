@@ -93,7 +93,8 @@ class ProjectPaths:
                 os.path.isfile(os.path.join(norm_root, "job_spec.json")) or
                 os.path.isdir(os.path.join(norm_root, "素材")) or
                 os.path.isdir(os.path.join(norm_root, "materials")) or
-                os.path.isdir(os.path.join(norm_root, "input"))
+                os.path.isdir(os.path.join(norm_root, "input")) or
+                os.path.isdir(os.path.join(norm_root, "raw"))
             )
             if not has_project_files and (
                 last_part.startswith("run_") or
@@ -113,7 +114,8 @@ class ProjectPaths:
             has_project_files = (
                 os.path.isfile(os.path.join(norm_root, "job_spec.json")) or
                 os.path.isdir(os.path.join(norm_root, "素材")) or
-                os.path.isdir(os.path.join(norm_root, "materials"))
+                os.path.isdir(os.path.join(norm_root, "materials")) or
+                os.path.isdir(os.path.join(norm_root, "raw"))
             )
             if not has_project_files:
                 is_abs = Path(norm_root).is_absolute()
@@ -123,7 +125,7 @@ class ProjectPaths:
                 else:
                     norm_root = str(Path(*p_parts[:-1])) if p_parts[:-1] else "."
 
-        if os.path.basename(norm_root) in ("素材", "materials", "input"):
+        if os.path.basename(norm_root) in ("素材", "materials", "input", "raw"):
             materials_dir = materials_dir or norm_root
             self.project_root = os.path.dirname(norm_root)
         else:
@@ -146,7 +148,7 @@ class ProjectPaths:
             self.materials_dir = normalize_project_path(materials_dir)
         else:
             # 优先寻找标准已知子目录
-            cand_dirs = ["素材", "input", "materials"]
+            cand_dirs = ["素材", "input", "materials", "raw"]
             found = None
             for cd in cand_dirs:
                 p = os.path.join(self.project_root, cd)
@@ -252,7 +254,7 @@ def is_historical_output(file_path: str, project_id: str = "", project_root: Opt
                 continue
             sub_parts = parts[i+1:]
             # 检查此 'work' / 'output' 后面是否有素材目录标记
-            if any(sp in ("素材", "materials", "input") for sp in sub_parts):
+            if any(sp in ("素材", "materials", "input", "raw") for sp in sub_parts):
                 continue
             # 若给定了 project_id 且 project_id 在此 part 之后，说明也是宿主外层工作区目录
             if project_id and project_id in sub_parts:
@@ -595,6 +597,7 @@ def compute_job_fingerprint(spec: Dict[str, Any], manifest: Optional[Dict[str, A
     if not isinstance(opts, dict):
         opts = {}
     config_core = {
+        "product_url": str(prod.get("product_url", "")),
         "sku_id": str(prod.get("sku_id", "")),
         "name": str(prod.get("name") or prod.get("title_line1", "")),
         "category": str(prod.get("category", "")),

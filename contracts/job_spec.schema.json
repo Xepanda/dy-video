@@ -28,6 +28,7 @@
     "product": {
       "type": "object",
       "properties": {
+        "product_url": { "type": "string", "description": "抖音/抖店商品详情链接（V3.4，可自动解析商品名称、属性、卖点与主图）" },
         "sku_id": { "type": "string", "description": "商品唯一 SKU 编码（V3）" },
         "name": { "type": "string", "description": "商品标准全称（V3）" },
         "category": { "type": "string", "description": "品类名称（V3）" },
