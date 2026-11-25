@@ -56,15 +56,11 @@ data/*.wav
 scripts/scratch/
 *.log
 
-# 本地运行日志（仅保留 json 指标产物入庫）
-logs/*.jpg
-logs/*.png
-logs/project-*/
+# 本地运行日志与报告（全部不入库）
+logs/
 
 # WorkBuddy 本地工作区数据（不入库）
 .workbuddy/
-logs/pr_body.md
-logs/pr_body*.md
 
 # 运行时产物（含机器专属绝对路径，不入库）
 specs/*.resolved.json
