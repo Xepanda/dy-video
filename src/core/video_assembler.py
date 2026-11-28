@@ -1055,9 +1055,32 @@ class VideoAssembler:
                       f"{', '.join(sorted(set(masked_words))[:8])}"
                       f"（动作 {subtitle_action}，不消音/不打码）")
 
-        # 1. 生成对应时间的变色字幕
+        # 1. 生成对应时间的变色字幕（优先应用经过审计的导演字幕同音错字精校）
         ass_path = os.path.join(self.work_dir, "subtitles.ass")
-        keywords = plan.get("subtitles", {}).get("keywords", [])
+        sub_cfg = plan.get("subtitles", {}) or {}
+        keywords = sub_cfg.get("keywords", [])
+        sub_replacements = sub_cfg.get("replacements") or {}
+        if isinstance(sub_replacements, dict) and sub_replacements:
+            # 按原词长度降序替换，防止短词误截长词
+            ordered_repls = sorted(
+                [(str(k), str(v)) for k, v in sub_replacements.items() if k and v],
+                key=lambda kv: len(kv[0]),
+                reverse=True,
+            )
+            fixed_count = 0
+            new_events = []
+            for ev in sub_events:
+                txt = str(ev.get("text", "") or "")
+                orig_txt = txt
+                for wk, fv in ordered_repls:
+                    if wk in txt:
+                        txt = txt.replace(wk, fv)
+                if txt != orig_txt:
+                    fixed_count += 1
+                new_events.append({**ev, "text": txt})
+            sub_events = new_events
+            if fixed_count:
+                print(f"[ASSEMBLER] 已应用导演字幕精校: 修正 {fixed_count} 条字幕事件")
         if text_on:
             generate_ass_subtitles(sub_events, ass_path, keywords=keywords)
         elif os.path.exists(ass_path):

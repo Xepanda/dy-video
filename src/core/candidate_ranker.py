@@ -210,25 +210,62 @@ class CandidateRanker:
             else:
                 rel_score = 10.0
 
-            # Selling Point Evidence
+            # Selling Point Evidence（打破平分：综合配置卖点 + 品类真实口播说服力词密度）
             sp_hits = cand.get("selling_point_evidence_refs") or []
-            sp_score = min(100.0, len(sp_hits) * 35.0 + 30.0) if sp_hits else 40.0
+            lex = cat_profile.get("verified_lexicon") or {}
+            domain_cues = (
+                tuple(lex.get("fabric") or ())
+                + tuple(lex.get("fit") or ())
+                + tuple(lex.get("styling") or ())
+                + (
+                    "不掉毛", "不怎么掉毛", "贴肤", "贴皮肤", "不扎", "很软", "柔软",
+                    "保暖", "暖和", "显瘦", "洋气", "质感", "轻盈", "很轻", "立领",
+                    "真羊毛", "全羊毛", "进口", "版型", "百搭", "高级", "尺码",
+                )
+            )
+            cue_hits = len({w for w in domain_cues if w and w in text})
+            sp_score = min(100.0, 32.0 + len(sp_hits) * 28.0 + cue_hits * 11.0)
 
-            # Visual Quality：基于真实媒体/帧特征评分
+            # Visual Quality：基于真实媒体/帧特征评分（引入相似度与抖动风险区分度）
             vis_conf = cand.get("relation_confidence") or (0.9 if relation in ("SAME_SKU", "SAME_SKU_VARIANT") else 0.5)
+            vis_sim = float(cand.get("vision_similarity") or 0.0)
             if cand.get("frame_ids") and relation in ("SAME_SKU", "SAME_SKU_VARIANT"):
-                vis_score = min(98.0, 75.0 + float(vis_conf) * 25.0)
+                vis_score = min(98.0, 72.0 + float(vis_conf) * 18.0 + min(1.0, vis_sim) * 12.0)
             elif "UNCERTAIN" in relation:
-                vis_score = 45.0
+                vis_score = min(72.0, 42.0 + min(1.0, vis_sim) * 25.0)
             else:
                 vis_score = 70.0
+            if "MID_CLIP_SKU_DRIFT" in risks:
+                vis_score = max(25.0, vis_score - 10.0)
 
-            # Utterance Completeness
+            # Utterance Completeness（重点惩罚半截话、口水词起头与直播间杂音，奖励完整叙事段）
             if "INCOMPLETE_SENTENCE" in risks:
                 utt_score = 40.0
                 missing_evidence.append("语句未在句末正常闭合")
             else:
-                utt_score = 95.0
+                utt_score = 92.0
+                if "DANGLING_CLAUSE_END" in risks:
+                    utt_score -= 22.0
+                    missing_evidence.append("句尾呈悬空从句（疑似未讲完）")
+                if "WEAK_FILLER_START" in risks:
+                    utt_score -= 14.0
+                if "NOISE_OR_CHAT_MENTION" in risks:
+                    utt_score -= 25.0
+                if "SHORT_DURATION" in risks:
+                    utt_score -= 10.0
+                # 奖励 5.5s ~ 10.5s、多子句、首尾干净的完整带货表达
+                n_sub_utts = len(cand.get("utterance_ids") or [])
+                clean_len = len(re.sub(r"[\s，。！？、,.!?]+", "", text))
+                if (
+                    5500 <= dur_ms <= 10500
+                    and n_sub_utts >= 2
+                    and clean_len >= 22
+                    and "DANGLING_CLAUSE_END" not in risks
+                    and "WEAK_FILLER_START" not in risks
+                    and "NOISE_OR_CHAT_MENTION" not in risks
+                ):
+                    utt_score = min(100.0, utt_score + 8.0)
+                utt_score = max(20.0, utt_score)
 
             # Action Completeness：结合镜头切换共振与动作完整性
             has_shot_align = len(cand.get("shot_ids") or []) > 0

@@ -36,18 +36,10 @@ def _derive_verified_sticker(
     prof_sps = product.get("selling_points", []) if isinstance(product, dict) else []
     lex = (cat_profile or load_category_profile()).get("verified_lexicon") or {}
 
-    if idx == 1:
-        if prof_sps:
-            return f"{prof_sps[0][:4]}推荐" if len(prof_sps[0]) >= 2 else "开场精选"
-        return "开场精选"
-
-    if idx == total_clips:
-        return "品质保障"
-
     if cat == "fabric":
         known_fabrics = tuple(lex.get("fabric") or (
             "羊绒", "白鸭绒", "鹅绒", "蚕丝", "真丝", "全棉", "纯棉", "亚麻",
-            "德绒", "发热", "保暖", "莫代尔", "三防", "防风", "防泼水", "羊毛",
+            "德绒", "发热", "保暖", "莫代尔", "三防", "防风", "防泼水", "羊毛", "蕾丝",
         ))
         for fab in known_fabrics:
             if fab in c_text or any(fab in sp for sp in prof_sps):
@@ -55,6 +47,27 @@ def _derive_verified_sticker(
         if sp_refs:
             return f"{sp_refs[0][:4]}面料"
         return "面料细节"
+
+    # 优先根据当前镜头真实口播语义精准匹配贴纸，杜绝“讲不掉毛却贴版型细节”的图文割裂
+    topic_rules = (
+        (("不掉毛", "不怎么掉毛", "不算有掉毛", "几乎是不掉"), "不易掉毛"),
+        (("贴肤", "贴皮肤", "贴服", "不扎", "板很软", "很软"), "亲肤软糯"),
+        (("保暖", "暖和", "鹅绒", "零下"), "锁温保暖"),
+        (("显瘦", "不臃肿", "遮肉"), "显瘦版型"),
+        (("尺码", "建议穿", "斤"), "尺码参考"),
+        (("搭长裙", "配牛仔", "搭配", "百搭"), "百搭实穿"),
+    )
+    for triggers, label in topic_rules:
+        if any(t in c_text for t in triggers):
+            return label
+
+    if idx == 1:
+        if prof_sps:
+            return f"{prof_sps[0][:4]}推荐" if len(prof_sps[0]) >= 2 else "开场精选"
+        return "开场精选"
+
+    if idx == total_clips:
+        return "品质保障"
 
     if cat == "fit":
         known_fits = tuple(lex.get("fit") or ("显瘦", "修身", "垂坠", "正肩", "落肩", "宽松", "直筒", "包容", "遮肉"))
@@ -127,7 +140,8 @@ def compile_v3_plan(
         else:
             cat = "styling" if role in ("HOOK", "STYLING") else "fit"
 
-        if c_ov.get("sticker_text"):
+        if "sticker_text" in c_ov and c_ov["sticker_text"] is not None:
+            # 显式传入 "" 允许导演关闭该镜次贴纸（双人/拥挤画面防压脸）
             sticker = str(c_ov["sticker_text"]).strip()
         else:
             sticker = _derive_verified_sticker(cat, role, idx, total_clips, cand, product_dict, cat_profile)
@@ -225,6 +239,24 @@ def compile_v3_plan(
         "domain_profile": cat_profile.get("profile_id", "womenswear"),
     }
 
+    # V3.4: 支持经过审计的同音错别字字幕精校与口播高亮词扩展
+    sub_replacements = proposal.get("subtitle_replacements")
+    if not isinstance(sub_replacements, dict):
+        sub_replacements = {}
+    base_kws = list(options.get("highlight_keywords") or [])
+    extra_kws = proposal.get("highlight_keywords_override")
+    if isinstance(extra_kws, list):
+        for kw in extra_kws:
+            k_str = str(kw or "").strip()
+            if k_str and k_str not in base_kws:
+                base_kws.append(k_str)
+    else:
+        # 自动补充当前成片口播中真实出现的高频卖点词（避免只高亮标题复合词而漏高亮口播重点）
+        joined_speech = " ".join(c.get("text", "") for c in clips)
+        for auto_kw in ("真羊毛", "全羊毛", "羊毛", "显瘦", "保暖", "不掉毛", "贴肤", "很软", "洋气", "百搭"):
+            if auto_kw in joined_speech and auto_kw not in base_kws:
+                base_kws.append(auto_kw)
+
     plan = {
         "project_id": spec_data.get("project_id", "demo"),
         "raw_video_path": os.path.abspath(primary_video) if primary_video else "",
@@ -238,7 +270,10 @@ def compile_v3_plan(
         "cta": dict(cta_block),
         "cta_card": dict(cta_block),
         "boom": {"volume": 0.45, "file": "boom.wav"},
-        "subtitles": {"keywords": options.get("highlight_keywords", [])},
+        "subtitles": {
+            "keywords": base_kws,
+            "replacements": dict(sub_replacements),
+        },
         "selection_meta": meta,
         "meta": meta,
         "v3_proposal_meta": proposal,

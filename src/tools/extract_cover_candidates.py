@@ -196,17 +196,19 @@ def normalize_subject_framing(
     dst_y2 = dst_y1 + (src_y2 - src_y1)
     canvas[dst_y1:dst_y2, dst_x1:dst_x2] = resized[src_y1:src_y2, src_x1:src_x2]
 
-    # 左右边缘自适应镜像填充（消除黑边；带退化几何保护）
+    # 左右边缘自适应柔化延展填充（消除黑边且柔化模糊避免直播间原生文字出现镜像反字）
     if dst_x1 > 0 and (dst_x2 - dst_x1) > 0:
         edge_w = min(dst_x1, dst_x2 - dst_x1)
         edge = canvas[dst_y1:dst_y2, dst_x1:dst_x1 + edge_w]
         if edge.shape[1] > 0:
-            canvas[dst_y1:dst_y2, 0:dst_x1] = cv2.flip(edge, 1)[:, -dst_x1:]
+            flipped = cv2.flip(edge, 1)[:, -dst_x1:]
+            canvas[dst_y1:dst_y2, 0:dst_x1] = cv2.GaussianBlur(flipped, (0, 0), 22.0)
     if dst_x2 < OUT_W and (dst_x2 - dst_x1) > 0:
         gap = OUT_W - dst_x2
         edge = canvas[dst_y1:dst_y2, max(dst_x1, dst_x2 - gap):dst_x2]
         if edge.shape[1] > 0:
-            canvas[dst_y1:dst_y2, dst_x2:OUT_W] = cv2.flip(edge, 1)[:, :gap]
+            flipped = cv2.flip(edge, 1)[:, :gap]
+            canvas[dst_y1:dst_y2, dst_x2:OUT_W] = cv2.GaussianBlur(flipped, (0, 0), 22.0)
 
     # 视觉醒目度提升：反差与微锐化
     blur = cv2.GaussianBlur(canvas, (0, 0), 2.2)

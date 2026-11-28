@@ -56,7 +56,7 @@ python -m src.cli analyze --run "<work_dir>"
   ```bash
   python -m src.cli inspect-candidate --run "<work_dir>" --ids "c_src_01_001,c_src_01_009"
   ```
-- 编写并保存 `<work_dir>/decisions/sequence_proposal.json`（支持 `clip_overrides` 微调 `cut_adjust_start_ms/end_ms`、`zoom`、`effect`、`sticker_text`，支持 `hook_card_override`/`cta_override`，以及针对灰区 `UNCERTAIN` 带真实帧引用的 `visual_overrides`；`OTHER_SKU` 永不放权）。
+- 编写并保存 `<work_dir>/decisions/sequence_proposal.json`（支持 `clip_overrides` 微调 `cut_adjust_start_ms/end_ms`、`zoom`、`effect`、`sticker_text`（传空串 `""` 可显式隐藏该镜贴纸），支持 `hook_card_override`/`cta_override`、受审计的 `subtitle_replacements` 同音错字精校与 `highlight_keywords_override`，以及针对灰区 `UNCERTAIN` 带真实帧引用的 `visual_overrides`；`OTHER_SKU` 永不放权）。
 
 ### 4. 提案审计与计划冻结（`validate-plan`）
 ```bash
@@ -76,7 +76,7 @@ python -m src.cli render --run "<work_dir>"
 ```bash
 python -m src.cli inspect-render --run "<work_dir>"
 ```
-- 抽取成片全部 N-1 个接缝 `[t-0.25s, t, t+0.25s]` 三帧对照拼图 `output/<run_id>/seams_review.jpg`，并运行 `ContinuityAuditor` + `CutOptimizer` 输出局部微调建议（只读不改文件）。
+- 抽取成片全部 N-1 个接缝 `[t-0.25s, t, t+0.25s]` 三帧对照拼图 `output/<run_id>/seams_review.jpg`，以及每段成片中点帧（含首秒 Hook 卡、贴纸、字幕、结尾 CTA）四列总览拼图 `output/<run_id>/overlay_review.jpg`，并运行 `ContinuityAuditor` + `CutOptimizer` 输出局部微调建议（只读不改文件）。
 
 ### 7. 双层质量门禁审计（`qc`）
 ```bash
@@ -116,7 +116,7 @@ dy-live-ecommerce-editor/
 │   ├── graphics/                      # 品牌封面渲染 / ASS 字幕 / 动态贴片
 │   ├── qc/                            # qc_auditor / editorial_qc / continuity_qc
 │   └── tools/                         # 底层确定性原子工具集（价格/违规/人脸/OCR/气口/切片规则/OpenChatCut桥接）
-└── tests/                             # 41 套自动化回归测试（python -u scripts/run_regression.py --quick）
+└── tests/                             # 42 套自动化回归测试（python -u scripts/run_regression.py --quick）
 ```
 
 ---

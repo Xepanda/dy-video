@@ -448,6 +448,7 @@ def _derive_selling_points_and_keywords(
         ("白鹅绒", "羽绒"),
         ("鹅绒", "羽绒"),
         ("鸭绒", "羽绒"),
+        ("蕾丝", "蕾丝"),
     )
     title_str = clean_name or ""
     for title_tok, spoken_root in _MATERIAL_ROOT_MAP:

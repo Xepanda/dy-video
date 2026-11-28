@@ -91,12 +91,12 @@ python -m src.cli render --run "<work_dir>"
 ```
 - Renders 1080×1920 60FPS `output/<run_id>/final.mp4`, `cover.jpg`, `copywriting.md`, and immutable `render_manifest.json`.
 
-### 6. Phase `inspect-render`: Visual Critic Loop (Seam Review)
+### 6. Phase `inspect-render`: Visual Critic Loop (Seam + Finished-Frame Reflection)
 ```bash
 python -m src.cli inspect-render --run "<work_dir>"
 ```
-- Extracts `[t-0.25s, t, t+0.25s]` 3-frame strips for every seam into `output/<run_id>/seams_review.jpg` and emits `CutOptimizer` suggestions.
-- Visually inspect `output/<run_id>/cover.jpg` and `seams_review.jpg` via `read_file`. If a seam or cut feels abrupt, adjust `clip_overrides` in `sequence_proposal.json` and re-run `validate-plan -> render`.
+- Extracts `[t-0.25s, t, t+0.25s]` 3-frame strips for every seam into `output/<run_id>/seams_review.jpg` AND extracts actual rendered midpoint frames (with burned stickers, Hook Card, CTA, and subtitles) into `output/<run_id>/overlay_review.jpg`, plus emits `CutOptimizer` suggestions.
+- Visually inspect `output/<run_id>/cover.jpg`, `seams_review.jpg`, and **`overlay_review.jpg`** via `read_file`. If a sticker crowds dual hosts or native livestream HUD, set `"sticker_text": ""` in `clip_overrides`; if ASR homophone typos appear in burned subtitles, fix them via `subtitle_replacements` (`{"错词": "正词"}`); if a cut truncates speech/action, refine `cut_adjust_start_ms/end_ms` and re-run `validate-plan -> render`.
 
 ### 7. Phase `qc`: Dual Quality Audit Gate (with Seam Continuity)
 ```bash

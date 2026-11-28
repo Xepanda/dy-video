@@ -76,6 +76,7 @@ UNIT_TESTS = [
     "tests/test_pr16_round8_p0_p1.py",
     "tests/test_v33_visual_director.py",
     "tests/test_fetch_product_link.py",
+    "tests/test_v34_clip_selection_and_reflection.py",
 ]
 
 PYTHON = sys.executable

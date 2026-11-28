@@ -520,6 +520,46 @@ def stage_validate_plan(run_arg: str, proposal_path: str) -> Dict[str, Any]:
             violations,
         )
 
+    # V3.4: 校验字幕同音错别字精校表（严禁改写事实、引入价格/违规词或大幅扩写）
+    sub_repls = proposal.get("subtitle_replacements")
+    if sub_repls is not None:
+        if not isinstance(sub_repls, dict):
+            violations.append("subtitle_replacements 必须为 {原ASR错词: 修正词} 字典对象")
+        else:
+            for wrong_k, fixed_v in sub_repls.items():
+                wk = str(wrong_k or "").strip()
+                fv = str(fixed_v or "").strip()
+                if not wk or not fv:
+                    violations.append(f"subtitle_replacements 不允许空键或空替换值: {wk!r} -> {fv!r}")
+                    continue
+                if abs(len(fv) - len(wk)) > 4:
+                    violations.append(f"subtitle_replacements 仅允许同音/错别字精校（字数差须≤4）: '{wk}' -> '{fv}'")
+                    continue
+                _validate_factual_text(
+                    f"subtitle_replacements[{wk}]",
+                    fv,
+                    profile_evidence_corpus + " " + all_selected_text,
+                    factual_tokens,
+                    violations,
+                )
+
+    kw_ov = proposal.get("highlight_keywords_override")
+    if kw_ov is not None:
+        if not isinstance(kw_ov, list):
+            violations.append("highlight_keywords_override 必须为字符串数组")
+        else:
+            for kw in kw_ov:
+                ks = str(kw or "").strip()
+                if not ks:
+                    continue
+                if len(ks) > 10:
+                    violations.append(f"highlight_keywords_override 单条高亮词过长 (>10字): '{ks}'")
+                    continue
+                if find_price_matches(ks):
+                    violations.append(f"highlight_keywords_override 含价格表达: '{ks}'")
+                if any(m.get("severity") == "BLOCK" for m in find_violation_matches(ks)):
+                    violations.append(f"highlight_keywords_override 含违规极限词: '{ks}'")
+
     # 3. 成片时长约束检查
     dur_range_str = str(spec.get("options", {}).get("duration_range", "45-65"))
     try:

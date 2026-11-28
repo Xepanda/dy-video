@@ -66,8 +66,50 @@ def assign_sticker_sides(plan: Dict[str, Any], constraints: Optional[Dict[str, A
     my = int(st_c.get("margin_y", 300) or 300)
     default_side = str(st_c.get("side", "right") or "right")
     fa = FaceAnalyzer()
+    haar_cascade = None
+    try:
+        cascade_p = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
+        if os.path.isfile(cascade_p):
+            cc = cv2.CascadeClassifier(cascade_p)
+            if not cc.empty():
+                haar_cascade = cc
+    except Exception:
+        haar_cascade = None
+
+    # 每个源视频仅抽 1 帧缓存直播间常驻原生文字/浮窗框（避免双人/原生浮窗撞车）
+    source_hud_boxes_cache: Dict[str, List[Tuple[float, float, float, float]]] = {}
+
+    def _detect_native_hud_boxes(src_path: str, sample_t: float) -> List[Tuple[float, float, float, float]]:
+        if src_path in source_hud_boxes_cache:
+            return source_hud_boxes_cache[src_path]
+        hud_boxes: List[Tuple[float, float, float, float]] = []
+        try:
+            cap_h = cv2.VideoCapture(src_path)
+            cap_h.set(cv2.CAP_PROP_POS_MSEC, max(0.0, sample_t) * 1000.0)
+            ok_h, fr_h = cap_h.read()
+            cap_h.release()
+            if ok_h and fr_h is not None:
+                fh_h, fw_h = fr_h.shape[:2]
+                from src.tools.detect_ocr_text import detect_text_regions
+                regs = detect_text_regions(fr_h) or []
+                for rg in regs:
+                    # 仅记录上半区（y < 0.65H）的常驻贴片/浮窗（忽略底部字幕区）
+                    ry0 = float(rg.get("y0", 0.0)) * fh_h
+                    ry1 = float(rg.get("y1", 0.0)) * fh_h
+                    if ry0 < fh_h * 0.65:
+                        x_off_h = (fw_h - out_w) / 2.0 if fw_h > out_w else 0.0
+                        rx0 = (float(rg.get("x0", 0.0)) * fw_h - x_off_h) * (out_w / float(fw_h))
+                        rx1 = (float(rg.get("x1", 0.0)) * fw_h - x_off_h) * (out_w / float(fw_h))
+                        hud_boxes.append((rx0 - 15, ry0 - 15, rx1 + 15, ry1 + 15))
+        except Exception:
+            hud_boxes = []
+        source_hud_boxes_cache[src_path] = hud_boxes
+        return hud_boxes
+
     out_w = 1080
     for c in plan.get("clips", []):
+        if not str(c.get("sticker_text") or "").strip():
+            continue
         src = c.get("source_file") or default_raw_video
         st = float(c.get("st", 0.0))
         dur = float(c.get("dur", 0.0))
@@ -89,31 +131,45 @@ def assign_sticker_sides(plan: Dict[str, Any], constraints: Optional[Dict[str, A
                 cap.release()
                 if not ok or fr is None:
                     continue
-                lm = _load_pose_landmarks(fr)
-                if lm is None:
-                    continue
-                face = fa.analyze(fr, pose_landmarks=lm)
-                if not face or not face.get("face_detected"):
-                    continue
-                bbox = face["face_bbox_norm"]
                 fh, fw = fr.shape[:2]
                 x_off = (fw - out_w) / 2.0 if fw > out_w else 0.0
-                fx0 = (bbox[0] * fw - x_off) * (out_w / float(fw))
-                fx1 = (bbox[2] * fw - x_off) * (out_w / float(fw))
-                fy0 = bbox[1] * fh
-                fy1 = bbox[3] * fh
-                faces.append((fx0, fy0, fx1, fy1))
+                lm = _load_pose_landmarks(fr)
+                if lm is not None:
+                    face = fa.analyze(fr, pose_landmarks=lm)
+                    if face and face.get("face_detected"):
+                        bbox = face["face_bbox_norm"]
+                        fx0 = (bbox[0] * fw - x_off) * (out_w / float(fw))
+                        fx1 = (bbox[2] * fw - x_off) * (out_w / float(fw))
+                        fy0 = bbox[1] * fh
+                        fy1 = bbox[3] * fh
+                        faces.append((fx0, fy0, fx1, fy1))
+                # 多脸补充检测（解决双主播同框时贴纸避开主脸却压住副主播脸的问题）
+                if haar_cascade is not None:
+                    gray_f = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
+                    dets = haar_cascade.detectMultiScale(
+                        gray_f, scaleFactor=1.15, minNeighbors=5, minSize=(70, 70)
+                    )
+                    for (hx, hy, hw_b, hh_b) in dets:
+                        # 仅纳入上半区可信人脸，排除背景装饰误检
+                        if hy < fh * 0.65:
+                            fx0 = (hx - x_off) * (out_w / float(fw))
+                            fx1 = (hx + hw_b - x_off) * (out_w / float(fw))
+                            faces.append((fx0, float(hy), fx1, float(hy + hh_b)))
             except Exception:
                 continue
-        if not faces:
+
+        # 合并直播间常驻原生浮窗框作为一并避让的障碍物
+        hud_obstacles = _detect_native_hud_boxes(src, st + dur * 0.5) if src else []
+        obstacles = list(faces) + list(hud_obstacles)
+        if not obstacles:
             c["sticker_side"] = default_side
             c["sticker_y"] = my
             continue
 
         if str(c.get("effect") or "") == "hflip":
-            faces = [
+            obstacles = [
                 (out_w - fx1, fy0, out_w - fx0, fy1)
-                for (fx0, fy0, fx1, fy1) in faces
+                for (fx0, fy0, fx1, fy1) in obstacles
             ]
 
         z = float(c.get("zoom", 1.0) or 1.0)
@@ -123,10 +179,10 @@ def assign_sticker_sides(plan: Dict[str, Any], constraints: Optional[Dict[str, A
             out_h = 1920
             x_c = out_w * (1.0 - 1.0 / z) / 2.0
             y_c = out_h * ya * (1.0 - 1.0 / z)
-            faces = faces + [
+            obstacles = obstacles + [
                 ((fx0 - x_c) * z, (fy0 - y_c) * z,
                  (fx1 - x_c) * z, (fy1 - y_c) * z)
-                for (fx0, fy0, fx1, fy1) in faces
+                for (fx0, fy0, fx1, fy1) in obstacles
             ]
 
         def _gap(rect, face_rect):
@@ -148,7 +204,7 @@ def assign_sticker_sides(plan: Dict[str, Any], constraints: Optional[Dict[str, A
             for side in ("right", "left"):
                 sx = (out_w - size - mx) if side == "right" else mx
                 rect = (sx, sy, sx + size, sy + size)
-                opts.append((min(_gap(rect, f) for f in faces), side, sx, sy))
+                opts.append((min(_gap(rect, f) for f in obstacles), side, sx, sy))
             return max(opts, key=lambda x: x[0])
 
         best = _best_at(my)
@@ -157,12 +213,19 @@ def assign_sticker_sides(plan: Dict[str, Any], constraints: Optional[Dict[str, A
             safe = [x for x in lowered if x[0] >= 30]
             if safe:
                 best = min(safe, key=lambda x: x[3])
+            else:
+                best = max([best] + lowered, key=lambda x: x[0])
         worst, side, sx, sy = best
-        c["sticker_side"] = side
-        c["sticker_y"] = int(sy)
-        _flag = "OK" if worst >= 30 else ("紧" if worst >= 0 else "压脸")
-        print(f"  [STICKER-SIDE] {c['id']}: 边={side} y={sy} "
-              f"最坏帧人脸间距 {worst:.0f}px [{_flag}]")
+        if worst < 15:
+            # 双人/原生浮窗占满两侧且下移仍会压脸或撞字：自动隐藏该段贴纸，保持画面清爽
+            c["sticker_text"] = ""
+            print(f"  [STICKER-SIDE] {c['id']}: 双脸/原生浮窗拥挤 (最坏间距 {worst:.0f}px)，自动隐藏本段贴纸")
+        else:
+            c["sticker_side"] = side
+            c["sticker_y"] = int(sy)
+            _flag = "OK" if worst >= 30 else "紧"
+            print(f"  [STICKER-SIDE] {c['id']}: 边={side} y={sy} "
+                  f"最坏帧人脸/浮窗间距 {worst:.0f}px [{_flag}]")
 
 
 class AgentDirector:

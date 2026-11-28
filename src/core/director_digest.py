@@ -96,8 +96,15 @@ def _select_digest_candidates(
         cl_id = sc.get("duplicate_cluster_id") or f"cl_{cid}"
         comp = float(c.get("composite_score", 0.0) or 0.0)
         elig = bool(sc.get("eligible") if "eligible" in sc else c.get("eligible", False))
-        # 优先 eligible=True，其次综合分高
-        rank_tuple = (1 if elig else 0, comp, -abs((c.get("source_end_ms", 0) - c.get("source_start_ms", 0)) - 5000))
+        # 优先 eligible=True，其次无杂音/非悬空子句，其次综合分高，最后贴近 7.2s 完整叙事黄金时长
+        c_risks = set(c.get("risks") or [])
+        clean_flag = 0 if ({"NOISE_OR_CHAT_MENTION", "DANGLING_CLAUSE_END"} & c_risks) else 1
+        rank_tuple = (
+            1 if elig else 0,
+            clean_flag,
+            comp,
+            -abs((c.get("source_end_ms", 0) - c.get("source_start_ms", 0)) - 7200),
+        )
         prev = best_by_cluster.get(cl_id)
         if prev is None or rank_tuple > prev["_rank_tuple"]:
             enriched = dict(c)
@@ -432,15 +439,18 @@ def build_director_digest(
         if not grp:
             continue
         lines.append(f"### [{role_name}]（{len(grp)} 条）")
-        lines.append("| 格号 | Candidate ID | 时长 | SKU/相似度 | 景别 | 得分 | 卖点 | 完整口播 |")
-        lines.append("| :--- | :--- | :---: | :---: | :---: | :---: | :--- | :--- |")
+        lines.append("| 格号 | Candidate ID | 源/时间段 | 时长 | SKU/相似度 | 景别 | 得分 | 风险提示 | 完整口播 |")
+        lines.append("| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :--- | :--- |")
         for e in grp:
             sim_txt = f"{e['vision_similarity']:.2f}" if isinstance(e["vision_similarity"], (int, float)) else "?"
-            sp_txt = ",".join(e["selling_points"][:3]) if e["selling_points"] else "-"
+            r_tags = [str(r) for r in (e.get("risks") or []) if r != "SHORT_DURATION"]
+            risk_txt = ",".join(r_tags) if r_tags else "-"
+            src_short = str(e.get("source_id") or "")[:6]
+            span_txt = f"{src_short} {e.get('start_s', 0):.1f}~{e.get('end_s', 0):.1f}s"
             txt = str(e["text"]).replace("|", "/").replace("\n", " ")
             slot_short = e["slot_ref"].split("/")[-1] if e["slot_ref"] else "-"
             lines.append(
-                f"| `{slot_short}` | `{e['candidate_id']}` | {e['duration_s']}s | {e['product_relation']}({sim_txt}) | {e['shot_scale']} | {e['composite_score']} | {sp_txt} | {txt} |"
+                f"| `{slot_short}` | `{e['candidate_id']}` | {span_txt} | {e['duration_s']}s | {e['product_relation']}({sim_txt}) | {e['shot_scale']} | {e['composite_score']} | {risk_txt} | {txt} |"
             )
         lines.append("")
 

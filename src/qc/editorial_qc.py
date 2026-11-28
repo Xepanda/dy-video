@@ -101,11 +101,23 @@ class EditorialQcAuditor:
                 "missing_points": [],
             })
         else:
+            # 常见品类同义口播映射（直播口播常说自然词如“刺绣/花边”对应标题“蕾丝”、“羊毛”对应“绵羊毛/羊羔毛”）
+            sp_synonyms = {
+                "蕾丝": ("蕾丝", "花边", "刺绣", "定绣", "拱针", "镂空"),
+                "羊羔毛": ("羊羔毛", "羊毛", "毛毛外套", "真毛"),
+                "绵羊毛": ("绵羊毛", "羊毛", "真羊毛", "全羊毛"),
+                "桑蚕丝": ("桑蚕丝", "真丝", "蚕丝"),
+                "白鸭绒": ("白鸭绒", "鸭绒", "羽绒"),
+                "白鹅绒": ("白鹅绒", "鹅绒", "羽绒"),
+            }
             all_covered_sp = set()
             for c in clips:
                 text = c.get("text") or c.get("desc") or ""
                 for sp in required_selling_points:
-                    if sp and sp in text:
+                    if not sp:
+                        continue
+                    aliases = sp_synonyms.get(sp, (sp,))
+                    if any(a in text for a in aliases):
                         all_covered_sp.add(sp)
 
             missing_sp = [sp for sp in required_selling_points if sp not in all_covered_sp]

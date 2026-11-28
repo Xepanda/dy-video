@@ -270,13 +270,66 @@ def stage_inspect_render(run_arg: str) -> Dict[str, Any]:
         seams_review_path = os.path.join(output_dir, "seams_review.jpg")
         canvas.save(seams_review_path, quality=88)
 
+    # V3.4 (借鉴 VideoAgent Adaptive Self-Reflection): 额外生成成品叠加层视觉自检拼图 overlay_review.jpg
+    # 抽取每段真实成片中点帧（含贴纸/Hook/CTA/字幕），让导演交付前亲眼核验最终画面排版与错别字
+    overlay_review_path = None
+    if clips and os.path.isfile(final_video):
+        sample_points: List[Dict[str, Any]] = []
+        acc_t = 0.0
+        for idx, c in enumerate(clips):
+            dur = float(c.get("dur", max(0.0, float(c.get("end", 0)) - float(c.get("st", 0)))))
+            if idx == 0:
+                sample_points.append({
+                    "t": min(1.2, max(0.2, dur * 0.35)),
+                    "label": f"C01 Hook ({c.get('sticker_text') or '无贴纸'})",
+                })
+            sample_points.append({
+                "t": acc_t + dur * 0.5,
+                "label": f"C{idx + 1:02d} {c.get('category', '')} ({c.get('sticker_text') or '无贴纸'})",
+            })
+            acc_t += dur
+        if acc_t > 2.0:
+            sample_points.append({"t": max(0.2, acc_t - 1.1), "label": "结尾 CTA 帧"})
+
+        ov_cols = 4
+        ov_rows = (len(sample_points) + ov_cols - 1) // ov_cols
+        ov_w, ov_h = 360, 640
+        ov_hdr = 34
+        ov_canvas = Image.new("RGB", (ov_cols * ov_w, ov_rows * (ov_h + ov_hdr)), (18, 18, 22))
+        ov_draw = ImageDraw.Draw(ov_canvas)
+        ov_font = _load_cjk_font(16)
+        cap_ov = cv2.VideoCapture(final_video)
+        try:
+            for si, sp in enumerate(sample_points):
+                r_i = si // ov_cols
+                c_i = si % ov_cols
+                x0 = c_i * ov_w
+                y0 = r_i * (ov_h + ov_hdr)
+                ov_draw.rectangle([x0, y0, x0 + ov_w, y0 + ov_hdr], fill=(14, 14, 18))
+                ov_draw.text((x0 + 8, y0 + 7), f"{sp['label']} @ {sp['t']:.1f}s"[:30], fill=(245, 220, 120), font=ov_font)
+                tile = None
+                if cap_ov.isOpened():
+                    cap_ov.set(cv2.CAP_PROP_POS_MSEC, max(0.0, sp["t"]) * 1000.0)
+                    ok, fr = cap_ov.read()
+                    if ok and fr is not None:
+                        rgb = cv2.cvtColor(fr, cv2.COLOR_BGR2RGB)
+                        tile = Image.fromarray(rgb).resize((ov_w - 4, ov_h - 4), Image.Resampling.LANCZOS)
+                if tile is not None:
+                    ov_canvas.paste(tile, (x0 + 2, y0 + ov_hdr + 2))
+                ov_draw.rectangle([x0 + 1, y0 + 1, x0 + ov_w - 2, y0 + ov_h + ov_hdr - 2], outline=(75, 75, 88), width=2)
+        finally:
+            cap_ov.release()
+        overlay_review_path = os.path.join(output_dir, "overlay_review.jpg")
+        ov_canvas.save(overlay_review_path, quality=88)
+
     return {
-        "schema_version": "3.3",
+        "schema_version": "3.4",
         "status": "INSPECTED",
         "run_id": context.get("run_id"),
         "final_video": final_video,
         "cover_path": os.path.join(output_dir, "cover.jpg"),
         "seams_review_path": seams_review_path,
+        "overlay_review_path": overlay_review_path,
         "seams_count": len(seam_times),
         "continuity_summary": continuity_review.get("summary", ""),
         "seams": seams,
